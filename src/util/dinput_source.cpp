@@ -4,7 +4,7 @@
 #define INITGUID
 
 #include "dinput_source.h"
-#include "input_manager.h"
+#include "input_manager_private.h"
 
 #include "common/assert.h"
 #include "common/bitutils.h"
@@ -119,7 +119,7 @@ static BOOL CALLBACK EnumCallback(LPCDIDEVICEINSTANCEW lpddi, LPVOID pvRef)
 bool DInputSource::ReloadDevices()
 {
   // detect any removals
-  PollEvents();
+  bool changed = PollEvents();
 
   // look for new devices
   std::vector<DIDEVICEINSTANCEW> devices;
@@ -127,12 +127,10 @@ bool DInputSource::ReloadDevices()
 
   VERBOSE_LOG("Enumerated {} devices", devices.size());
 
-  bool changed = false;
   for (DIDEVICEINSTANCEW inst : devices)
   {
     // do we already have this one?
-    if (std::any_of(m_controllers.begin(), m_controllers.end(),
-                    [&inst](const ControllerData& cd) { return inst.guidInstance == cd.guid; }))
+    if (std::ranges::any_of(m_controllers, [&inst](const ControllerData& cd) { return inst.guidInstance == cd.guid; }))
     {
       // yup, so skip it
       continue;
@@ -152,8 +150,12 @@ bool DInputSource::ReloadDevices()
     const std::string name(StringUtil::WideStringToUTF8String(inst.tszProductName));
     if (AddDevice(cd, name))
     {
-      const u32 index = static_cast<u32>(m_controllers.size());
-      m_controllers.push_back(std::move(cd));
+      u32 index;
+      {
+        const auto lock = InputManager::GetSourcesWriteLock();
+        index = static_cast<u32>(m_controllers.size());
+        m_controllers.push_back(std::move(cd));
+      }
       InputManager::OnInputDeviceConnected(MakeGenericControllerDeviceKey(InputSourceType::DInput, index),
                                            GetDeviceIdentifier(index), name, std::nullopt);
       changed = true;
@@ -165,10 +167,14 @@ bool DInputSource::ReloadDevices()
 
 void DInputSource::Shutdown()
 {
+  // disconnect in reverse order
   while (!m_controllers.empty())
   {
     const u32 index = static_cast<u32>(m_controllers.size() - 1);
-    m_controllers.pop_back();
+    {
+      const auto lock = InputManager::GetSourcesWriteLock();
+      m_controllers.pop_back();
+    }
     InputManager::OnInputDeviceDisconnected(MakeGenericControllerDeviceKey(InputSourceType::DInput, index),
                                             GetDeviceIdentifier(index));
   }
@@ -254,8 +260,9 @@ bool DInputSource::AddDevice(ControllerData& cd, const std::string& name)
   return (cd.num_buttons > 0 || !cd.axis_offsets.empty() || cd.num_hats > 0);
 }
 
-void DInputSource::PollEvents()
+bool DInputSource::PollEvents()
 {
+  bool topology_changed = false;
   for (size_t i = 0; i < m_controllers.size();)
   {
     ControllerData& cd = m_controllers[i];
@@ -272,10 +279,15 @@ void DInputSource::PollEvents()
 
       if (hr != DI_OK)
       {
-        m_controllers.erase(m_controllers.begin() + i);
+        {
+          const auto lock = InputManager::GetSourcesWriteLock();
+          m_controllers.erase(m_controllers.begin() + i);
+        }
+
         InputManager::OnInputDeviceDisconnected(
           MakeGenericControllerDeviceKey(InputSourceType::DInput, static_cast<u32>(i)),
           GetDeviceIdentifier(static_cast<u32>(i)));
+        topology_changed = true;
         continue;
       }
     }
@@ -289,6 +301,7 @@ void DInputSource::PollEvents()
     CheckForStateChanges(i, js);
     i++;
   }
+  return topology_changed;
 }
 
 InputManager::DeviceList DInputSource::EnumerateDevices()
@@ -423,35 +436,34 @@ std::optional<InputBindingKey> DInputSource::ParseKeyString(std::string_view dev
   return std::nullopt;
 }
 
-TinyString DInputSource::ConvertKeyToString(InputBindingKey key)
+SmallString DInputSource::ConvertKeyToString(InputBindingKey key)
 {
-  TinyString ret;
-
   if (key.source_type == InputSourceType::DInput)
   {
     if (key.source_subtype == InputSubclass::ControllerAxis)
     {
       const char* modifier =
         (key.modifier == InputModifier::FullAxis ? "Full" : (key.modifier == InputModifier::Negate ? "-" : "+"));
-      ret.format("DInput-{}/{}Axis{}{}", u32(key.source_index), modifier, u32(key.data), key.invert ? "~" : "");
+      return SmallString::from_format("DInput-{}/{}Axis{}{}", u32(key.source_index), modifier, u32(key.data),
+                                      key.invert ? "~" : "");
     }
     else if (key.source_subtype == InputSubclass::ControllerButton && key.data >= MAX_NUM_BUTTONS)
     {
       const u32 hat_num = (key.data - MAX_NUM_BUTTONS) / NUM_HAT_DIRECTIONS;
       const u32 hat_dir = (key.data - MAX_NUM_BUTTONS) % NUM_HAT_DIRECTIONS;
-      ret.format("DInput-{}/Hat{}{}", u32(key.source_index), hat_num, s_hat_directions[hat_dir]);
+      return SmallString::from_format("DInput-{}/Hat{}{}", u32(key.source_index), hat_num, s_hat_directions[hat_dir]);
     }
     else if (key.source_subtype == InputSubclass::ControllerButton)
     {
-      ret.format("DInput-{}/Button{}", u32(key.source_index), u32(key.data));
+      return SmallString::from_format("DInput-{}/Button{}", u32(key.source_index), u32(key.data));
     }
   }
 
-  return ret;
+  return {};
 }
 
-TinyString DInputSource::ConvertKeyToDisplayString(InputBindingKey key, bool allow_icon,
-                                                   InputManager::BindingIconMappingFunction mapper)
+SmallString DInputSource::ConvertKeyToDisplayString(InputBindingKey key, bool allow_icon,
+                                                    InputManager::BindingIconMappingFunction mapper)
 {
   return {};
 }
@@ -526,26 +538,24 @@ void DInputSource::CheckForStateChanges(size_t index, const DIJOYSTATE& new_stat
 
 std::optional<float> DInputSource::GetCurrentValue(InputBindingKey key)
 {
-  std::optional<float> ret;
-
   if (key.source_type != InputSourceType::DInput)
-    return ret;
+    return std::nullopt;
 
   if (key.source_index >= m_controllers.size())
-    return ret;
+    return std::nullopt;
 
   const ControllerData& cd = m_controllers[key.source_index];
   if (key.source_subtype == InputSubclass::ControllerAxis && key.data < cd.axis_offsets.size())
   {
     LONG value;
     std::memcpy(&value, reinterpret_cast<const u8*>(&cd.last_state) + cd.axis_offsets[key.data], sizeof(value));
-    ret = static_cast<float>(value) / (value < 0 ? 32768.0f : 32767.0f);
+    return static_cast<float>(value) / (value < 0 ? 32768.0f : 32767.0f);
   }
   else if (key.source_subtype == InputSubclass::ControllerButton)
   {
     if (key.data < cd.num_buttons)
     {
-      ret = BoolToFloat(cd.last_state.rgbButtons[key.data]);
+      return BoolToFloat(cd.last_state.rgbButtons[key.data]);
     }
     else
     {
@@ -555,12 +565,12 @@ std::optional<float> DInputSource::GetCurrentValue(InputBindingKey key)
       if (hat_index < cd.num_hats)
       {
         const std::array<bool, NUM_HAT_DIRECTIONS> buttons(GetHatButtons(cd.last_state.rgdwPOV[hat_index]));
-        ret = BoolToFloat(buttons[hat_direction]);
+        return BoolToFloat(buttons[hat_direction]);
       }
     }
   }
 
-  return ret;
+  return std::nullopt;
 }
 
 std::unique_ptr<InputSource> InputSource::CreateDInputSource()

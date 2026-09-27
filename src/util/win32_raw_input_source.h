@@ -25,7 +25,7 @@ public:
   bool ReloadDevices() override;
   void Shutdown() override;
 
-  void PollEvents() override;
+  bool PollEvents() override;
   std::optional<float> GetCurrentValue(InputBindingKey key) override;
   InputManager::DeviceList EnumerateDevices() override;
   InputManager::DeviceEffectList EnumerateEffects(std::optional<InputBindingInfo::Type> type,
@@ -39,8 +39,8 @@ public:
 
   bool ContainsDevice(std::string_view device) const override;
   std::optional<InputBindingKey> ParseKeyString(std::string_view device, std::string_view binding) override;
-  TinyString ConvertKeyToString(InputBindingKey key) override;
-  TinyString ConvertKeyToDisplayString(InputBindingKey key, bool allow_icon,
+  SmallString ConvertKeyToString(InputBindingKey key) override;
+  SmallString ConvertKeyToDisplayString(InputBindingKey key, bool allow_icon,
                                        InputManager::BindingIconMappingFunction mapper) override;
   void SetSubclassPollDeviceList(InputSubclass subclass, const std::span<const InputBindingKey>* devices) override;
   std::unique_ptr<ForceFeedbackDevice> CreateForceFeedbackDevice(std::string_view device, Error* error) override;

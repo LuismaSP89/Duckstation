@@ -4,6 +4,8 @@
 add_executable(core-tests
   cheats_tests.cpp
   cpu_disasm_tests.cpp
+  lightgun_controller_tests.cpp
+  negcon_base_tests.cpp
   spu_tests.cpp
   stub_host.cpp
 )

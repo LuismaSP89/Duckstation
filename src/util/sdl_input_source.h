@@ -29,7 +29,7 @@ public:
   bool ReloadDevices() override;
   void Shutdown() override;
 
-  void PollEvents() override;
+  bool PollEvents() override;
   std::optional<float> GetCurrentValue(InputBindingKey key) override;
   InputManager::DeviceList EnumerateDevices() override;
   InputManager::DeviceEffectList EnumerateEffects(std::optional<InputBindingInfo::Type> type,
@@ -43,22 +43,16 @@ public:
 
   bool ContainsDevice(std::string_view device) const override;
   std::optional<InputBindingKey> ParseKeyString(std::string_view device, std::string_view binding) override;
-  TinyString ConvertKeyToString(InputBindingKey key) override;
-  TinyString ConvertKeyToDisplayString(InputBindingKey key, bool allow_icon,
-                                       InputManager::BindingIconMappingFunction mapper) override;
+  SmallString ConvertKeyToString(InputBindingKey key) override;
+  SmallString ConvertKeyToDisplayString(InputBindingKey key, bool allow_icon,
+                                        InputManager::BindingIconMappingFunction mapper) override;
   void SetSubclassPollDeviceList(InputSubclass subclass, const std::span<const InputBindingKey>* devices) override;
   std::unique_ptr<ForceFeedbackDevice> CreateForceFeedbackDevice(std::string_view device, Error* error) override;
-
-  bool ProcessSDLEvent(const SDL_Event* event);
-
-  SDL_Joystick* GetJoystickForDevice(std::string_view device);
 
   static u32 GetRGBForPlayerId(const SettingsInterface& si, u32 player_id, bool active);
   static u32 ParseRGBForPlayerId(std::string_view str, u32 player_id, bool active);
 
   static std::span<const SettingInfo> GetAdvancedSettingsInfo();
-
-  static bool IsHandledInputEvent(const SDL_Event* ev);
 
 private:
   struct ControllerData
@@ -77,12 +71,14 @@ private:
     float rgb_led_intensity;
     bool accel_enabled;
     u8 gamepad_type;
+    bool mode_led_state;
     bool use_gamepad_rumble : 1;
     bool has_led : 1;
     bool has_rgb_led : 1;
     bool has_mode_led : 1;
-    bool mode_led_state : 1;
     bool has_accel : 1;
+
+    std::string persistent_identifier;
 
     // Used to disable Joystick controls that are used in GameController inputs so we don't get double events
     std::vector<bool> joy_button_used_in_gc;
@@ -102,6 +98,7 @@ private:
 
   ControllerDataVector::iterator GetControllerDataForJoystickId(SDL_JoystickID id);
   ControllerDataVector::iterator GetControllerDataForPlayerId(int id);
+  ControllerDataVector::iterator ResolveDevice(std::string_view device);
   int GetFreePlayerId() const;
 
   bool OpenDevice(int index, bool is_gamecontroller);
@@ -124,7 +121,7 @@ private:
   std::array<std::array<u32, 2>, MAX_LED_COLORS> m_led_colors{};
   std::vector<std::pair<std::string, std::string>> m_sdl_hints;
 
-  bool m_sdl_subsystem_initialized = false;
+  bool m_use_persistent_device_identifiers = false;
   bool m_controller_touchpad_as_pointer = false;
 
   union

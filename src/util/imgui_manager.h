@@ -26,10 +26,6 @@ struct ImFont;
 union InputBindingKey;
 enum class GenericInputBinding : u8;
 
-namespace InputManager {
-enum class GamepadButtonType : u8;
-}
-
 enum class OSDMessageType : u8
 {
   Error,
@@ -174,10 +170,6 @@ float OSDScale(float size);
 bool AreGamepadFaceButtonsSwapped();
 void SetGamepadFaceButtonsSwapped(bool enabled);
 
-/// Changes the gamepad button icon type, which is used to determine which icons to show for controller buttons.
-InputManager::GamepadButtonType GetGamepadButtonType();
-void SetGamepadButtonType(InputManager::GamepadButtonType type);
-
 /// Returns true if imgui wants to intercept text input.
 bool WantsTextInput();
 
@@ -186,9 +178,6 @@ bool WantsMouseInput();
 
 /// Called on the UI or CPU thread in response to a key press. String is UTF-8.
 void AddTextInput(std::string str);
-
-/// Called on the UI or CPU thread in response to mouse movement.
-void UpdateMousePosition(float x, float y);
 
 /// Called on the CPU thread in response to a mouse button press.
 /// Returns true if ImGui intercepted the event, and regular handlers should not execute.

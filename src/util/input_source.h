@@ -42,7 +42,8 @@ public:
   virtual void Shutdown() = 0;
 
   /// Polls the input source for events. This should be called at a regular interval, such as every frame.
-  virtual void PollEvents() = 0;
+  /// Returns true when the set of connected devices changed.
+  virtual bool PollEvents() = 0;
 
   /// Returns the current value for the specified device and key.
   virtual std::optional<float> GetCurrentValue(InputBindingKey key) = 0;
@@ -54,11 +55,11 @@ public:
   virtual std::optional<InputBindingKey> ParseKeyString(std::string_view device, std::string_view binding) = 0;
 
   /// Converts a key to a string representation. The string should be suitable for parsing with ParseKeyString().
-  virtual TinyString ConvertKeyToString(InputBindingKey key) = 0;
+  virtual SmallString ConvertKeyToString(InputBindingKey key) = 0;
 
   /// Converts a key to an diaply or icon representation. The icon is suitable for display in the UI.
-  virtual TinyString ConvertKeyToDisplayString(InputBindingKey key, bool allow_icon,
-                                               InputManager::BindingIconMappingFunction mapper) = 0;
+  virtual SmallString ConvertKeyToDisplayString(InputBindingKey key, bool allow_icon,
+                                                InputManager::BindingIconMappingFunction mapper) = 0;
 
   /// Enumerates available devices. Returns a pair of the prefix (e.g. SDL-0) and the device name.
   virtual InputManager::DeviceList EnumerateDevices() = 0;

@@ -60,12 +60,12 @@ ControllerGlobalSettingsWidget::ControllerGlobalSettingsWidget(QWidget* parent, 
   if (!remove_sources)
   {
     ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(sif, m_ui.enableSDLSource, "InputSources", "SDL", true);
+    ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(
+      sif, m_ui.useSDLPersistentDeviceIdentifiers, "InputSources", "SDLUsePersistentDeviceIdentifiers", true);
     ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(sif, m_ui.enableSDLEnhancedMode, "InputSources",
                                                                 "SDLControllerEnhancedMode", false);
     ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(sif, m_ui.enableTouchPadAsPointer, "InputSources",
                                                                 "SDLTouchpadAsPointer", false);
-    ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(sif, m_ui.enableSDLPS5PlayerLED, "InputSources",
-                                                                "SDLPS5PlayerLED", false);
     connect(m_ui.enableSDLSource, &QCheckBox::checkStateChanged, this,
             &ControllerGlobalSettingsWidget::updateSDLOptionsEnabled);
     connect(m_ui.ledSettings, &QToolButton::clicked, this, &ControllerGlobalSettingsWidget::ledSettingsClicked);
@@ -114,10 +114,9 @@ ControllerGlobalSettingsWidget::ControllerGlobalSettingsWidget(QWidget* parent, 
     m_ui.groupsLayout->removeWidget(m_ui.sdlGroup);
     QtUtils::SafeDeleteWidget(m_ui.sdlGroup);
     m_ui.sdlGridLayout = nullptr;
-    m_ui.sdlLEDLayout = nullptr;
-    m_ui.enableSDLPS5PlayerLED = nullptr;
     m_ui.ledSettings = nullptr;
     m_ui.enableSDLSource = nullptr;
+    m_ui.useSDLPersistentDeviceIdentifiers = nullptr;
     m_ui.enableSDLEnhancedMode = nullptr;
     m_ui.sdlHelpText = nullptr;
     m_ui.enableTouchPadAsPointer = nullptr;
@@ -194,10 +193,10 @@ void ControllerGlobalSettingsWidget::updateSDLOptionsEnabled()
   const bool enabled = m_ui.enableSDLSource->isChecked();
   if (m_ui.enableSDLEnhancedMode)
     m_ui.enableSDLEnhancedMode->setEnabled(enabled);
+  if (m_ui.useSDLPersistentDeviceIdentifiers)
+    m_ui.useSDLPersistentDeviceIdentifiers->setEnabled(enabled);
   if (m_ui.enableTouchPadAsPointer)
     m_ui.enableTouchPadAsPointer->setEnabled(enabled);
-  if (m_ui.enableSDLPS5PlayerLED)
-    m_ui.enableSDLPS5PlayerLED->setEnabled(enabled);
   if (m_ui.ledSettings)
     m_ui.ledSettings->setEnabled(enabled);
 }
@@ -244,7 +243,7 @@ void ControllerGlobalSettingsWidget::ledSettingsClicked()
   scroll_area->setWidget(scroll_area_widget);
 
   QVBoxLayout* const scroll_area_layout = new QVBoxLayout(scroll_area_widget);
-  scroll_area_layout->setContentsMargins(10, 10, 10, 10);
+  scroll_area_layout->setContentsMargins(0, 10, 0, 0);
 
   for (const InputDeviceListModel::Device& dev : g_core_thread->getInputDeviceListModel()->getDeviceList())
   {
@@ -275,6 +274,12 @@ void ControllerGlobalSettingsWidget::ledSettingsClicked()
   }
 
   scroll_area_layout->addStretch(1);
+
+  QCheckBox* const player_led = new QCheckBox(tr("Enable DualSense Player LED"), dlg);
+  ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(m_dialog->getEditingSettingsInterface(), player_led,
+                                                              "InputSources", "SDLPS5PlayerLED", false);
+  player_led->setToolTip(tr("Enables the player LED on DualSense controllers."));
+  main_layout->addWidget(player_led);
 
   QDialogButtonBox* const bbox = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
   bbox->button(QDialogButtonBox::Close)->setDefault(true);

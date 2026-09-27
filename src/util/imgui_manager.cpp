@@ -551,6 +551,8 @@ void ImGuiManager::NewFrame(u64 current_time)
 {
   ImGuiIO& io = ImGui::GetIO();
   io.DeltaTime = static_cast<float>(Timer::ConvertValueToSeconds(current_time - s_state.last_render_time));
+  std::tie(s_state.imgui_context->IO.MousePos.x, s_state.imgui_context->IO.MousePos.y) =
+    InputManager::GetPointerAbsolutePosition(0);
   s_state.last_render_time = current_time;
 
   if (s_state.scale_changed)
@@ -1566,22 +1568,6 @@ void ImGuiManager::SetGamepadFaceButtonsSwapped(bool enabled)
   s_state.swap_gamepad_face_buttons = enabled;
 }
 
-InputManager::GamepadButtonType ImGuiManager::GetGamepadButtonType()
-{
-  return s_state.gamepad_button_type;
-}
-
-void ImGuiManager::SetGamepadButtonType(InputManager::GamepadButtonType type)
-{
-  VideoThread::RunOnThread([type]() {
-    if (type == s_state.gamepad_button_type)
-      return;
-
-    s_state.gamepad_button_type = type;
-    FullscreenUI::UpdateWidgetsSettings();
-  });
-}
-
 bool ImGuiManager::WantsTextInput()
 {
   return s_state.imgui_wants_text_input.load(std::memory_order_acquire);
@@ -1602,20 +1588,6 @@ void ImGuiManager::AddTextInput(std::string str)
       return;
 
     s_state.imgui_context->IO.AddInputCharactersUTF8(str.c_str());
-  });
-}
-
-void ImGuiManager::UpdateMousePosition(float x, float y)
-{
-  if (!s_state.imgui_context)
-    return;
-
-  VideoThread::RunOnThread([x, y]() {
-    if (!s_state.imgui_context) [[unlikely]]
-      return;
-
-    s_state.imgui_context->IO.MousePos.x = x;
-    s_state.imgui_context->IO.MousePos.y = y;
   });
 }
 
@@ -1892,7 +1864,6 @@ void ImGuiManager::DrawSoftwareCursor(const SoftwareCursor& sc, const std::pair<
 
 void ImGuiManager::RenderSoftwareCursors()
 {
-  // This one's okay to race, worst that happens is we render the wrong number of cursors for a frame.
   const u32 pointer_count = InputManager::GetPointerCount();
   for (u32 i = 0; i < pointer_count; i++)
     DrawSoftwareCursor(s_state.software_cursors[i], InputManager::GetPointerAbsolutePosition(i));

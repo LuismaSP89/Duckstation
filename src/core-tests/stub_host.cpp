@@ -18,6 +18,7 @@
 #include "util/http_downloader.h"
 #include "util/imgui_manager.h"
 #include "util/input_manager.h"
+#include "util/input_manager_private.h"
 #include "util/translation.h"
 #include "util/window_info.h"
 
@@ -362,10 +363,6 @@ void Host::OnRAIntegrationMenuChanged()
 const char* Host::GetDefaultFullscreenUITheme()
 {
   return "";
-}
-
-void Host::AddFixedInputBindings(const SettingsInterface& si)
-{
 }
 
 void Host::OnInputDeviceConnected(InputBindingKey key, std::string_view identifier, std::string_view device_name)

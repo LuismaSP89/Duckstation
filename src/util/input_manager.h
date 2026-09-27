@@ -213,17 +213,14 @@ inline constexpr u32 MAX_SOFTWARE_CURSORS = MAX_POINTER_DEVICES + 2;
 /// Number of macro buttons per controller.
 inline constexpr u32 NUM_MACRO_BUTTONS_PER_CONTROLLER = 8;
 
-/// Returns a pointer to the external input source class, if present.
-InputSource* GetInputSourceInterface(InputSourceType type);
-
 /// Converts an input class to a string.
 const char* InputSourceToString(InputSourceType clazz);
 
-/// Returns the default state for an input source.
-bool GetInputSourceDefaultEnabled(InputSourceType type);
+/// Splits a chord into its components.
+std::vector<std::string_view> SplitChord(std::string_view binding);
 
-/// Parses an input class string.
-std::optional<InputSourceType> ParseInputSourceString(std::string_view str);
+/// Splits a binding into its device (source) and binding.
+bool SplitBinding(std::string_view binding, std::string_view* source, std::string_view* sub_binding);
 
 /// Parses a pointer device string, i.e. tells you which pointer is specified.
 std::optional<u32> GetIndexFromPointerBinding(std::string_view str);
@@ -253,11 +250,8 @@ InputBindingKey MakePointerButtonKey(u32 index, u32 button_index);
 /// (axis 0 = horizontal, 1 = vertical, 2 = wheel horizontal, 3 = wheel vertical).
 InputBindingKey MakePointerAxisKey(u32 index, InputPointerAxis axis);
 
-/// Parses an input binding key string.
-std::optional<InputBindingKey> ParseInputBindingKey(std::string_view binding);
-
 /// Converts a input key to a string.
-TinyString ConvertInputBindingKeyToString(InputBindingInfo::Type binding_type, InputBindingKey key);
+SmallString ConvertInputBindingKeyToString(InputBindingInfo::Type binding_type, InputBindingKey key);
 
 /// Converts a chord of binding keys to a string.
 SmallString ConvertInputBindingKeysToString(InputBindingInfo::Type binding_type, const InputBindingKey* keys,
@@ -283,9 +277,6 @@ u32 GetPollableDeviceCount();
 /// Retrieves bindings that match the generic bindings for the specified device.
 GenericInputBindingMapping GetGenericBindingMapping(std::string_view device);
 
-/// Returns true if the specified input source is enabled.
-bool IsInputSourceEnabled(const SettingsInterface& si, InputSourceType type);
-
 /// Synchronizes handlers with the current state of all registered bindings.
 void SynchronizeBindingHandlerState();
 
@@ -310,23 +301,6 @@ bool HasAnyBindingsForKey(InputBindingKey key);
 /// Returns true if any bindings exist for the specified source + index.
 /// Must be called on the core thread.
 bool HasAnyBindingsForSource(InputBindingKey key);
-
-/// Returns true if any bindings exist for the specified subclass.
-/// Must be called on the core thread.
-bool HasAnyBindingsForSubclass(InputBindingKey key);
-
-/// Parses a string binding into its components. Use with external AddBinding().
-bool ParseBindingAndGetSource(std::string_view binding, InputBindingKey* key, InputSource** source);
-
-/// Externally adds a fixed binding. Be sure to call *after* ReloadBindings() otherwise it will be lost.
-void AddBinding(std::string_view binding, bool activate_when_captured, const InputEventHandler& handler);
-
-/// Adds an external vibration binding.
-void AddVibrationBinding(u32 pad_index, u32 bind_index, const InputBindingKey& binding, InputSource* source);
-
-/// Updates internal state for any binds for this key, and fires callbacks as needed.
-/// Returns true if anything was bound to this key, otherwise false.
-void InvokeEvents(InputBindingKey key, float value, GenericInputBinding generic_key = GenericInputBinding::Unknown);
 
 /// Clears internal state for any binds with a matching source/index.
 void ClearBindStateFromSource(InputBindingKey key);
@@ -411,13 +385,6 @@ std::string GetPhysicalDeviceForController(SettingsInterface& si, u32 controller
 /// Returns a list of input profiles available.
 std::vector<std::string> GetInputProfileNames();
 
-/// Called when a new input device is connected.
-void OnInputDeviceConnected(InputBindingKey key, std::string_view identifier, std::string_view device_name,
-                            std::optional<GamepadButtonType> gamepad_button_type);
-
-/// Called when an input device is disconnected.
-void OnInputDeviceDisconnected(InputBindingKey key, std::string_view identifier);
-
 /// Creates a force feedback device interface for the specified source and device.
 std::unique_ptr<ForceFeedbackDevice> CreateForceFeedbackDevice(const std::string_view device, Error* error = nullptr);
 
@@ -429,22 +396,3 @@ namespace Core {
 std::span<const HotkeyInfo> GetHotkeyList();
 
 } // namespace Core
-
-namespace Host {
-
-/// Adds any fixed bindings from the host.
-void AddFixedInputBindings(const SettingsInterface& si);
-
-/// Called when a new input device is connected.
-void OnInputDeviceConnected(InputBindingKey key, std::string_view identifier, std::string_view device_name);
-
-/// Called when an input device is disconnected.
-void OnInputDeviceDisconnected(InputBindingKey key, std::string_view identifier);
-
-/// Enables "relative" mouse mode, locking the cursor position and returning relative coordinates.
-void SetMouseMode(bool relative, bool hide_cursor);
-
-/// Return the current window handle. Needed for DInput.
-std::optional<WindowInfo> GetTopLevelWindowInfo();
-
-} // namespace Host

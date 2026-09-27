@@ -1929,7 +1929,7 @@ bool GameList::PutCustomPropertiesField(INISettingsInterface& ini, const std::st
 bool GameList::SaveCustomTitleForPath(const std::string& path, const std::string& custom_title)
 {
   INISettingsInterface custom_attributes_ini(GetCustomPropertiesFile());
-  if (!PutCustomPropertiesField(custom_attributes_ini, path, "Title", custom_title.c_str()))
+  if (!PutCustomPropertiesField(custom_attributes_ini, path, "Title", custom_title))
     return false;
 
   // Can skip the rescan and just update the value directly.
@@ -1993,7 +1993,7 @@ bool GameList::SaveCustomRegionForPath(const std::string& path, const std::optio
   INISettingsInterface custom_attributes_ini(GetCustomPropertiesFile());
   if (!PutCustomPropertiesField(custom_attributes_ini, path, "Region",
                                 custom_region.has_value() ? Settings::GetDiscRegionName(custom_region.value()) :
-                                                            nullptr))
+                                                            std::string_view()))
   {
     return false;
   }
@@ -2025,7 +2025,7 @@ bool GameList::SaveCustomLanguageForPath(const std::string& path,
   INISettingsInterface custom_attributes_ini(GetCustomPropertiesFile());
   if (!PutCustomPropertiesField(custom_attributes_ini, path, "Language",
                                 custom_language.has_value() ? GameDatabase::GetLanguageName(custom_language.value()) :
-                                                              nullptr))
+                                                              std::string_view()))
   {
     return false;
   }

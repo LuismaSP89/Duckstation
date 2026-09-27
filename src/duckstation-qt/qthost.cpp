@@ -52,6 +52,7 @@
 #include "util/imgui_manager.h"
 #include "util/ini_settings_interface.h"
 #include "util/input_manager.h"
+#include "util/input_manager_private.h"
 #include "util/postprocessing.h"
 #include "util/translation.h"
 
@@ -1817,18 +1818,6 @@ void CoreThread::undoLoadState()
   System::UndoLoadState();
 }
 
-void CoreThread::setAudioOutputMuted(bool muted)
-{
-  if (!isCurrentThread())
-  {
-    QMetaObject::invokeMethod(this, &CoreThread::setAudioOutputMuted, Qt::QueuedConnection, muted);
-    return;
-  }
-
-  g_settings.audio_output_muted = muted;
-  System::UpdateVolume();
-}
-
 void CoreThread::singleStepCPU()
 {
   if (!isCurrentThread())
@@ -2835,10 +2824,13 @@ void InputDeviceListModel::enumerateDevices()
   new_effects.reserve(effects.size());
   for (const auto& [type, key] : effects)
   {
-    TinyString name = InputManager::ConvertInputBindingKeyToString(type, key);
-    SmallString pretty_name(name);
-    InputManager::PrettifyInputBinding(pretty_name, false);
-    new_effects.emplace_back(type, key, std::string(name), std::string(pretty_name));
+    SmallString name = InputManager::ConvertInputBindingKeyToString(type, key);
+    Effect& eff = new_effects.emplace_back();
+    eff.type = type;
+    eff.key = key;
+    eff.name = name;
+    InputManager::PrettifyInputBinding(name, false);
+    eff.display_name = name;
   }
 
   QMetaObject::invokeMethod(this, &InputDeviceListModel::resetLists, Qt::QueuedConnection, new_devices, new_effects);
@@ -2907,10 +2899,13 @@ void Host::OnInputDeviceConnected(InputBindingKey key, std::string_view identifi
     qeffect_list.reserve(effect_list.size());
     for (const auto& [eff_type, eff_key] : effect_list)
     {
-      TinyString name = InputManager::ConvertInputBindingKeyToString(eff_type, eff_key);
-      SmallString pretty_name(name);
-      InputManager::PrettifyInputBinding(pretty_name, false);
-      qeffect_list.emplace_back(eff_type, eff_key, std::string(name), std::string(pretty_name));
+      InputDeviceListModel::Effect& eff = qeffect_list.emplace_back();
+      SmallString name = InputManager::ConvertInputBindingKeyToString(eff_type, eff_key);
+      eff.type = eff_type;
+      eff.key = eff_key;
+      eff.name = name;
+      InputManager::PrettifyInputBinding(name, false);
+      eff.display_name = name;
     }
   }
 
@@ -2925,10 +2920,6 @@ void Host::OnInputDeviceDisconnected(InputBindingKey key, std::string_view ident
   QMetaObject::invokeMethod(g_core_thread->getInputDeviceListModel(), &InputDeviceListModel::onDeviceDisconnected,
                             Qt::QueuedConnection, key, QtUtils::StringViewToQString(identifier));
   g_core_thread->updateIdleTimerInterval();
-}
-
-void Host::AddFixedInputBindings(const SettingsInterface& si)
-{
 }
 
 std::string QtHost::GetResourcePath(std::string_view filename, bool allow_override)

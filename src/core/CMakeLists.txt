@@ -101,6 +101,8 @@ add_library(core
   jogcon.h
   justifier.cpp
   justifier.h
+  lightgun_controller.cpp
+  lightgun_controller.h
   mdec.cpp
   mdec.h
   memory_card.cpp
@@ -114,6 +116,8 @@ add_library(core
   multitap.h
   negcon.cpp
   negcon.h
+  negcon_base.cpp
+  negcon_base.h
   negcon_rumble.cpp
   negcon_rumble.h
   pad.cpp
