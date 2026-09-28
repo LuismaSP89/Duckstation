@@ -1029,13 +1029,35 @@ void OpenGLDevice::UnbindTexture(OpenGLTexture* tex)
   }
 }
 
-void OpenGLDevice::UnbindSSBO(GLuint id)
+void OpenGLDevice::UnbindTextureBuffer(OpenGLTextureBuffer* tex)
 {
-  if (m_last_ssbo != id)
-    return;
+  if (m_features.texture_buffers_emulated_with_ssbo)
+  {
+    const GLuint id = tex->GetBuffer()->GetGLBufferId();
+    if (m_last_ssbo == id)
+    {
+      m_last_ssbo = 0;
+      glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+    }
+  }
+  else
+  {
+    const GLuint tex_id = tex->GetTextureId();
+    auto& ss = m_last_samplers[TEXTURE_BUFFER_SLOT];
+    if (ss.first == tex_id)
+    {
+      ss.first = 0;
 
-  m_last_ssbo = 0;
-  glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, 0);
+      constexpr GLenum unit = GL_TEXTURE0 + TEXTURE_BUFFER_SLOT;
+      if (m_last_texture_unit != unit)
+      {
+        m_last_texture_unit = unit;
+        glActiveTexture(unit);
+      }
+
+      glBindTexture(GL_TEXTURE_BUFFER, 0);
+    }
+  }
 }
 
 void OpenGLDevice::UnbindSampler(GLuint id)
@@ -1151,6 +1173,7 @@ void OpenGLDevice::UnmapIndexBuffer(u32 used_index_count)
 
 void OpenGLDevice::PushUniformBuffer(const void* data, u32 data_size)
 {
+  DebugAssert(data_size <= UNIFORM_PUSH_CONSTANTS_SIZE);
   const auto res = m_push_constant_buffer->Map(m_uniform_buffer_alignment, data_size);
   std::memcpy(res.pointer, data, data_size);
   m_push_constant_buffer->Unmap(data_size);
@@ -1258,28 +1281,27 @@ void OpenGLDevice::SetTextureSampler(u32 slot, GPUTexture* texture, GPUSampler* 
   }
 }
 
-void OpenGLDevice::SetTextureBuffer(u32 slot, GPUTextureBuffer* buffer)
+void OpenGLDevice::SetTextureBuffer(GPUTextureBuffer* buffer)
 {
   const OpenGLTextureBuffer* B = static_cast<const OpenGLTextureBuffer*>(buffer);
   if (!m_features.texture_buffers_emulated_with_ssbo)
   {
     const GLuint Tid = B ? B->GetTextureId() : 0;
-    if (m_last_samplers[slot].first != Tid)
+    if (m_last_samplers[TEXTURE_BUFFER_SLOT].first != Tid)
     {
-      m_last_samplers[slot].first = Tid;
-      SetActiveTexture(slot);
+      m_last_samplers[TEXTURE_BUFFER_SLOT].first = Tid;
+      SetActiveTexture(TEXTURE_BUFFER_SLOT);
       glBindTexture(GL_TEXTURE_BUFFER, Tid);
     }
   }
   else
   {
-    DebugAssert(slot == 0);
     const GLuint bid = B ? B->GetBuffer()->GetGLBufferId() : 0;
     if (m_last_ssbo == bid)
       return;
 
     m_last_ssbo = bid;
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot, bid);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, bid);
   }
 }
 

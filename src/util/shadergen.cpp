@@ -443,46 +443,6 @@ void ShaderGen::DeclareTexture(std::stringstream& ss, const char* name, u32 inde
   }
 }
 
-void ShaderGen::DeclareTextureBuffer(std::stringstream& ss, const char* name, u32 index, bool is_int,
-                                     bool is_unsigned) const
-{
-  if (m_glsl)
-  {
-    if (m_spirv)
-      ss << "layout(set = " << ((m_has_uniform_buffer || IsMetal()) ? 1 : 0) << ", binding = " << index << ") ";
-    else if (m_use_glsl_binding_layout)
-      ss << "layout(binding = " << index << ") ";
-
-    ss << "uniform " << (is_int ? (is_unsigned ? "u" : "i") : "") << "samplerBuffer " << name << ";\n";
-  }
-  else
-  {
-    ss << "Buffer<" << (is_int ? (is_unsigned ? "uint4" : "int4") : "float4") << "> " << name << " : register(t"
-       << index << ");\n";
-  }
-}
-
-void ShaderGen::DeclareImage(std::stringstream& ss, const char* name, u32 index, bool is_float /* = false */,
-                             bool is_int /* = false */, bool is_unsigned /* = false */) const
-{
-  if (m_glsl)
-  {
-    if (m_spirv)
-      ss << "layout(set = " << (m_has_uniform_buffer ? 2 : 1) << ", binding = " << index;
-    else
-      ss << "layout(binding = " << index;
-
-    ss << ", " << (is_int ? (is_unsigned ? "rgba8ui" : "rgba8i") : "rgba8") << ") "
-       << "uniform restrict coherent image2D " << name << ";\n";
-  }
-  else
-  {
-    ss << "RasterizerOrderedTexture2D<"
-       << (is_int ? (is_unsigned ? "uint4" : "int4") : (is_float ? "float4" : "unorm float4")) << "> " << name
-       << " : register(u" << index << ");\n";
-  }
-}
-
 const char* ShaderGen::GetInterpolationQualifier(bool interface_block, bool centroid_interpolation,
                                                  bool sample_interpolation, bool is_out) const
 {
@@ -719,32 +679,14 @@ void ShaderGen::DeclareFragmentEntryPoint(
         }
       }
 #endif
-#ifdef ENABLE_VULKAN
-      if (m_render_api == RenderAPI::Vulkan)
+#if defined(ENABLE_VULKAN) || defined(__APPLE__)
+      if (m_render_api == RenderAPI::Vulkan || (m_render_api == RenderAPI::Metal && m_supports_framebuffer_fetch))
       {
-        ss << "layout(input_attachment_index = 0, set = 2, binding = 0) uniform "
+        // Set doesn't matter for Metal, because it's transformed to color0.
+        ss << "layout(input_attachment_index = 0, set = 3, binding = 0) uniform "
            << (msaa ? "subpassInputMS" : "subpassInput") << " u_input_rt; \n";
         ss << "#define LAST_FRAG_COLOR " << (msaa ? "subpassLoad(u_input_rt, gl_SampleID)" : "subpassLoad(u_input_rt)")
            << "\n";
-      }
-#endif
-#ifdef __APPLE__
-      if (m_render_api == RenderAPI::Metal)
-      {
-        if (m_supports_framebuffer_fetch)
-        {
-          // Set doesn't matter, because it's transformed to color0.
-          ss << "layout(input_attachment_index = 0, set = 2, binding = 0) uniform "
-             << (msaa ? "subpassInputMS" : "subpassInput") << " u_input_rt; \n";
-          ss << "#define LAST_FRAG_COLOR "
-             << (msaa ? "subpassLoad(u_input_rt, gl_SampleID)" : "subpassLoad(u_input_rt)") << "\n";
-        }
-        else
-        {
-          ss << "layout(set = 2, binding = 0) uniform " << (msaa ? "texture2DMS" : "texture2D") << " u_input_rt;\n";
-          ss << "#define LAST_FRAG_COLOR texelFetch(u_input_rt, int2(gl_FragCoord.xy), " << (msaa ? "gl_SampleID" : "0")
-             << ")\n";
-        }
       }
 #endif
     }
@@ -946,11 +888,19 @@ std::string ShaderGen::GenerateCopyFragmentShader(bool offset) const
   return std::move(ss).str();
 }
 
+void ShaderGen::DeclareImGuiUniformBuffer(std::stringstream& ss) const
+{
+  DeclareUniformBuffer(ss,
+                       {"float4x4 ProjectionMatrix", "float2 BlurTextureScale", "float BlurBackgroundWeight",
+                        "float InvBlurBackgroundWeight"},
+                       false);
+}
+
 std::string ShaderGen::GenerateImGuiVertexShader() const
 {
   std::stringstream ss;
   WriteHeader(ss);
-  DeclareUniformBuffer(ss, {"float4x4 ProjectionMatrix"}, false);
+  DeclareImGuiUniformBuffer(ss);
   DeclareVertexEntryPoint(ss, {"float2 a_pos", "float2 a_tex0", "float4 a_col0"}, 1, 1, {}, false);
   ss << R"(
 {
@@ -970,7 +920,7 @@ std::string ShaderGen::GenerateImGuiFragmentShader() const
 {
   std::stringstream ss;
   WriteHeader(ss);
-  DeclareUniformBuffer(ss, {"float4x4 ProjectionMatrix"}, false); // needs the descriptor set defined
+  DeclareImGuiUniformBuffer(ss);
   DeclareTexture(ss, "samp0", 0);
   DeclareFragmentEntryPoint(ss, 1, 1);
 
@@ -987,9 +937,7 @@ std::string ShaderGen::GenerateImGuiBlurVertexShader() const
 {
   std::stringstream ss;
   WriteHeader(ss);
-  DeclareUniformBuffer(ss, {"float4x4 ProjectionMatrix"}, false);
-  DeclareUniformBuffer(ss, {"float2 BlurTextureScale", "float BlurBackgroundWeight", "float InvBlurBackgroundWeight"},
-                       true);
+  DeclareImGuiUniformBuffer(ss);
   DeclareVertexEntryPoint(ss, {"float2 a_pos", "float4 a_col0"}, 1, 0, {}, false);
   ss << R"(
 {
@@ -1008,9 +956,7 @@ std::string ShaderGen::GenerateImGuiBlurFragmentShader() const
 {
   std::stringstream ss;
   WriteHeader(ss);
-  DeclareUniformBuffer(ss, {"float4x4 ProjectionMatrix"}, false); // needs the descriptor set defined
-  DeclareUniformBuffer(ss, {"float2 BlurTextureScale", "float BlurBackgroundWeight", "float InvBlurBackgroundWeight"},
-                       true);
+  DeclareImGuiUniformBuffer(ss);
   DeclareTexture(ss, "samp0", 0);
   DeclareFragmentEntryPoint(ss, 1, 0, {}, true);
 

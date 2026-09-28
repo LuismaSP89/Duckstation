@@ -53,9 +53,6 @@ public:
                             bool push_constant) const;
   void DeclareTexture(std::stringstream& ss, const char* name, u32 index, bool multisampled = false,
                       bool is_int = false, bool is_unsigned = false) const;
-  void DeclareTextureBuffer(std::stringstream& ss, const char* name, u32 index, bool is_int, bool is_unsigned) const;
-  void DeclareImage(std::stringstream& ss, const char* name, u32 index, bool is_float = false, bool is_int = false,
-                    bool is_unsigned = false) const;
   void DeclareVertexEntryPoint(std::stringstream& ss, const std::initializer_list<const char*>& attributes,
                                u32 num_color_outputs, u32 num_texcoord_outputs,
                                const std::initializer_list<std::pair<const char*, const char*>>& additional_outputs,
@@ -70,6 +67,8 @@ public:
                             bool feedback_loop = false, bool rov = false) const;
 
 protected:
+  void DeclareImGuiUniformBuffer(std::stringstream& ss) const;
+
   RenderAPI m_render_api;
   GPUShaderLanguage m_shader_language;
   bool m_glsl;

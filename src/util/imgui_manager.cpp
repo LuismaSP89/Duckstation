@@ -88,6 +88,7 @@ struct OSDMessage
 } // namespace
 
 static_assert(std::is_same_v<WCharType, ImWchar>);
+static_assert(std::extent_v<decltype(ImGuiIO::MouseDown)> == ImGuiMouseButton_COUNT);
 
 static float GetGlobalPrescale();
 static float GetFixedFontWeight();
@@ -208,6 +209,9 @@ struct ALIGN_TO_CACHE_LINE State
 {
   // Shared between both threads
 
+  // Mirror of context != nullptr that can be read atomically by core thread.
+  std::atomic_bool imgui_has_context{false};
+
   // Cached ImGui input requests, used to know when to dispatch events.
   std::atomic_bool imgui_wants_keyboard{false};
   std::atomic_bool imgui_wants_mouse{false};
@@ -218,11 +222,9 @@ struct ALIGN_TO_CACHE_LINE State
   std::deque<PostedOSDMessage> osd_posted_messages;
   Threading::Mutex osd_messages_lock;
 
-  // Read by both threads
-  ALIGN_TO_CACHE_LINE ImGuiContext* imgui_context = nullptr;
-
   // Owned by GPU thread
-  ALIGN_TO_CACHE_LINE Timer::Value last_render_time = 0;
+  ALIGN_TO_CACHE_LINE ImGuiContext* imgui_context = nullptr;
+  Timer::Value last_render_time = 0;
 
   float global_scale = 0.0f;
   GPUTextureFormat window_format = GPUTextureFormat::Unknown;
@@ -232,11 +234,15 @@ struct ALIGN_TO_CACHE_LINE State
   std::array<s8, 2> left_stick_axis_state = {};
   InputManager::GamepadButtonType gamepad_button_type = InputManager::GamepadButtonType::Unknown;
   bool swap_gamepad_face_buttons = false;
+  bool notification_draw_list_used = false;
 
   std::unique_ptr<GPUPipeline> imgui_pipeline;
 
   ImFont* text_font = nullptr;
   ImFont* fixed_font = nullptr;
+
+  ImDrawList notification_draw_list{nullptr};
+  ImDrawData notification_draw_data;
 
   std::deque<OSDMessage> osd_active_messages;
   float osd_messages_end_y = 0.0f;
@@ -389,6 +395,8 @@ bool ImGuiManager::Initialize(Error* error)
   s_state.gamepad_button_type = InputManager::GetLastGamepadButtonType();
 
   s_state.imgui_context = ImGui::CreateContext();
+  s_state.notification_draw_list._SetDrawListSharedData(ImGui::GetDrawListSharedData());
+  s_state.notification_draw_list._OwnerName = "##Notifications";
 
   ImGuiIO& io = s_state.imgui_context->IO;
   io.IniFilename = nullptr;
@@ -415,11 +423,15 @@ bool ImGuiManager::Initialize(Error* error)
   NewFrame(Timer::GetCurrentValue());
 
   CreateSoftwareCursorTextures();
+
+  s_state.imgui_has_context.store(true, std::memory_order_release);
   return true;
 }
 
 void ImGuiManager::Shutdown()
 {
+  s_state.imgui_has_context.store(false, std::memory_order_release);
+
   DestroySoftwareCursorTextures();
 
   FullscreenUI::Shutdown();
@@ -430,6 +442,9 @@ void ImGuiManager::Shutdown()
   FullscreenUI::SetFont(nullptr);
 
   s_state.imgui_pipeline.reset();
+  s_state.notification_draw_data.Clear();
+  s_state.notification_draw_list._SetDrawListSharedData(nullptr);
+  s_state.notification_draw_list_used = false;
 
   if (s_state.imgui_context)
   {
@@ -476,11 +491,6 @@ void ImGuiManager::DestroyGPUResources()
 
   if (s_state.imgui_context)
     DestroyTextures(false);
-}
-
-ImGuiContext* ImGuiManager::GetMainContext()
-{
-  return s_state.imgui_context;
 }
 
 bool ImGuiManager::IsInitialized()
@@ -562,6 +572,7 @@ void ImGuiManager::NewFrame(u64 current_time)
   }
 
   ImGui::NewFrame();
+  s_state.notification_draw_list_used = false;
 
   // Disable nav input on the implicit (Debug##Default) window. Otherwise we end up requesting keyboard
   // focus when there's nothing there. We use GetCurrentWindowRead() because otherwise it'll make it visible.
@@ -632,9 +643,52 @@ void ImGuiManager::CreateDrawLists()
   UpdateTextures(ImGui::GetDrawData());
 }
 
+ImDrawList* ImGuiManager::GetOverlayDrawList()
+{
+  if (!FullscreenUI::IsTransitionActive())
+    return ImGui::GetForegroundDrawList();
+
+  ImDrawList* const dl = &s_state.notification_draw_list;
+  if (!s_state.notification_draw_list_used)
+  {
+    const ImGuiIO& io = ImGui::GetIO();
+    dl->_ResetForNewFrame();
+    dl->PushTexture(io.Fonts->TexRef);
+    dl->PushClipRect(ImVec2(), io.DisplaySize, false);
+    s_state.notification_draw_list_used = true;
+  }
+
+  return dl;
+}
+
+const ImDrawData* ImGuiManager::GetOverlayDrawData()
+{
+  if (!s_state.notification_draw_list_used || s_state.notification_draw_list.IdxBuffer.empty())
+    return nullptr;
+
+  const ImGuiIO& io = ImGui::GetIO();
+  ImDrawData& draw_data = s_state.notification_draw_data;
+  draw_data.Clear();
+  draw_data.Valid = true;
+  draw_data.DisplaySize = io.DisplaySize;
+  draw_data.FramebufferScale = io.DisplayFramebufferScale;
+  draw_data.OwnerViewport = ImGui::GetMainViewport();
+  draw_data.Textures = &io.Fonts->TexList;
+  draw_data.AddDrawList(&s_state.notification_draw_list);
+  return &draw_data;
+}
+
 void ImGuiManager::RenderDrawLists(const ImDrawData* draw_data, u32 window_width, u32 window_height,
                                    WindowInfoPrerotation prerotation)
 {
+  struct alignas(VECTOR_ALIGNMENT) ImGuiUniforms
+  {
+    GSMatrix4x4 mproj;
+    float blur_texture_scale[2];
+    float blur_background_weight;
+    float inv_blur_background_weight;
+  };
+
   UpdateTextures(draw_data);
 
   if (draw_data->CmdListsCount == 0)
@@ -650,11 +704,19 @@ void ImGuiManager::RenderDrawLists(const ImDrawData* draw_data, u32 window_width
   g_gpu_device->SetPipeline(s_state.imgui_pipeline.get());
 
   const bool prerotated = (prerotation != WindowInfoPrerotation::Identity);
-  GSMatrix4x4 mproj = GSMatrix4x4::OffCenterOrthographicProjection(0.0f, 0.0f, static_cast<float>(window_width),
-                                                                   static_cast<float>(window_height), 0.0f, 1.0f);
+
+  // Include the blur in the uniforms so we don't need a second buffer. The texture scale might be invalid if
+  // blur isn't active, but it won't be used in that case. We use a UBO rather than push constants in case
+  // the command buffer needs to be flushed mid-render.
+  ImGuiUniforms uniforms;
+  uniforms.mproj = GSMatrix4x4::OffCenterOrthographicProjection(0.0f, 0.0f, static_cast<float>(window_width),
+                                                                static_cast<float>(window_height), 0.0f, 1.0f);
   if (prerotated)
-    mproj = GSMatrix4x4::RotationZ(WindowInfo::GetZRotationForPreRotation(prerotation)) * mproj;
-  g_gpu_device->UploadUniformBuffer(&mproj, sizeof(mproj));
+    uniforms.mproj = GSMatrix4x4::RotationZ(WindowInfo::GetZRotationForPreRotation(prerotation)) * uniforms.mproj;
+  GSVector2::store<true>(uniforms.blur_texture_scale, FullscreenUI::GetBlurTextureScale());
+  uniforms.blur_background_weight = FullscreenUI::UIStyle.BlurBackgroundWeight;
+  uniforms.inv_blur_background_weight = 1.0f - FullscreenUI::UIStyle.BlurBackgroundWeight;
+  g_gpu_device->UploadUniformBuffer(&uniforms, sizeof(uniforms));
 
   // Render command lists
   const bool flip = g_gpu_device->UsesLowerLeftOrigin();
@@ -1378,8 +1440,7 @@ void ImGuiManager::DrawOSDMessages(Timer::Value current_time)
     const ImVec2 pos = ImVec2(layout_pos.x, actual_y);
     const ImVec2 pos_max = ImVec2(pos.x + box_width, pos.y + box_height);
 
-    ImDrawList* const dl = ImGui::GetForegroundDrawList();
-
+    ImDrawList* const dl = GetOverlayDrawList();
     if (blur_background && FullscreenUI::BeginBlurBackground(dl, pos, pos_max))
     {
       dl->AddRectFilled(pos, pos_max, ImGui::GetColorU32(ModAlpha(left_background_color, opacity)), rounding);
@@ -1580,7 +1641,7 @@ bool ImGuiManager::WantsMouseInput()
 
 void ImGuiManager::AddTextInput(std::string str)
 {
-  if (!s_state.imgui_context || !s_state.imgui_wants_text_input.load(std::memory_order_acquire))
+  if (!s_state.imgui_wants_text_input.load(std::memory_order_acquire))
     return;
 
   VideoThread::RunOnThread([str = std::move(str)]() {
@@ -1600,7 +1661,7 @@ void ImGuiManager::SetCommonIOOptions(ImGuiIO& io, ImGuiPlatformIO& pio)
 
 bool ImGuiManager::ProcessPointerButtonEvent(InputBindingKey key, float value)
 {
-  if (!s_state.imgui_context || key.data >= std::size(ImGui::GetIO().MouseDown))
+  if (key.data >= ImGuiMouseButton_COUNT || !s_state.imgui_has_context.load(std::memory_order_acquire))
     return false;
 
   // still update state anyway
@@ -1618,7 +1679,7 @@ bool ImGuiManager::ProcessPointerButtonEvent(InputBindingKey key, float value)
 
 bool ImGuiManager::ProcessPointerAxisEvent(InputBindingKey key, float value)
 {
-  if (!s_state.imgui_context || key.data < static_cast<u32>(InputPointerAxis::WheelX))
+  if (!s_state.imgui_has_context.load(std::memory_order_acquire) || key.data < static_cast<u32>(InputPointerAxis::WheelX))
     return false;
 
   // still update state anyway
@@ -1635,7 +1696,7 @@ bool ImGuiManager::ProcessPointerAxisEvent(InputBindingKey key, float value)
 
 bool ImGuiManager::ProcessHostKeyEvent(InputBindingKey key, float value)
 {
-  if (!s_state.imgui_context)
+  if (!s_state.imgui_has_context.load(std::memory_order_acquire))
     return false;
 
   if (const std::optional<ImGuiKey> imkey = MapHostKeyEventToImGuiKey(key.data))
@@ -1666,8 +1727,7 @@ void ImGuiManager::SetImKeyState(ImGuiIO& io, ImGuiKey imkey, bool pressed)
 
 bool ImGuiManager::ProcessGenericInputEvent(GenericInputBinding key, float value)
 {
-  // Racey read, but that's okay, worst case we push a couple of keys during shutdown.
-  if (!s_state.imgui_context)
+  if (!s_state.imgui_has_context.load(std::memory_order_acquire))
     return false;
 
   static constexpr std::array key_map = {
@@ -1747,7 +1807,7 @@ bool ImGuiManager::ProcessGenericInputEvent(GenericInputBinding key, float value
 
 void ImGuiManager::ClearMouseButtonState()
 {
-  if (!s_state.imgui_context)
+  if (!s_state.imgui_has_context.load(std::memory_order_acquire))
     return;
 
   VideoThread::RunOnThread([]() {
@@ -1856,7 +1916,7 @@ void ImGuiManager::DrawSoftwareCursor(const SoftwareCursor& sc, const std::pair<
   const ImVec2 min(pos.first - sc.extent_x, pos.second - sc.extent_y);
   const ImVec2 max(pos.first + sc.extent_x, pos.second + sc.extent_y);
 
-  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  ImDrawList* const dl = GetOverlayDrawList();
 
   dl->AddImage(reinterpret_cast<ImTextureID>(sc.texture.get()), min, max, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                sc.color);
@@ -2197,7 +2257,7 @@ bool ImGuiManager::RenderAuxiliaryRenderWindow(AuxiliaryRenderWindowState* state
     g_gpu_device->EndPresent(state->swap_chain.get(), false);
   }
 
-  ImGui::SetCurrentContext(GetMainContext());
+  ImGui::SetCurrentContext(s_state.imgui_context);
   return true;
 }
 

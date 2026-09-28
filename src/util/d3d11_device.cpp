@@ -550,7 +550,7 @@ bool D3D11Device::CreateBuffers(Error* error)
     return false;
   }
 
-  const CD3D11_BUFFER_DESC pc_desc(PUSH_CONSTANT_BUFFER_SIZE, D3D11_BIND_CONSTANT_BUFFER, D3D11_USAGE_DYNAMIC,
+  const CD3D11_BUFFER_DESC pc_desc(UNIFORM_PUSH_CONSTANTS_SIZE, D3D11_BIND_CONSTANT_BUFFER, D3D11_USAGE_DYNAMIC,
                                    D3D11_CPU_ACCESS_WRITE);
   if (const HRESULT hr = m_device->CreateBuffer(&pc_desc, nullptr, m_push_constant_buffer.GetAddressOf()); FAILED(hr))
   {
@@ -938,7 +938,7 @@ void D3D11Device::UnmapIndexBuffer(u32 used_index_count)
 
 void D3D11Device::PushUniformBuffer(const void* data, u32 data_size)
 {
-  DebugAssert(data_size <= PUSH_CONSTANT_BUFFER_SIZE);
+  DebugAssert(data_size <= UNIFORM_PUSH_CONSTANTS_SIZE);
 
   D3D11_MAPPED_SUBRESOURCE mapped;
   if (const HRESULT hr = m_context->Map(m_push_constant_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
@@ -1126,15 +1126,15 @@ void D3D11Device::SetTextureSampler(u32 slot, GPUTexture* texture, GPUSampler* s
   }
 }
 
-void D3D11Device::SetTextureBuffer(u32 slot, GPUTextureBuffer* buffer)
+void D3D11Device::SetTextureBuffer(GPUTextureBuffer* buffer)
 {
   ID3D11ShaderResourceView* B = buffer ? static_cast<D3D11TextureBuffer*>(buffer)->GetSRV() : nullptr;
-  if (m_current_textures[slot] != B)
+  if (m_current_textures[TEXTURE_BUFFER_SLOT] != B)
   {
-    m_current_textures[slot] = B;
+    m_current_textures[TEXTURE_BUFFER_SLOT] = B;
 
     // Compute doesn't support texture buffers, yet...
-    m_context->PSSetShaderResources(slot, 1, &B);
+    m_context->PSSetShaderResources(TEXTURE_BUFFER_SLOT, 1, &B);
   }
 }
 
@@ -1168,6 +1168,15 @@ void D3D11Device::UnbindTexture(D3D11Texture* tex)
   {
     DEV_LOG("Unbinding current DS");
     SetRenderTargets(nullptr, 0, nullptr);
+  }
+}
+
+void D3D11Device::UnbindTextureBuffer(D3D11TextureBuffer* tex)
+{
+  if (m_current_textures[TEXTURE_BUFFER_SLOT] == tex->GetSRV())
+  {
+    m_current_textures[TEXTURE_BUFFER_SLOT] = nullptr;
+    m_context->PSSetShaderResources(TEXTURE_BUFFER_SLOT, 1, &m_current_textures[TEXTURE_BUFFER_SLOT]);
   }
 }
 

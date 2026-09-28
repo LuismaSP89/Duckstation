@@ -256,7 +256,7 @@ GPU_HW::GPU_HW() : GPUBackend()
 
 GPU_HW::~GPU_HW()
 {
-  GPUTextureCache::Shutdown();
+  GPUTextureCache::Shutdown(false);
 }
 
 ALWAYS_INLINE void GPU_HW::BatchVertex::Set(float x_, float y_, float z_, float w_, u32 color_, u32 texpage_,
@@ -513,9 +513,10 @@ void GPU_HW::DoMemoryState(StateWrapper& sw, System::MemorySaveState& mss)
 
 void GPU_HW::RestoreDeviceContext()
 {
-  g_gpu_device->SetTextureSampler(0, m_vram_read_texture.get(), g_gpu_device->GetNearestSampler());
-  SetVRAMRenderTarget();
-  g_gpu_device->SetViewport(m_vram_texture->GetRect());
+  BindVRAMRenderTarget();
+  BindVRAMReadTexture();
+  g_gpu_device->SetTextureBuffer(m_vram_upload_buffer.get());
+  SetViewport();
   SetScissor();
   m_batch_ubo_dirty = true;
 }
@@ -703,7 +704,7 @@ bool GPU_HW::UpdateSettings(const GPUSettings& old_settings, Error* error)
   }
   else if (!m_use_texture_cache && old_settings.gpu_texture_cache)
   {
-    GPUTextureCache::Shutdown();
+    GPUTextureCache::Shutdown(g_gpu_settings.texture_replacements.enable_vram_write_replacements);
   }
 
   if (!GPUTextureCache::UpdateSettings(m_use_texture_cache, old_settings, error))
@@ -1049,7 +1050,6 @@ bool GPU_HW::CreateBuffers(Error* error)
   m_batch_ubo_data.u_resolution_scale_minus_one = m_batch_ubo_data.u_resolution_scale - 1.0f;
   m_batch_ubo_dirty = true;
 
-  SetVRAMRenderTarget();
   SetFullVRAMDirtyRectangle();
   return true;
 }
@@ -1071,7 +1071,7 @@ void GPU_HW::ClearFramebuffer()
   m_current_depth = 1;
 }
 
-void GPU_HW::SetVRAMRenderTarget()
+void GPU_HW::BindVRAMRenderTarget()
 {
   if (m_use_rov_for_shader_blend)
   {
@@ -1088,6 +1088,11 @@ void GPU_HW::SetVRAMRenderTarget()
   }
 }
 
+void GPU_HW::BindVRAMReadTexture()
+{
+  g_gpu_device->SetTextureSampler(0, m_vram_read_texture.get(), g_gpu_device->GetNearestSampler());
+}
+
 void GPU_HW::DeactivateROV()
 {
   if (!m_rov_active)
@@ -1095,7 +1100,7 @@ void GPU_HW::DeactivateROV()
 
   GL_INS("Deactivating ROV.");
   m_rov_active = false;
-  SetVRAMRenderTarget();
+  BindVRAMRenderTarget();
 }
 
 void GPU_HW::DestroyBuffers()
@@ -1619,8 +1624,16 @@ bool GPU_HW::CompilePipelines(Error* error)
   static constexpr u32 NUM_BATCH_TEXTURED_VERTEX_ATTRIBUTES = 4;
   static constexpr u32 NUM_BATCH_TEXTURED_LIMITS_VERTEX_ATTRIBUTES = 5;
 
+  // Use the same the feedback loop layout even if we don't need it to avoid descriptor rebinds.
+  // ROV is expensive, so we'll leave it off unless we absolutely need it.
+  const GPUPipeline::Layout batch_pipeline_layout =
+    needs_feedback_loop ? GPUPipeline::Layout::HWFeedbackLoopBatch : GPUPipeline::Layout::HWBatch;
+  const GPUPipeline::RenderPassFlag batch_render_pass_flags =
+    needs_feedback_loop ? GPUPipeline::ColorFeedbackLoop : GPUPipeline::NoRenderPassFlags;
+
   GPUPipeline::GraphicsConfig plconfig = {};
-  plconfig.layout = GPUPipeline::Layout::SingleTextureAndUBO;
+  plconfig.layout = batch_pipeline_layout;
+  plconfig.render_pass_flags = batch_render_pass_flags;
   plconfig.input_layout.vertex_stride = sizeof(BatchVertex);
   plconfig.rasterization = GPUPipeline::RasterizationState::GetNoCullState(m_multisamples, per_sample_shading);
   plconfig.primitive = GPUPipeline::Primitive::Triangles;
@@ -1695,6 +1708,7 @@ bool GPU_HW::CompilePipelines(Error* error)
                 const bool uv_limits = ShouldClampUVs(sprite ? m_sprite_texture_filtering : m_texture_filtering);
                 const bool use_shader_blending = (render_mode == static_cast<u8>(BatchRenderMode::ShaderBlend));
                 const bool use_rov = (use_shader_blending && m_use_rov_for_shader_blend);
+                plconfig.layout = use_rov ? GPUPipeline::Layout::HWImageBatch : batch_pipeline_layout;
                 plconfig.input_layout.vertex_attributes =
                   textured ?
                     (uv_limits ? std::span<const GPUPipeline::VertexAttribute>(
@@ -1829,7 +1843,8 @@ bool GPU_HW::CompilePipelines(Error* error)
     return false;
 
   plconfig.SetTargetFormats(VRAM_RT_FORMAT, needs_rov_depth ? GPUTextureFormat::Unknown : depth_buffer_format);
-  plconfig.render_pass_flags = needs_feedback_loop ? GPUPipeline::ColorFeedbackLoop : GPUPipeline::NoRenderPassFlags;
+  plconfig.layout = batch_pipeline_layout;
+  plconfig.render_pass_flags = batch_render_pass_flags;
 
   if (m_wireframe_mode != GPUWireframeMode::Disabled)
   {
@@ -1872,7 +1887,6 @@ bool GPU_HW::CompilePipelines(Error* error)
   // common state
   SetScreenQuadInputLayout(plconfig);
   plconfig.vertex_shader = m_screen_quad_vertex_shader.get();
-  plconfig.layout = GPUPipeline::Layout::SingleTextureAndPushConstants;
   plconfig.rasterization = GPUPipeline::RasterizationState::GetNoCullState(m_multisamples, false);
   plconfig.blend = GPUPipeline::BlendState::GetNoBlendingState();
   plconfig.color_formats[1] = needs_rov_depth ? VRAM_DS_COLOR_FORMAT : GPUTextureFormat::Unknown;
@@ -1934,8 +1948,6 @@ bool GPU_HW::CompilePipelines(Error* error)
   {
     const bool use_buffer = features.texture_buffers;
     const bool use_ssbo = features.texture_buffers_emulated_with_ssbo;
-    plconfig.layout = use_buffer ? GPUPipeline::Layout::SingleTextureBufferAndPushConstants :
-                                   GPUPipeline::Layout::SingleTextureAndPushConstants;
     for (u8 filtered = 0; filtered < 2; filtered++)
     {
       if (filtered && framebuffer_upload_filter == GPUTextureFilter::Nearest)
@@ -1979,7 +1991,6 @@ bool GPU_HW::CompilePipelines(Error* error)
       return false;
 
     plconfig.fragment_shader = fs.get();
-    plconfig.layout = GPUPipeline::Layout::SingleTextureAndPushConstants;
     plconfig.depth = GPUPipeline::DepthState::GetNoTestsState();
     if (!(m_vram_write_replacement_pipeline = g_gpu_device->CreatePipeline(plconfig, error)))
       return false;
@@ -2002,6 +2013,7 @@ bool GPU_HW::CompilePipelines(Error* error)
       return false;
 
     plconfig.fragment_shader = fs.get();
+    plconfig.render_pass_flags = GPUPipeline::NoRenderPassFlags;
     plconfig.SetTargetFormats(GPUTextureFormat::Unknown, depth_buffer_format);
     plconfig.depth = GPUPipeline::DepthState::GetAlwaysWriteState();
     plconfig.blend.write_mask = 0;
@@ -2362,9 +2374,9 @@ void GPU_HW::UpdateDepthBufferFromMaskBit()
   g_gpu_device->SetTextureSampler(0, m_vram_texture.get(), g_gpu_device->GetNearestSampler());
   g_gpu_device->Draw(3, 0);
 
-  // Restore.
-  g_gpu_device->SetTextureSampler(0, m_vram_read_texture.get(), g_gpu_device->GetNearestSampler());
-  SetVRAMRenderTarget();
+  // Restore state.
+  BindVRAMRenderTarget();
+  BindVRAMReadTexture();
   SetScissor();
 }
 
@@ -2379,16 +2391,20 @@ void GPU_HW::CopyAndClearDepthBuffer(bool only_drawing_area)
       // TODO: Shrink this to only the active area.
       GL_SCOPE("Copy Depth Buffer");
 
+      // Viewport should already be set full, only need to fudge the scissor.
       m_vram_texture->MakeReadyForSampling();
       g_gpu_device->InvalidateRenderTarget(m_vram_depth_copy_texture.get());
       g_gpu_device->SetRenderTarget(m_vram_depth_copy_texture.get());
-      g_gpu_device->SetViewportAndScissor(0, 0, m_vram_depth_texture->GetWidth(), m_vram_depth_texture->GetHeight());
+      g_gpu_device->SetScissor(m_vram_depth_texture->GetRect());
       g_gpu_device->SetTextureSampler(0, m_vram_depth_texture.get(), g_gpu_device->GetNearestSampler());
       g_gpu_device->SetPipeline(m_copy_depth_pipeline.get());
 
-      const float uniforms[4] = {0.0f, 0.0f, 1.0f, 1.0f};
-      g_gpu_device->DrawWithPushConstants(3, 0, uniforms, sizeof(uniforms));
-      RestoreDeviceContext();
+      g_gpu_device->Draw(3, 0);
+
+      // Restore state.
+      BindVRAMRenderTarget();
+      BindVRAMReadTexture();
+      SetScissor();
     }
 
     m_depth_was_copied = true;
@@ -2410,13 +2426,13 @@ void GPU_HW::ClearDepthBuffer(bool only_drawing_area)
     // need to re-bind for rov, because we can't turn colour writes off for only the first target
     if (!m_use_rov_for_shader_blend)
     {
-      DrawScreenQuad(clear_bounds, m_vram_depth_texture->GetSizeVec(), GSVector4::zero(), nullptr, 0);
+      DrawScreenQuad(clear_bounds, m_vram_depth_texture->GetSizeVec(), GSVector4::zero());
     }
     else
     {
       g_gpu_device->SetRenderTarget(m_vram_depth_texture.get());
-      DrawScreenQuad(clear_bounds, m_vram_depth_texture->GetSizeVec(), GSVector4::zero(), nullptr, 0);
-      SetVRAMRenderTarget();
+      DrawScreenQuad(clear_bounds, m_vram_depth_texture->GetSizeVec(), GSVector4::zero());
+      BindVRAMRenderTarget();
     }
   }
   else
@@ -2429,6 +2445,11 @@ void GPU_HW::ClearDepthBuffer(bool only_drawing_area)
 
   m_last_depth_z = 1.0f;
   s_counters.num_depth_buffer_clears++;
+}
+
+void GPU_HW::SetViewport()
+{
+  g_gpu_device->SetViewport(m_vram_texture->GetRect());
 }
 
 void GPU_HW::SetScissor()
@@ -2478,6 +2499,7 @@ ALWAYS_INLINE_RELEASE void GPU_HW::DrawBatchVertices(BatchRenderMode render_mode
     render_mode)][texture_mode][BoolToUInt8(m_batch.dithering)][BoolToUInt8(m_batch.interlacing)][check_mask]
                               .get());
 
+  // Avoid overhead of possibly-redundant binding unless texture cache is on, because it will change the bound texture.
   if (m_use_texture_cache && texture_mode != static_cast<u8>(BatchTextureMode::Disabled))
   {
     g_gpu_device->SetTextureSampler(0, texture ? texture->texture : m_vram_read_texture.get(),
@@ -2499,7 +2521,7 @@ ALWAYS_INLINE_RELEASE void GPU_HW::DrawBatchVertices(BatchRenderMode render_mode
       {
         GL_INS("Activating ROV.");
         m_rov_active = true;
-        SetVRAMRenderTarget();
+        BindVRAMRenderTarget();
       }
 
       g_gpu_device->DrawIndexed(num_indices, base_index, base_vertex);
@@ -3488,8 +3510,11 @@ bool GPU_HW::BlitVRAMReplacementTexture(GPUTexture* tex, u32 dst_x, u32 dst_y, u
 
   const GSVector4i rect(dst_x, dst_y, dst_x + width, dst_y + height);
   g_gpu_device->SetScissor(rect);
-  DrawScreenQuad(rect, m_vram_texture->GetSizeVec(), GSVector4::cxpr(0.0f, 0.0f, 1.0f, 1.0f), nullptr, 0);
-  RestoreDeviceContext();
+  DrawScreenQuad(rect, m_vram_texture->GetSizeVec(), GSVector4::cxpr(0.0f, 0.0f, 1.0f, 1.0f));
+
+  // Restore state.
+  BindVRAMReadTexture();
+  SetScissor();
   return true;
 }
 
@@ -3738,7 +3763,9 @@ void GPU_HW::FillVRAM(u32 x, u32 y, u32 width, u32 height, u32 color, bool inter
   g_gpu_device->SetScissor(scaled_bounds);
   DrawScreenQuad(scaled_bounds, m_vram_texture->GetSizeVec(), GSVector4::zero(), &uniforms, sizeof(uniforms));
 
-  RestoreDeviceContext();
+  // Only need to reset uniforms/scissor.
+  m_batch_ubo_dirty = true;
+  SetScissor();
 }
 
 void GPU_HW::ReadVRAM(u32 x, u32 y, u32 width, u32 height)
@@ -3801,6 +3828,7 @@ void GPU_HW::DownloadVRAMFromGPU(u32 x, u32 y, u32 width, u32 height)
                                                  VRAM_WIDTH * sizeof(u16));
   }
 
+  // Submits the command buffer, therefore we need to reset the UBO state.
   RestoreDeviceContext();
 }
 
@@ -3906,12 +3934,15 @@ void GPU_HW::UpdateVRAMOnGPU(u32 x, u32 y, u32 width, u32 height, const void* da
 
   if (upload_texture)
     g_gpu_device->SetTextureSampler(0, upload_texture.get(), g_gpu_device->GetNearestSampler());
-  else
-    g_gpu_device->SetTextureBuffer(0, m_vram_upload_buffer.get());
 
   DrawScreenQuad(scaled_bounds, m_vram_texture->GetSizeVec(), GSVector4::zero(), &uniforms, sizeof(uniforms));
 
-  RestoreDeviceContext();
+  // Only need to restore scissor/uniforms on the fast path.
+  if (upload_texture)
+    BindVRAMReadTexture();
+
+  m_batch_ubo_dirty = true;
+  SetScissor();
 }
 
 void GPU_HW::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height, bool set_mask, bool check_mask)
@@ -4003,15 +4034,20 @@ void GPU_HW::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32
                                       GetCurrentNormalizedVertexDepth(),
                                       0u};
 
-    // VRAM read texture should already be bound.
     g_gpu_device->SetPipeline(m_vram_copy_pipelines[BoolToUInt8(check_mask && m_write_mask_as_depth)].get());
-    g_gpu_device->SetTextureSampler(0, m_vram_read_texture.get(), g_gpu_device->GetNearestSampler());
 
     const GSVector4i dst_bounds_scaled = dst_bounds.mul32l(GSVector4i(m_resolution_scale));
     g_gpu_device->SetScissor(dst_bounds_scaled);
+
+    // Ensure the VRAM read texture is bound, because texture cache can leave another texture bound.
+    BindVRAMReadTexture();
+
     DrawScreenQuad(dst_bounds_scaled, m_vram_texture->GetSizeVec(), GSVector4::cxpr(0.0f, 0.0f, 1.0f, 1.0f), &uniforms,
                    sizeof(uniforms));
-    RestoreDeviceContext();
+
+    // Only need to restore scissor/uniforms.
+    m_batch_ubo_dirty = true;
+    SetScissor();
 
     if (check_mask && !m_pgxp_depth_buffer)
       m_current_depth++;
@@ -4288,9 +4324,9 @@ void GPU_HW::FlushRender()
 
   if (m_batch_ubo_dirty)
   {
-    g_gpu_device->UploadUniformBuffer(&m_batch_ubo_data, sizeof(m_batch_ubo_data));
     // m_counters.num_ubo_updates++;
     m_batch_ubo_dirty = false;
+    g_gpu_device->UploadUniformBuffer(&m_batch_ubo_data, sizeof(m_batch_ubo_data));
   }
 
   m_current_draw_rect = INVALID_RECT;
