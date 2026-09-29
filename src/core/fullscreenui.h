@@ -45,8 +45,6 @@ float GetBackgroundAlpha();
 void UpdateTheme();
 void UpdateRunIdleState();
 
-#ifndef __ANDROID__
-
 void OpenPauseMenu();
 void TogglePauseMenu();
 void ToggleCheatsMenu();
@@ -70,13 +68,12 @@ private:
   int m_last_progress_percent = -1;
 };
 
-#endif // __ANDROID__
-
 // NOTE: Not in widgets.h so that clients can use it without pulling in imgui etc.
 class LoadingScreenProgressCallback final : public ProgressCallback
 {
 public:
   LoadingScreenProgressCallback();
+  LoadingScreenProgressCallback(std::string image_path);
   ~LoadingScreenProgressCallback() override;
 
   ALWAYS_INLINE void SetOpenDelay(float delay) { m_open_delay = delay; }
@@ -109,15 +106,11 @@ extern const char* SFX_NAV_MOVE;
 // Host UI triggers from Big Picture mode.
 namespace Host {
 
-#ifndef __ANDROID__
-
 /// Requests shut down and exit of the hosting application. This may not actually exit,
 /// if the user cancels the shutdown confirmation.
 void RequestExitApplication(bool allow_confirm);
 
 /// Requests Big Picture mode to be shut down, returning to the desktop interface.
 void RequestExitBigPicture();
-
-#endif
 
 } // namespace Host
