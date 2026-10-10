@@ -129,7 +129,7 @@ protected:
     FLUSH_FOR_LOADSTORE = (FLUSH_FREE_CALLER_SAVED_REGISTERS | FLUSH_CYCLES),
     FLUSH_FOR_BRANCH = (FLUSH_FLUSH_MIPS_REGISTERS),
     FLUSH_FOR_EXCEPTION =
-      (FLUSH_CYCLES | FLUSH_GTE_DONE_CYCLE), // GTE cycles needed because it stalls when a GTE instruction is next.
+      (FLUSH_CYCLES | FLUSH_GTE_DONE_CYCLE | FLUSH_LOAD_DELAY), // GTE cycles needed when a GTE instruction is next.
     FLUSH_FOR_EARLY_BLOCK_EXIT =
       (FLUSH_FLUSH_MIPS_REGISTERS | FLUSH_CYCLES | FLUSH_GTE_DONE_CYCLE | FLUSH_PC | FLUSH_LOAD_DELAY),
     FLUSH_FOR_INTERPRETER = (FLUSH_FLUSH_MIPS_REGISTERS | FLUSH_INVALIDATE_MIPS_REGISTERS |
@@ -282,6 +282,7 @@ protected:
   virtual void GenerateCall(const void* func, s32 arg1reg = -1, s32 arg2reg = -1, s32 arg3reg = -1) = 0;
   virtual void EndBlock(const std::optional<u32>& newpc, bool do_event_test) = 0;
   virtual void EndBlockWithException(Exception excode) = 0;
+  void EndBlockWithBranchTargetException();
   virtual const void* EndCompile(u32* code_size, u32* far_code_size) = 0;
 
   ALWAYS_INLINE bool IsHostRegAllocated(u32 r) const { return (m_host_regs[r].flags & HR_ALLOCATED) != 0; }

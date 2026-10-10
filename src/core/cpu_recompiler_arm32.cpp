@@ -20,6 +20,7 @@
 
 #include "vixl/aarch32/constants-aarch32.h"
 #include "vixl/aarch32/instructions-aarch32.h"
+#include "vixl/code-generation-scopes-vixl.h"
 
 #ifdef ENABLE_HOST_DISASSEMBLY
 #include "vixl/aarch32/disasm-aarch32.h"
@@ -207,8 +208,13 @@ u32 CPU::CodeCache::EmitJump(void* code, const void* dst, bool flush_icache)
   // A32 jumps are silly.
   {
     Assembler emit(static_cast<vixl::byte*>(code), kA32InstructionSizeInBytes, A32);
+#ifdef VIXL_DEBUG
+    vixl::CodeBufferCheckScope asm_check(&emit, kA32InstructionSizeInBytes,
+                                        vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
+#endif
     Label label(disp);
     emit.b(&label);
+    emit.FinalizeCode();
   }
 
   if (flush_icache)
@@ -235,8 +241,13 @@ u8* armGetJumpTrampoline(const void* target)
 
   u8* start = s_trampoline_start_ptr + offset;
   vixl::aarch32::Assembler armAsm(start, TRAMPOLINE_AREA_SIZE - offset);
+#ifdef VIXL_DEBUG
+  vixl::CodeBufferCheckScope asm_check(&armAsm, TRAMPOLINE_AREA_SIZE - offset,
+                                      vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
+#endif
   armMoveAddressToReg(&armAsm, RSCRATCH, target);
   armAsm.bx(RSCRATCH);
+  armAsm.FinalizeCode();
 
   const u32 size = static_cast<u32>(armAsm.GetSizeOfCodeGenerated());
   DebugAssert(size < 20);
@@ -362,10 +373,10 @@ void CPU::ARM32Recompiler::Reset(CodeCache::Block* block, u8* code_buffer, u32 c
   armAsm = &m_emitter;
 
 #ifdef VIXL_DEBUG
-  m_emitter_check = std::make_unique<vixl::CodeBufferCheckScope>(m_emitter.get(), code_buffer_space,
+  m_emitter_check = std::make_unique<vixl::CodeBufferCheckScope>(&m_emitter, code_buffer_space,
                                                                  vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
   m_far_emitter_check = std::make_unique<vixl::CodeBufferCheckScope>(
-    m_far_emitter.get(), far_code_space, vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
+    &m_far_emitter, far_code_space, vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
 #endif
 
   // Need to wipe it out so it's correct when toggling fastmem.
@@ -1018,8 +1029,10 @@ void CPU::ARM32Recompiler::Flush(u32 flags)
       armAsm->add(RARG1, RARG1, armCheckAddSubConstant(m_cycles));
       m_cycles = 0;
     }
+
+    // pending_ticks = (gte_completion_tick > pending_ticks) ? (gte_completion_tick + 1) : pending_ticks
     armAsm->cmp(RARG2, RARG1);
-    armAsm->mov(hs, RARG1, RARG2);
+    armAsm->add(hi, RARG1, RARG2, 1);
     armAsm->str(RARG1, PTR(&g_state.pending_ticks));
     m_dirty_gte_done_cycle = false;
   }
@@ -1062,6 +1075,13 @@ void CPU::ARM32Recompiler::Compile_Fallback()
 
   EmitCall(reinterpret_cast<const void*>(&CPU::RecompilerThunks::InterpretInstruction));
 
+  SwitchToFarCodeIfRegZeroOrNonZero(RRET, true);
+  BackupHostState();
+  m_dirty_pc = false;
+  EndBlock(std::nullopt, true);
+  RestoreHostState();
+  SwitchToNearCode(false);
+
   // TODO: make me less garbage
   // TODO: this is wrong, it flushes the load delay on the same cycle when we return.
   // but nothing should be going through here..
@@ -1088,7 +1108,8 @@ void CPU::ARM32Recompiler::CheckBranchTarget(const vixl::aarch32::Register& pcre
   SwitchToFarCode(true, ne);
 
   BackupHostState();
-  EndBlockWithException(Exception::AdEL);
+  StoreHostRegToCPUPointer(pcreg.GetCode(), &g_state.cop0_regs.BadVaddr);
+  EndBlockWithBranchTargetException();
 
   RestoreHostState();
   SwitchToNearCode(false);
@@ -1315,8 +1336,8 @@ void CPU::ARM32Recompiler::Compile_variable_shift(CompileFlags cf,
 
   if (cf.const_s)
   {
-    if (const u32 shift = GetConstantRegU32(cf.MipsS()); shift != 0)
-      (armAsm->*op)(rd, rt, shift & 0x1Fu);
+    if (const u32 shift = GetConstantRegU32(cf.MipsS()) & 0x1Fu; shift != 0)
+      (armAsm->*op)(rd, rt, shift);
     else if (rd.GetCode() != rt.GetCode())
       armAsm->mov(rd, rt);
   }
@@ -1751,7 +1772,7 @@ vixl::aarch32::Register CPU::ARM32Recompiler::GenerateLoad(const vixl::aarch32::
 
     // Need to stash this in a temp because of the flush.
     const Register temp = Register(AllocateTempHostReg(HR_CALLEE_SAVED));
-    armAsm->rsb(temp, RRETHI, 0);
+    armAsm->rsb(temp, RRET, 0);
     armAsm->lsl(temp, temp, 2);
 
     Flush(FLUSH_FOR_C_CALL | FLUSH_FLUSH_MIPS_REGISTERS | FLUSH_FOR_EXCEPTION);
@@ -2523,6 +2544,10 @@ u32 CPU::Recompiler::CompileLoadStoreThunk(void* thunk_code, u32 thunk_space, vo
       save_regs.Combine(RegisterList(Register(i)));
   }
 
+  const bool pad_stack = ((save_regs.GetCount() & 1) != 0);
+  if (pad_stack)
+    armAsm->sub(sp, sp, 4);
+
   if (!save_regs.IsEmpty())
     armAsm->push(save_regs);
 
@@ -2622,6 +2647,9 @@ u32 CPU::Recompiler::CompileLoadStoreThunk(void* thunk_code, u32 thunk_space, vo
   // restore regs
   if (!save_regs.IsEmpty())
     armAsm->pop(save_regs);
+
+  if (pad_stack)
+    armAsm->add(sp, sp, 4);
 
   armEmitJmp(armAsm, static_cast<const u8*>(code_address) + code_size, true);
   armAsm->FinalizeCode();

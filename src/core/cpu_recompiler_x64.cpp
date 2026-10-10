@@ -944,7 +944,10 @@ void CPU::X64Recompiler::Flush(u32 flags)
       (m_cycles == 1) ? cg->inc(RWARG1) : cg->add(RWARG1, m_cycles);
       m_cycles = 0;
     }
+
+    // pending_ticks = (gte_completion_tick > pending_ticks) ? (gte_completion_tick + 1) : pending_ticks
     cg->cmp(RWARG2, RWARG1);
+    cg->lea(RWARG2, cg->dword[RXARG2 + 1]);
     cg->cmova(RWARG1, RWARG2);
     cg->mov(cg->dword[PTR(&g_state.pending_ticks)], RWARG1);
     m_dirty_gte_done_cycle = false;
@@ -987,6 +990,14 @@ void CPU::X64Recompiler::Compile_Fallback()
 
   cg->call(&CPU::RecompilerThunks::InterpretInstruction);
 
+  cg->test(cg->al, cg->al);
+  SwitchToFarCode(true, &CodeGenerator::jnz);
+  BackupHostState();
+  m_dirty_pc = false;
+  EndBlock(std::nullopt, true);
+  RestoreHostState();
+  SwitchToNearCode(false);
+
   // TODO: make me less garbage
   // TODO: this is wrong, it flushes the load delay on the same cycle when we return.
   // but nothing should be going through here..
@@ -1012,7 +1023,8 @@ void CPU::X64Recompiler::CheckBranchTarget(const Xbyak::Reg32& pcreg)
   SwitchToFarCode(true, &CodeGenerator::jnz);
 
   BackupHostState();
-  EndBlockWithException(Exception::AdEL);
+  StoreHostRegToCPUPointer(pcreg.getIdx(), &g_state.cop0_regs.BadVaddr);
+  EndBlockWithBranchTargetException();
 
   RestoreHostState();
   SwitchToNearCode(false);

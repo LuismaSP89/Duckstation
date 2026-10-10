@@ -32,6 +32,7 @@
 #include "common/string_pool.h"
 #include "common/string_util.h"
 #include "common/thirdparty/SmallVector.h"
+#include "common/threading.h"
 #include "common/time_helpers.h"
 #include "common/timer.h"
 
@@ -112,25 +113,26 @@ static void SetCustomSerialOnEntry(Entry* entry, std::string serial, bool update
 static bool RescanCustomAttributesForPath(const std::string& path, const INISettingsInterface& custom_attributes_ini);
 static void NotifyHostOfEntryChange(const Entry* entry);
 static void PopulateEntryAchievements(Entry* entry, const Achievements::ProgressDatabase& achievements_progress);
-static bool GetGameListEntryFromCache(const std::string& path, Entry* entry,
+static bool GetGameListEntryFromCache(CacheMap& cache_map, const std::string& path, Entry* entry,
                                       const INISettingsInterface& custom_attributes_ini,
                                       const Achievements::ProgressDatabase& achievements_progress);
 static Entry* GetMutableEntryForPath(std::string_view path);
 static void ScanDirectory(std::unique_lock<std::recursive_mutex>& lock, const std::string& path, bool recursive,
-                          bool only_cache, const std::vector<std::string>& excluded_paths,
+                          bool only_cache, const std::vector<std::string>& excluded_paths, CacheMap& cache_map,
                           const PlayedTimeMap& played_time_map, const INISettingsInterface& custom_attributes_ini,
                           const Achievements::ProgressDatabase& achievements_progress, BinaryFileWriter& cache_writer,
                           ProgressCallback* progress);
-static bool AddFileFromCache(const std::string& path, const std::string& path_in_cache, std::time_t timestamp,
-                             const PlayedTimeMap& played_time_map, const INISettingsInterface& custom_attributes_ini,
+static bool AddFileFromCache(CacheMap& cache_map, const std::string& path, const std::string& path_in_cache,
+                             std::time_t timestamp, const PlayedTimeMap& played_time_map,
+                             const INISettingsInterface& custom_attributes_ini,
                              const Achievements::ProgressDatabase& achievements_progress);
 static void ScanFile(std::unique_lock<std::recursive_mutex>& lock, std::string path, std::time_t timestamp,
                      const PlayedTimeMap& played_time_map, const INISettingsInterface& custom_attributes_ini,
                      const Achievements::ProgressDatabase& achievements_progress, const std::string& path_for_cache,
                      BinaryFileWriter& cache_writer);
 
-static bool LoadOrInitializeCache(std::FILE* fp, bool invalidate_cache);
-static bool LoadEntriesFromCache(BinaryFileReader& reader);
+static bool LoadOrInitializeCache(CacheMap& cache_map, std::FILE* fp, bool invalidate_cache);
+static bool LoadEntriesFromCache(CacheMap& cache_map, BinaryFileReader& reader);
 static bool WriteEntryToCache(const Entry* entry, const std::string& entry_path, BinaryFileWriter& writer);
 static void CreateDiscSetEntries(std::unique_lock<std::recursive_mutex>& lock,
                                  const std::vector<std::string>& excluded_paths, const PlayedTimeMap& played_time_map,
@@ -155,7 +157,6 @@ struct State
 {
   EntryList entries;
   std::recursive_mutex mutex;
-  CacheMap cache_map;
   std::vector<MemcardTimestampCacheEntry> memcard_timestamp_cache_entries;
   ListState game_list_loaded = ListState::Unloaded;
 };
@@ -163,6 +164,88 @@ struct State
 ALIGN_TO_CACHE_LINE static State s_state;
 
 } // namespace GameList
+
+const char* const GameList::CONFIG_SECTION_NAME = "GameList";
+const char* const GameList::UI_SECTION_NAME = "UI";
+constexpr const char* const GameList::SETTING_KEY_LOCALIZED_TITLES = "GameListShowLocalizedTitles";
+constexpr const char* const GameList::SETTING_KEY_SORT_COLUMN = "GameListSortColumn";
+constexpr const char* const GameList::SETTING_KEY_SORT_REVERSED = "GameListSortReversed";
+constexpr const char* const GameList::SETTING_KEY_PREFER_ACHIEVEMENT_CONTENT_ICONS =
+  "GameListPreferAchievementContentIcons";
+constexpr const char* const GameList::SETTING_KEY_MERGE_DISC_SETS = "GameListMergeDiscSets";
+constexpr const char* const GameList::SETTING_KEY_GRID_VIEW = "GameListGridView";
+constexpr const char* const GameList::SETTING_KEY_FULLSCREENUI_GRID_VIEW = "GameListFullscreenUIGridView";
+constexpr const char* const GameList::SETTING_KEY_COVER_TITLES = "GameListCoverTitles";
+
+GameList::Entry::Entry() = default;
+
+GameList::Entry::~Entry() = default;
+
+std::string_view GameList::Entry::GetDisplayTitle(bool localized) const
+{
+  // if custom title is present, use that for display too
+  return !title.empty() ? std::string_view(title) :
+                          (IsDiscSet() ? dbentry->disc_set->GetDisplayTitle(localized) :
+                                         (dbentry ? dbentry->GetDisplayTitle(localized) : std::string_view()));
+}
+
+std::string_view GameList::Entry::GetSortTitle() const
+{
+  // if custom title is present, use that for sorting too
+  return !title.empty() ?
+           std::string_view(title) :
+           (IsDiscSet() ? dbentry->disc_set->GetSortTitle() : (dbentry ? dbentry->GetSortTitle() : std::string_view()));
+}
+
+std::string_view GameList::Entry::GetSaveTitle() const
+{
+  // if custom title is present, use that for save folder too
+  return !title.empty() ?
+           std::string_view(title) :
+           (IsDiscSet() ? dbentry->disc_set->GetSaveTitle() : (dbentry ? dbentry->GetSaveTitle() : std::string_view()));
+}
+
+std::string_view GameList::Entry::GetLanguageIcon() const
+{
+  std::string_view ret;
+  if (custom_language != GameDatabase::Language::MaxCount)
+    ret = GameDatabase::GetLanguageName(custom_language);
+  else if (dbentry)
+    ret = dbentry->GetLanguageFlagName(region);
+  else
+    ret = Settings::GetDiscRegionName(region);
+
+  return ret;
+}
+
+TinyString GameList::Entry::GetLanguageIconName() const
+{
+  return GameDatabase::GetLanguageFlagResourceName(GetLanguageIcon());
+}
+
+TinyString GameList::Entry::GetCompatibilityIconFileName() const
+{
+  return TinyString::from_format(
+    "images/star-{}.svg",
+    static_cast<u32>(dbentry ? dbentry->compatibility : GameDatabase::CompatibilityRating::Unknown));
+}
+
+std::string GameList::Entry::GetReleaseDateString() const
+{
+  std::string ret;
+
+  if (!dbentry || dbentry->release_date == 0)
+    ret = TRANSLATE_STR("GameList", "Unknown");
+  else
+    ret = Host::FormatDate(static_cast<std::time_t>(dbentry->release_date), false);
+
+  return ret;
+}
+
+bool GameList::Entry::IsGame() const
+{
+  return (type != EntryType::PSF && type != EntryType::AudioCD && !serial.empty());
+}
 
 const char* GameList::GetEntryTypeName(EntryType type)
 {
@@ -190,20 +273,221 @@ const char* GameList::GetEntryTypeDisplayName(EntryType type)
   return Host::TranslateToCString("GameList", names[static_cast<size_t>(type)], "EntryType");
 }
 
+static constexpr std::array<const char*, static_cast<size_t>(GameList::Column::MaxCount)> s_column_names = {{
+  "Type",
+  "Serial",
+  "Title",
+  "FileTitle",
+  "Developer",
+  "Publisher",
+  "Genre",
+  "Year",
+  "Players",
+  "TimePlayed",
+  "LastPlayed",
+  "Size",
+  "DataSize",
+  "Region",
+  "Achievements",
+  "Compatibility",
+}};
+
+static constexpr std::array<const char*, static_cast<size_t>(GameList::Column::MaxCount)> s_column_display_names = {{
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Type", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Serial", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Title", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "File Title", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Developer", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Publisher", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Genre", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Year", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Players", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Time Played", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Last Played", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Size", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Data Size", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Region", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Achievements", "Column"),
+  TRANSLATE_DISAMBIG_NOOP("GameList", "Compatibility", "Column"),
+}};
+
+const char* GameList::GetColumnName(Column column)
+{
+  return (static_cast<size_t>(column) < s_column_names.size()) ? s_column_names[static_cast<size_t>(column)] : "";
+}
+
+const char* GameList::GetColumnDisplayName(Column column)
+{
+  return (static_cast<size_t>(column) < s_column_display_names.size()) ?
+           Host::TranslateToCString("GameList", s_column_display_names[static_cast<size_t>(column)], "Column") :
+           "";
+}
+
+std::optional<GameList::Column> GameList::ParseColumnName(std::string_view name)
+{
+  for (size_t i = 0; i < s_column_names.size(); i++)
+  {
+    if (name == s_column_names[i])
+      return static_cast<Column>(i);
+  }
+
+  return std::nullopt;
+}
+
+bool GameList::CompareEntryLessThan(const Entry* left, const Entry* right, Column column)
+{
+  switch (column)
+  {
+    case Column::Type:
+    {
+      const GameList::EntryType lst = left->GetSortType();
+      const GameList::EntryType rst = right->GetSortType();
+      if (lst == rst)
+        return CompareEntryTitlesLessThan(left, right);
+
+      return (static_cast<int>(lst) < static_cast<int>(rst));
+    }
+
+    case Column::Serial:
+    {
+      const int res = StringUtil::CompareNoCase(left->serial, right->serial);
+      return (res == 0) ? CompareEntryTitlesLessThan(left, right) : (res < 0);
+    }
+
+    case Column::Title:
+    {
+      return CompareEntryTitlesLessThan(left, right);
+    }
+
+    case Column::FileTitle:
+    {
+      const std::string_view file_title_left = Path::GetFileTitle(left->path);
+      const std::string_view file_title_right = Path::GetFileTitle(right->path);
+      const int res = StringUtil::CompareNoCase(file_title_left, file_title_right);
+      return (res == 0) ? CompareEntryTitlesLessThan(left, right) : (res < 0);
+    }
+
+    case Column::Developer:
+    {
+      const int res = StringUtil::CompareNoCase(left->dbentry ? left->dbentry->developer : std::string_view(),
+                                                right->dbentry ? right->dbentry->developer : std::string_view());
+      return (res == 0) ? CompareEntryTitlesLessThan(left, right) : (res < 0);
+    }
+
+    case Column::Publisher:
+    {
+      const int res = StringUtil::CompareNoCase(left->dbentry ? left->dbentry->publisher : std::string_view(),
+                                                right->dbentry ? right->dbentry->publisher : std::string_view());
+      return (res == 0) ? CompareEntryTitlesLessThan(left, right) : (res < 0);
+    }
+
+    case Column::Genre:
+    {
+      const int res = StringUtil::CompareNoCase(left->dbentry ? left->dbentry->genre : std::string_view(),
+                                                right->dbentry ? right->dbentry->genre : std::string_view());
+      return (res == 0) ? CompareEntryTitlesLessThan(left, right) : (res < 0);
+    }
+
+    case Column::Year:
+    {
+      const u64 ldate = left->dbentry ? left->dbentry->release_date : 0;
+      const u64 rdate = right->dbentry ? right->dbentry->release_date : 0;
+      return (ldate == rdate) ? CompareEntryTitlesLessThan(left, right) : (ldate < rdate);
+    }
+
+    case Column::Players:
+    {
+      const u8 left_players = left->dbentry ? ((left->dbentry->min_players << 4) + left->dbentry->max_players) : 0;
+      const u8 right_players = right->dbentry ? ((right->dbentry->min_players << 4) + right->dbentry->max_players) : 0;
+      return (left_players == right_players) ? CompareEntryTitlesLessThan(left, right) : (left_players < right_players);
+    }
+
+    case Column::TimePlayed:
+    {
+      return (left->total_played_time == right->total_played_time) ?
+               CompareEntryTitlesLessThan(left, right) :
+               (left->total_played_time < right->total_played_time);
+    }
+
+    case Column::LastPlayed:
+    {
+      return (left->last_played_time == right->last_played_time) ? CompareEntryTitlesLessThan(left, right) :
+                                                                   (left->last_played_time < right->last_played_time);
+    }
+
+    case Column::FileSize:
+    {
+      return (left->file_size == right->file_size) ? CompareEntryTitlesLessThan(left, right) :
+                                                     (left->file_size < right->file_size);
+    }
+
+    case Column::DataSize:
+    {
+      return (left->uncompressed_size == right->uncompressed_size) ?
+               CompareEntryTitlesLessThan(left, right) :
+               (left->uncompressed_size < right->uncompressed_size);
+    }
+
+    case Column::Region:
+    {
+      return (left->region == right->region) ? CompareEntryTitlesLessThan(left, right) :
+                                               (static_cast<int>(left->region) < static_cast<int>(right->region));
+    }
+
+    case Column::Achievements:
+    {
+      // sort by unlock percentage
+      const float unlock_left =
+        (left->num_achievements > 0) ?
+          (static_cast<float>(std::max(left->unlocked_achievements, left->unlocked_achievements_hc)) /
+           static_cast<float>(left->num_achievements)) :
+          0;
+      const float unlock_right =
+        (right->num_achievements > 0) ?
+          (static_cast<float>(std::max(right->unlocked_achievements, right->unlocked_achievements_hc)) /
+           static_cast<float>(right->num_achievements)) :
+          0;
+      if (std::abs(unlock_left - unlock_right) < 0.0001f)
+      {
+        // order by achievement count
+        if (left->num_achievements == right->num_achievements)
+          return CompareEntryTitlesLessThan(left, right);
+
+        return (left->num_achievements < right->num_achievements);
+      }
+
+      return (unlock_left < unlock_right);
+    }
+
+    case Column::Compatibilty:
+    {
+      const GameDatabase::CompatibilityRating left_compatibility =
+        left->dbentry ? left->dbentry->compatibility : GameDatabase::CompatibilityRating::Unknown;
+      const GameDatabase::CompatibilityRating right_compatibility =
+        right->dbentry ? right->dbentry->compatibility : GameDatabase::CompatibilityRating::Unknown;
+      return (left_compatibility == right_compatibility) ? CompareEntryTitlesLessThan(left, right) :
+                                                           (left_compatibility < right_compatibility);
+    }
+
+    default:
+      return false;
+  }
+}
+
+bool GameList::CompareEntryTitlesLessThan(const Entry* left, const Entry* right)
+{
+  const s32 res = StringUtil::CompareNoCase(left->GetSortTitle(), right->GetSortTitle());
+  if (res != 0)
+    return (res < 0);
+
+  // Fallback to path compare if titles are the same.
+  return (left->path < right->path);
+}
+
 bool GameList::IsGameListLoaded()
 {
   const std::unique_lock lock(s_state.mutex);
   return (s_state.game_list_loaded != ListState::Unloaded);
-}
-
-bool GameList::ShouldShowLocalizedTitles()
-{
-  return Core::GetBaseBoolSettingValue("UI", "GameListShowLocalizedTitles", true);
-}
-
-bool GameList::PreferAchievementGameBadgesForIcons()
-{
-  return Core::GetBaseBoolSettingValue("UI", "GameListPreferAchievementGameBadgesForIcons", false);
 }
 
 bool GameList::IsScannableFilename(std::string_view path)
@@ -441,17 +725,17 @@ bool GameList::PopulateEntryFromPath(const std::string& path, Entry* entry)
   return GetDiscListEntry(path, entry);
 }
 
-bool GameList::GetGameListEntryFromCache(const std::string& path, Entry* entry,
+bool GameList::GetGameListEntryFromCache(CacheMap& cache_map, const std::string& path, Entry* entry,
                                          const INISettingsInterface& custom_attributes_ini,
                                          const Achievements::ProgressDatabase& achievements_progress)
 {
-  auto iter = s_state.cache_map.find(path);
-  if (iter == s_state.cache_map.end())
+  auto iter = cache_map.find(path);
+  if (iter == cache_map.end())
     return false;
 
   *entry = std::move(iter->second);
   entry->dbentry = GameDatabase::GetEntryForSerial(entry->serial);
-  s_state.cache_map.erase(iter);
+  cache_map.erase(iter);
   ApplyCustomAttributes(path, entry, custom_attributes_ini);
   if (entry->IsDisc())
     PopulateEntryAchievements(entry, achievements_progress);
@@ -459,7 +743,7 @@ bool GameList::GetGameListEntryFromCache(const std::string& path, Entry* entry,
   return true;
 }
 
-bool GameList::LoadEntriesFromCache(BinaryFileReader& reader)
+bool GameList::LoadEntriesFromCache(CacheMap& cache_map, BinaryFileReader& reader)
 {
   u32 file_signature, file_version;
   if (!reader.ReadU32(&file_signature) || !reader.ReadU32(&file_version) ||
@@ -492,11 +776,11 @@ bool GameList::LoadEntriesFromCache(BinaryFileReader& reader)
     ge.region = static_cast<DiscRegion>(region);
     ge.type = static_cast<EntryType>(type);
 
-    auto iter = s_state.cache_map.find(ge.path);
-    if (iter != s_state.cache_map.end())
+    auto iter = cache_map.find(ge.path);
+    if (iter != cache_map.end())
       iter->second = std::move(ge);
     else
-      s_state.cache_map.emplace(std::move(path), std::move(ge));
+      cache_map.emplace(std::move(path), std::move(ge));
   }
 
   return true;
@@ -518,17 +802,17 @@ bool GameList::WriteEntryToCache(const Entry* entry, const std::string& entry_pa
   return writer.IsGood();
 }
 
-bool GameList::LoadOrInitializeCache(std::FILE* fp, bool invalidate_cache)
+bool GameList::LoadOrInitializeCache(CacheMap& cache_map, std::FILE* fp, bool invalidate_cache)
 {
   BinaryFileReader reader(fp);
-  if (!invalidate_cache && !reader.IsAtEnd() && LoadEntriesFromCache(reader))
+  if (!invalidate_cache && !reader.IsAtEnd() && LoadEntriesFromCache(cache_map, reader))
   {
     // Prepare for writing.
     return (FileSystem::FSeek64(fp, 0, SEEK_END) == 0);
   }
 
   WARNING_LOG("Initializing game list cache.");
-  s_state.cache_map.clear();
+  cache_map.clear();
   if (!fp)
     return false;
 
@@ -559,7 +843,7 @@ static bool IsPathExcluded(const std::vector<std::string>& excluded_paths, const
 }
 
 void GameList::ScanDirectory(std::unique_lock<std::recursive_mutex>& lock, const std::string& path, bool recursive,
-                             bool only_cache, const std::vector<std::string>& excluded_paths,
+                             bool only_cache, const std::vector<std::string>& excluded_paths, CacheMap& cache_map,
                              const PlayedTimeMap& played_time_map, const INISettingsInterface& custom_attributes_ini,
                              const Achievements::ProgressDatabase& achievements_progress,
                              BinaryFileWriter& cache_writer, ProgressCallback* progress)
@@ -605,8 +889,8 @@ void GameList::ScanDirectory(std::unique_lock<std::recursive_mutex>& lock, const
 
     lock.lock();
     if (GetEntryForPath(ffd.FileName) ||
-        AddFileFromCache(ffd.FileName, path_in_cache, ffd.ModificationTime, played_time_map, custom_attributes_ini,
-                         achievements_progress) ||
+        AddFileFromCache(cache_map, ffd.FileName, path_in_cache, ffd.ModificationTime, played_time_map,
+                         custom_attributes_ini, achievements_progress) ||
         only_cache)
     {
       lock.unlock();
@@ -626,12 +910,13 @@ void GameList::ScanDirectory(std::unique_lock<std::recursive_mutex>& lock, const
   progress->PopState();
 }
 
-bool GameList::AddFileFromCache(const std::string& path, const std::string& path_in_cache, std::time_t timestamp,
-                                const PlayedTimeMap& played_time_map, const INISettingsInterface& custom_attributes_ini,
+bool GameList::AddFileFromCache(CacheMap& cache_map, const std::string& path, const std::string& path_in_cache,
+                                std::time_t timestamp, const PlayedTimeMap& played_time_map,
+                                const INISettingsInterface& custom_attributes_ini,
                                 const Achievements::ProgressDatabase& achievements_progress)
 {
   Entry entry;
-  if (!GetGameListEntryFromCache(path_in_cache.empty() ? path : path_in_cache, &entry, custom_attributes_ini,
+  if (!GetGameListEntryFromCache(cache_map, path_in_cache.empty() ? path : path_in_cache, &entry, custom_attributes_ini,
                                  achievements_progress) ||
       entry.last_modified_time != timestamp)
   {
@@ -719,7 +1004,7 @@ bool GameList::RescanCustomAttributesForPath(const std::string& path, const INIS
 
   {
     // cancel if excluded
-    const std::vector<std::string> excluded_paths(Core::GetBaseStringListSetting("GameList", "ExcludedPaths"));
+    const std::vector<std::string> excluded_paths(Core::GetBaseStringListSetting(CONFIG_SECTION_NAME, "ExcludedPaths"));
     if (IsPathExcluded(excluded_paths, path))
       return false;
   }
@@ -1075,14 +1360,40 @@ size_t GameList::GetEntryCount()
   return s_state.entries.size();
 }
 
-void GameList::Refresh(bool invalidate_cache, bool only_cache, ProgressCallback* progress /* = nullptr */)
+GameList::ScanDirectoryList GameList::GetScanDirectoryList(const SettingsInterface& si)
 {
-  std::unique_lock lock(s_state.mutex);
-  Refresh(lock, invalidate_cache, only_cache, progress);
+  ScanDirectoryList settings;
+
+  {
+    std::vector<std::string> dirs = si.GetStringList(CONFIG_SECTION_NAME, "Paths");
+    std::vector<std::string> recursive_dirs = si.GetStringList(CONFIG_SECTION_NAME, "RecursivePaths");
+    settings.directories.reserve(dirs.size() + recursive_dirs.size());
+    for (std::string& dir : dirs)
+      settings.directories.emplace_back(std::move(dir), false);
+    for (std::string& dir : recursive_dirs)
+    {
+      auto it = std::ranges::find_if(settings.directories, [&dir](const auto& entry) { return entry.first == dir; });
+      if (it != settings.directories.end())
+        it->second = true; // mark as recursive
+      else
+        settings.directories.emplace_back(std::move(dir), true);
+    }
+  }
+
+  settings.excluded_paths = si.GetStringList(CONFIG_SECTION_NAME, "ExcludedPaths");
+
+  return settings;
 }
 
-void GameList::Refresh(std::unique_lock<std::recursive_mutex>& lock, bool invalidate_cache, bool only_cache,
-                       ProgressCallback* progress)
+void GameList::Refresh(const ScanDirectoryList& dirs, bool invalidate_cache, bool only_cache,
+                       ProgressCallback* progress /* = nullptr */)
+{
+  std::unique_lock lock(s_state.mutex);
+  Refresh(lock, dirs, invalidate_cache, only_cache, progress);
+}
+
+void GameList::Refresh(std::unique_lock<std::recursive_mutex>& lock, const ScanDirectoryList& dirs,
+                       bool invalidate_cache, bool only_cache, ProgressCallback* progress)
 {
   if (s_state.game_list_loaded == ListState::Loading)
   {
@@ -1099,16 +1410,18 @@ void GameList::Refresh(std::unique_lock<std::recursive_mutex>& lock, bool invali
 
   s_state.game_list_loaded = ListState::Loading;
 
+  Timer timer;
+
   if (!progress)
     progress = ProgressCallback::NullProgressCallback;
 
-  Timer timer;
+  CacheMap cache_map;
   Error error;
   FileSystem::LockedFile cache_file =
     FileSystem::OpenLockedFile(Path::Combine(EmuFolders::Cache, "gamelist.cache").c_str(), true, &error);
   if (!cache_file)
     ERROR_LOG("Failed to open game list cache: {}", error.GetDescription());
-  else if (!LoadOrInitializeCache(cache_file.get(), invalidate_cache))
+  else if (!LoadOrInitializeCache(cache_map, cache_file.get(), invalidate_cache))
     cache_file.reset();
 
   BinaryFileWriter cache_writer(cache_file.get());
@@ -1120,9 +1433,6 @@ void GameList::Refresh(std::unique_lock<std::recursive_mutex>& lock, bool invali
   // don't hold mutex while loading stuff
   lock.unlock();
 
-  const std::vector<std::string> excluded_paths(Core::GetBaseStringListSetting("GameList", "ExcludedPaths"));
-  std::vector<std::string> dirs(Core::GetBaseStringListSetting("GameList", "Paths"));
-  std::vector<std::string> recursive_dirs(Core::GetBaseStringListSetting("GameList", "RecursivePaths"));
   const PlayedTimeMap played_time = LoadPlayedTimeMap();
   INISettingsInterface custom_attributes_ini(GetCustomPropertiesFile());
   custom_attributes_ini.Load();
@@ -1131,39 +1441,27 @@ void GameList::Refresh(std::unique_lock<std::recursive_mutex>& lock, bool invali
   if (!achievements_progress.Load(&error))
     WARNING_LOG("Failed to load achievements progress: {}", error.GetDescription());
 
-  if (!dirs.empty() || !recursive_dirs.empty())
+  if (!dirs.directories.empty())
   {
-    progress->SetState(0, static_cast<u32>(dirs.size() + recursive_dirs.size()));
+    progress->SetState(0, static_cast<u32>(dirs.directories.size()));
 
     // we manually count it here, because otherwise pop state updates it itself
     int directory_counter = 0;
-    for (const std::string& dir : dirs)
+    for (const auto& [dir, recursive] : dirs.directories)
     {
       if (progress->IsCancelled())
         break;
 
-      ScanDirectory(lock, dir, false, only_cache, excluded_paths, played_time, custom_attributes_ini,
-                    achievements_progress, cache_writer, progress);
-      progress->SetProgressValue(++directory_counter);
-    }
-    for (const std::string& dir : recursive_dirs)
-    {
-      if (progress->IsCancelled())
-        break;
-
-      ScanDirectory(lock, dir, true, only_cache, excluded_paths, played_time, custom_attributes_ini,
-                    achievements_progress, cache_writer, progress);
+      ScanDirectory(lock, dir, recursive, only_cache, dirs.excluded_paths, cache_map, played_time,
+                    custom_attributes_ini, achievements_progress, cache_writer, progress);
       progress->SetProgressValue(++directory_counter);
     }
   }
 
   lock.lock();
 
-  // don't need unused cache entries
-  s_state.cache_map.clear();
-
   // merge multi-disc games
-  CreateDiscSetEntries(lock, excluded_paths, played_time, custom_attributes_ini);
+  CreateDiscSetEntries(lock, dirs.excluded_paths, played_time, custom_attributes_ini);
 
   // all done
   s_state.game_list_loaded = ListState::Loaded;
@@ -1176,7 +1474,20 @@ void GameList::EnsureLoaded(std::unique_lock<std::recursive_mutex>& lock)
   if (s_state.game_list_loaded == ListState::Loaded)
     return;
 
-  Refresh(lock, false, false, ProgressCallback::NullProgressCallback);
+  // note: uses the base settings interface
+  ScanDirectoryList dirs;
+  {
+    lock.unlock();
+    const auto settings_lock = Core::GetSettingsLock();
+    dirs = GetScanDirectoryList(*Core::GetBaseSettingsLayer());
+    lock.lock();
+
+    // list could get loaded in the meantime
+    if (s_state.game_list_loaded == ListState::Loaded)
+      return;
+  }
+
+  Refresh(lock, dirs, false, false, ProgressCallback::NullProgressCallback);
 }
 
 void GameList::RefreshDiscSetEntries()
@@ -1201,7 +1512,7 @@ void GameList::RefreshDiscSetEntries()
     }
   }
 
-  const std::vector<std::string> excluded_paths(Core::GetBaseStringListSetting("GameList", "ExcludedPaths"));
+  const std::vector<std::string> excluded_paths(Core::GetBaseStringListSetting(CONFIG_SECTION_NAME, "ExcludedPaths"));
   const PlayedTimeMap played_time = LoadPlayedTimeMap();
   INISettingsInterface custom_attributes_ini(GetCustomPropertiesFile());
   custom_attributes_ini.Load();
@@ -1394,72 +1705,6 @@ std::string GameList::GetNewCoverImagePathForEntry(const Entry* entry, const cha
     filename = fmt::format("{}{}", entry->serial, extension);
 
   return Path::Combine(EmuFolders::Covers, Path::SanitizeFileName(filename));
-}
-
-std::string_view GameList::Entry::GetDisplayTitle(bool localized) const
-{
-  // if custom title is present, use that for display too
-  return !title.empty() ? std::string_view(title) :
-                          (IsDiscSet() ? dbentry->disc_set->GetDisplayTitle(localized) :
-                                         (dbentry ? dbentry->GetDisplayTitle(localized) : std::string_view()));
-}
-
-std::string_view GameList::Entry::GetSortTitle() const
-{
-  // if custom title is present, use that for sorting too
-  return !title.empty() ?
-           std::string_view(title) :
-           (IsDiscSet() ? dbentry->disc_set->GetSortTitle() : (dbentry ? dbentry->GetSortTitle() : std::string_view()));
-}
-
-std::string_view GameList::Entry::GetSaveTitle() const
-{
-  // if custom title is present, use that for save folder too
-  return !title.empty() ?
-           std::string_view(title) :
-           (IsDiscSet() ? dbentry->disc_set->GetSaveTitle() : (dbentry ? dbentry->GetSaveTitle() : std::string_view()));
-}
-
-std::string_view GameList::Entry::GetLanguageIcon() const
-{
-  std::string_view ret;
-  if (custom_language != GameDatabase::Language::MaxCount)
-    ret = GameDatabase::GetLanguageName(custom_language);
-  else if (dbentry)
-    ret = dbentry->GetLanguageFlagName(region);
-  else
-    ret = Settings::GetDiscRegionName(region);
-
-  return ret;
-}
-
-TinyString GameList::Entry::GetLanguageIconName() const
-{
-  return GameDatabase::GetLanguageFlagResourceName(GetLanguageIcon());
-}
-
-TinyString GameList::Entry::GetCompatibilityIconFileName() const
-{
-  return TinyString::from_format(
-    "images/star-{}.svg",
-    static_cast<u32>(dbentry ? dbentry->compatibility : GameDatabase::CompatibilityRating::Unknown));
-}
-
-std::string GameList::Entry::GetReleaseDateString() const
-{
-  std::string ret;
-
-  if (!dbentry || dbentry->release_date == 0)
-    ret = TRANSLATE_STR("GameList", "Unknown");
-  else
-    ret = Host::FormatDate(static_cast<std::time_t>(dbentry->release_date), false);
-
-  return ret;
-}
-
-bool GameList::Entry::IsGame() const
-{
-  return (type != EntryType::PSF && type != EntryType::AudioCD && !serial.empty());
 }
 
 std::string GameList::GetPlayedTimePath()
@@ -2112,8 +2357,12 @@ std::string GameList::GetGameIconPath(std::string_view custom_title, std::string
   if (achievements_game_id != 0)
   {
     fallback_path = Achievements::GetGameBadgeURL(achievements_game_id);
-    if (!fallback_path.empty() && PreferAchievementGameBadgesForIcons())
+    if (!fallback_path.empty() &&
+        Core::GetBaseBoolSettingValue(UI_SECTION_NAME, SETTING_KEY_PREFER_ACHIEVEMENT_CONTENT_ICONS,
+                                      DEFAULT_PREFER_ACHIEVEMENT_CONTENT_ICONS))
+    {
       return (ret = std::move(fallback_path));
+    }
   }
 
   if (serial.empty())

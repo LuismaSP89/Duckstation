@@ -1194,8 +1194,10 @@ void CPU::ARM64Recompiler::Flush(u32 flags)
       armAsm->add(RWARG1, RWARG1, armCheckAddSubConstant(m_cycles));
       m_cycles = 0;
     }
+
+    // pending_ticks = (gte_completion_tick > pending_ticks) ? (gte_completion_tick + 1) : pending_ticks
     armAsm->cmp(RWARG2, RWARG1);
-    armAsm->csel(RWARG1, RWARG2, RWARG1, hs);
+    armAsm->csinc(RWARG1, RWARG1, RWARG2, ls);
     armAsm->str(RWARG1, PTR(&g_state.pending_ticks));
     m_dirty_gte_done_cycle = false;
   }
@@ -1238,6 +1240,13 @@ void CPU::ARM64Recompiler::Compile_Fallback()
 
   EmitCall(reinterpret_cast<const void*>(&CPU::RecompilerThunks::InterpretInstruction));
 
+  SwitchToFarCodeIfRegZeroOrNonZero(RWRET, true);
+  BackupHostState();
+  m_dirty_pc = false;
+  EndBlock(std::nullopt, true);
+  RestoreHostState();
+  SwitchToNearCode(false);
+
   // TODO: make me less garbage
   // TODO: this is wrong, it flushes the load delay on the same cycle when we return.
   // but nothing should be going through here..
@@ -1265,7 +1274,8 @@ void CPU::ARM64Recompiler::CheckBranchTarget(const vixl::aarch64::Register& pcre
   SwitchToFarCode(true, ne);
 
   BackupHostState();
-  EndBlockWithException(Exception::AdEL);
+  StoreHostRegToCPUPointer(pcreg.GetCode(), &g_state.cop0_regs.BadVaddr);
+  EndBlockWithBranchTargetException();
 
   RestoreHostState();
   SwitchToNearCode(false);
@@ -1497,7 +1507,7 @@ void CPU::ARM64Recompiler::Compile_variable_shift(
 
   if (cf.const_s)
   {
-    if (const u32 shift = GetConstantRegU32(cf.MipsS()); shift != 0)
+    if (const u32 shift = GetConstantRegU32(cf.MipsS()) & 0x1Fu; shift != 0)
       (armAsm->*op_const)(rd, rt, shift);
     else if (rd.GetCode() != rt.GetCode())
       armAsm->mov(rd, rt);
@@ -1539,6 +1549,7 @@ void CPU::ARM64Recompiler::Compile_mult(CompileFlags cf, bool sign)
 
   (sign) ? armAsm->smull(lo.X(), rs, rt) : armAsm->umull(lo.X(), rs, rt);
   armAsm->lsr(hi.X(), lo.X(), 32);
+  armAsm->mov(lo, lo); // Clear upper product bits before LO can be renamed to a GPR.
 }
 
 void CPU::ARM64Recompiler::Compile_mult(CompileFlags cf)
@@ -1876,7 +1887,7 @@ vixl::aarch64::Register CPU::ARM64Recompiler::GenerateLoad(const vixl::aarch64::
     if (g_settings.cpu_fastmem_mode == CPUFastmemMode::LUT)
     {
       DebugAssert(addr_reg.GetCode() != RWARG3.GetCode());
-      armAsm->lsr(RXARG3, addr_reg, Bus::FASTMEM_LUT_PAGE_SHIFT);
+      armAsm->lsr(RWARG3, addr_reg, Bus::FASTMEM_LUT_PAGE_SHIFT);
       armAsm->ldr(RXARG3, MemOperand(RMEMBASE, RXARG3, LSL, 3));
     }
 
@@ -1988,7 +1999,7 @@ void CPU::ARM64Recompiler::GenerateStore(const vixl::aarch64::Register& addr_reg
     if (g_settings.cpu_fastmem_mode == CPUFastmemMode::LUT)
     {
       DebugAssert(addr_reg.GetCode() != RWARG3.GetCode());
-      armAsm->lsr(RXARG3, addr_reg, Bus::FASTMEM_LUT_PAGE_SHIFT);
+      armAsm->lsr(RWARG3, addr_reg, Bus::FASTMEM_LUT_PAGE_SHIFT);
       armAsm->ldr(RXARG3, MemOperand(RMEMBASE, RXARG3, LSL, 3));
     }
 
@@ -2728,9 +2739,11 @@ u32 CPU::Recompiler::CompileLoadStoreThunk(void* thunk_code, u32 thunk_space, vo
   if (cycles_to_add != 0)
   {
     // NOTE: we have to reload here, because memory writes can run DMA, which can screw with cycles
-    Assert(Assembler::IsImmAddSub(cycles_to_add));
+    const bool immediate = Assembler::IsImmAddSub(cycles_to_add);
+    if (!immediate)
+      armEmitMov(armAsm, RWARG3, cycles_to_add);
     armAsm->ldr(RWSCRATCH, PTR(&g_state.pending_ticks));
-    armAsm->add(RWSCRATCH, RWSCRATCH, cycles_to_add);
+    armAsm->add(RWSCRATCH, RWSCRATCH, immediate ? Operand(cycles_to_add) : Operand(RWARG3));
     armAsm->str(RWSCRATCH, PTR(&g_state.pending_ticks));
   }
 
@@ -2797,9 +2810,11 @@ u32 CPU::Recompiler::CompileLoadStoreThunk(void* thunk_code, u32 thunk_space, vo
 
   if (cycles_to_remove != 0)
   {
-    Assert(Assembler::IsImmAddSub(cycles_to_remove));
+    const bool immediate = Assembler::IsImmAddSub(cycles_to_remove);
+    if (!immediate)
+      armEmitMov(armAsm, RWARG3, cycles_to_remove);
     armAsm->ldr(RWSCRATCH, PTR(&g_state.pending_ticks));
-    armAsm->sub(RWSCRATCH, RWSCRATCH, cycles_to_remove);
+    armAsm->sub(RWSCRATCH, RWSCRATCH, immediate ? Operand(cycles_to_remove) : Operand(RWARG3));
     armAsm->str(RWSCRATCH, PTR(&g_state.pending_ticks));
   }
 

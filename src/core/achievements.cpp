@@ -460,8 +460,10 @@ void Achievements::PrefetchAllAchievementBadges()
       {
         s_state.pending_badge_downloads++;
 
+        // Not necessary to take the lock here, because it will either execute the callback immediately in case of
+        // error, or in the HTTP downloader callback, which also runs on the core thread.
         HTTPCache::Prefetch(url, [](bool) {
-          const auto lock = GetLock();
+          DebugAssert(Host::IsOnCoreThread());
           if (s_state.pending_badge_downloads > 0)
           {
             s_state.pending_badge_downloads--;
@@ -557,8 +559,9 @@ void Achievements::ProcessStartup()
     const auto lock = Core::GetSettingsLock();
     const SettingsInterface* si = Core::GetBaseSettingsLayer();
     std::string_view username, token;
-    s_state.has_saved_credentials = (si->LookupValue("Cheevos", "Username", &username) && !username.empty() &&
-                                     si->LookupValue("Cheevos", "Token", &token) && !token.empty());
+    s_state.has_saved_credentials =
+      (si->LookupValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Username", &username) && !username.empty() &&
+       si->LookupValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Token", &token) && !token.empty());
   }
 }
 
@@ -598,7 +601,7 @@ bool Achievements::CreateClient(std::unique_lock<Threading::Mutex>& lock, bool i
   VERBOSE_LOG(s_state.http_user_agent_header);
 
   // Allow custom host to be overridden through config.
-  if (std::string host = Core::GetBaseStringSettingValue("Cheevos", "Host"); !host.empty())
+  if (std::string host = Core::GetBaseStringSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Host"); !host.empty())
   {
     // drop trailing slash, rc_client appends its own
     while (!host.empty() && host.back() == '/')
@@ -693,8 +696,8 @@ bool Achievements::HasSavedCredentials()
 
 bool Achievements::TryLoggingInWithToken()
 {
-  const TinyString username = Core::GetTinyStringSettingValue("Cheevos", "Username");
-  const TinyString api_token = Core::GetTinyStringSettingValue("Cheevos", "Token");
+  const TinyString username = Core::GetTinyStringSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Username");
+  const TinyString api_token = Core::GetTinyStringSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Token");
   if (username.empty() || api_token.empty())
     return false;
 
@@ -1306,10 +1309,14 @@ void Achievements::ClientLoadGameCallback(int result, const char* error_message,
 
   DiscordPresence::UpdateDetails(s_state.game_badge_url, s_state.rich_presence_string);
 
-  if (g_settings.achievements_prefetch_badges)
-    Achievements::PrefetchAllAchievementBadges();
-  else
-    PrefetchNextAchievementBadge();
+  // Don't try to prefetch if we don't have a HTTP cache, since we won't be able to display anything anyway.
+  if (HTTPCache::EnsureCacheArchiveOpen())
+  {
+    if (g_settings.achievements_prefetch_badges)
+      Achievements::PrefetchAllAchievementBadges();
+    else
+      PrefetchNextAchievementBadge();
+  }
 
   // needed for notifications
   SoundEffectManager::EnsureInitialized();
@@ -2073,6 +2080,28 @@ std::string Achievements::GetSubsetBadgeURL(const rc_client_subset_t* subset)
     return subset->badge_url;
 }
 
+std::string_view Achievements::GetAchievementBucketDisplayName(u32 bucket_id)
+{
+  static constexpr const char* bucket_names[] = {
+    // clang-format off
+    TRANSLATE_NOOP("Achievements", "Unknown"),
+    TRANSLATE_NOOP("Achievements", "Locked"),
+    TRANSLATE_NOOP("Achievements", "Unlocked"),
+    TRANSLATE_NOOP("Achievements", "Unsupported"),
+    TRANSLATE_NOOP("Achievements", "Unofficial"),
+    TRANSLATE_NOOP("Achievements", "Recently Unlocked"),
+    TRANSLATE_NOOP("Achievements", "Active Challenges"),
+    TRANSLATE_NOOP("Achievements", "Almost There"),
+    TRANSLATE_NOOP("Achievements", "Not Confirmed"),
+    TRANSLATE_NOOP("Achievements", "Unlocked in Casual"),
+    // clang-format on
+  };
+  static_assert(std::size(bucket_names) == NUM_RC_CLIENT_ACHIEVEMENT_BUCKETS);
+  return (bucket_id < NUM_RC_CLIENT_ACHIEVEMENT_BUCKETS) ?
+           Host::TranslateToStringView("Achievements", bucket_names[bucket_id]) :
+           "Unknown";
+}
+
 bool Achievements::IsLoggedIn()
 {
   return (rc_client_get_user_info(s_state.client) != nullptr);
@@ -2090,7 +2119,7 @@ void Achievements::LoginAsync(const char* username, const char* password, LoginC
   // We need to use a temporary client if achievements aren't currently active.
   if (!s_state.client && !CreateClient(lock, true))
   {
-    callback(false, "Failed to create client.");
+    callback(false, "Failed to create client.", LoginResult{});
     return;
   }
 
@@ -2106,17 +2135,16 @@ void Achievements::ClientLoginWithPasswordCallback(int result, const char* error
   // NOTE: This runs with the achievements lock held.
   bool callback_result;
   std::string callback_error_message;
+  LoginResult data;
   if (result == RC_OK)
   {
     // Grab the token from the client, and save it to the config.
     const rc_client_user_t* user = rc_client_get_user_info(client);
     if (user && user->username && user->token)
     {
-      // Store configuration.
-      Core::SetBaseStringSettingValue("Cheevos", "Username", user->username);
-      Core::SetBaseStringSettingValue("Cheevos", "Token", EncryptLoginToken(user->token, user->username));
-      Core::SetBaseStringSettingValue("Cheevos", "LoginTimestamp", fmt::format("{}", std::time(nullptr)).c_str());
-      Host::CommitBaseSettingChanges();
+      data.username = user->username;
+      data.encrypted_token = EncryptLoginToken(user->token, user->username).view();
+      data.timestamp = static_cast<s64>(std::time(nullptr));
       s_state.has_saved_credentials = true;
       callback_result = true;
     }
@@ -2160,7 +2188,21 @@ void Achievements::ClientLoginWithPasswordCallback(int result, const char* error
 
   LoginCompletionCallback* const callback = static_cast<LoginCompletionCallback*>(userdata);
   if (*callback)
-    (*callback)(callback_result, std::move(callback_error_message));
+    (*callback)(callback_result, std::move(callback_error_message), std::move(data));
+}
+
+void Achievements::SaveLoginSettings(SettingsInterface& si, const LoginResult& result)
+{
+  si.SetStringValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Username", result.username.c_str());
+  si.SetStringValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Token", result.encrypted_token.c_str());
+  si.SetStringValue(Settings::ACHIEVEMENTS_SECTION_NAME, "LoginTimestamp", fmt::format("{}", result.timestamp).c_str());
+}
+
+void Achievements::ClearLoginSettings(SettingsInterface& si)
+{
+  si.DeleteValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Username");
+  si.DeleteValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Token");
+  si.DeleteValue(Settings::ACHIEVEMENTS_SECTION_NAME, "LoginTimestamp");
 }
 
 void Achievements::ClientLoginWithTokenCallback(int result, const char* error_message, rc_client_t* client,
@@ -2307,9 +2349,9 @@ void Achievements::Logout()
 
   INFO_LOG("Clearing credentials...");
   s_state.has_saved_credentials = false;
-  Core::DeleteBaseSettingValue("Cheevos", "Username");
-  Core::DeleteBaseSettingValue("Cheevos", "Token");
-  Core::DeleteBaseSettingValue("Cheevos", "LoginTimestamp");
+  Core::DeleteBaseSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Username");
+  Core::DeleteBaseSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Token");
+  Core::DeleteBaseSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "LoginTimestamp");
   Host::CommitBaseSettingChanges();
 
   ClearProgressDatabase();

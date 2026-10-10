@@ -1717,7 +1717,7 @@ GSVector2i VideoPresenter::CalculateScreenshotSize(DisplayScreenshotMode mode)
 
 void VideoPresenter::UpdatePostProcessingSettings(bool force_load)
 {
-  static constexpr const char* section = PostProcessing::Config::DISPLAY_CHAIN_SECTION;
+  const char* const section = PostProcessing::Config::DISPLAY_CHAIN_SECTION_NAME;
 
   auto lock = Core::GetSettingsLock();
   const SettingsInterface& si = GetPostProcessingSettingsInterface(section);
@@ -1825,20 +1825,21 @@ void VideoPresenter::ReloadPostProcessingSettings(bool display, bool internal, b
 
 bool VideoPresenter::LoadOverlaySettings()
 {
-  std::string preset_name = Core::GetStringSettingValue("BorderOverlay", "PresetName");
+  std::string preset_name = Core::GetStringSettingValue(Settings::BORDER_OVERLAY_SECTION_NAME, "PresetName");
   std::string image_path;
   GSVector4i display_rect = s_locals.border_overlay_display_rect;
   bool alpha_blend = s_locals.border_overlay_alpha_blend;
   bool destination_alpha_blend = s_locals.border_overlay_destination_alpha_blend;
   if (preset_name == "Custom")
   {
-    image_path = Core::GetStringSettingValue("BorderOverlay", "ImagePath");
-    display_rect = GSVector4i(Core::GetIntSettingValue("BorderOverlay", "DisplayStartX", 0),
-                              Core::GetIntSettingValue("BorderOverlay", "DisplayStartY", 0),
-                              Core::GetIntSettingValue("BorderOverlay", "DisplayEndX", 0),
-                              Core::GetIntSettingValue("BorderOverlay", "DisplayEndY", 0));
-    alpha_blend = Core::GetBoolSettingValue("BorderOverlay", "AlphaBlend", false);
-    destination_alpha_blend = Core::GetBoolSettingValue("BorderOverlay", "DestinationAlphaBlend", false);
+    image_path = Core::GetStringSettingValue(Settings::BORDER_OVERLAY_SECTION_NAME, "ImagePath");
+    display_rect = GSVector4i(Core::GetIntSettingValue(Settings::BORDER_OVERLAY_SECTION_NAME, "DisplayStartX", 0),
+                              Core::GetIntSettingValue(Settings::BORDER_OVERLAY_SECTION_NAME, "DisplayStartY", 0),
+                              Core::GetIntSettingValue(Settings::BORDER_OVERLAY_SECTION_NAME, "DisplayEndX", 0),
+                              Core::GetIntSettingValue(Settings::BORDER_OVERLAY_SECTION_NAME, "DisplayEndY", 0));
+    alpha_blend = Core::GetBoolSettingValue(Settings::BORDER_OVERLAY_SECTION_NAME, "AlphaBlend", false);
+    destination_alpha_blend =
+      Core::GetBoolSettingValue(Settings::BORDER_OVERLAY_SECTION_NAME, "DestinationAlphaBlend", false);
   }
 
   // check rect validity.. ignore everything if it's bogus
@@ -1922,10 +1923,10 @@ std::vector<std::string> VideoPresenter::EnumerateBorderOverlayPresets()
   std::vector<std::string> ret;
 
   FileSystem::FindResultsArray files;
+  FileSystem::FindFiles(EmuFolders::Overlays.c_str(), pattern,
+                        FILESYSTEM_FIND_RELATIVE_PATHS | FILESYSTEM_FIND_FILES | FILESYSTEM_FIND_KEEP_ARRAY, &files);
   FileSystem::FindFiles(Path::Combine(EmuFolders::Resources, "overlays").c_str(), pattern,
                         FILESYSTEM_FIND_RELATIVE_PATHS | FILESYSTEM_FIND_FILES, &files);
-  FileSystem::FindFiles(Path::Combine(EmuFolders::UserResources, "overlays").c_str(), pattern,
-                        FILESYSTEM_FIND_RELATIVE_PATHS | FILESYSTEM_FIND_FILES | FILESYSTEM_FIND_KEEP_ARRAY, &files);
 
   ret.reserve(files.size());
   for (FILESYSTEM_FIND_DATA& fd : files)
@@ -1943,13 +1944,24 @@ std::vector<std::string> VideoPresenter::EnumerateBorderOverlayPresets()
 
 bool VideoPresenter::LoadOverlayPreset(Error* error, Image* image)
 {
-  SmallString path = SmallString::from_format("overlays/{}.yml", s_locals.border_overlay_image_path);
-  std::optional<std::string> yaml_data = Host::ReadResourceFileToString(path, true, error);
+  SmallString filename = SmallString::from_format("{}.yml", s_locals.border_overlay_image_path);
+
+  std::optional<std::string> yaml_data;
+  bool is_disk_path;
+  if (const std::string full_path = Path::Combine(EmuFolders::Overlays, filename);
+      (is_disk_path = FileSystem::FileExists(full_path.c_str())))
+  {
+    yaml_data = FileSystem::ReadFileToString(full_path.c_str(), error);
+  }
+  else
+  {
+    yaml_data = Host::ReadResourceFileToString(fmt::format("overlays/{}", filename), false, error);
+  }
   if (!yaml_data.has_value())
     return false;
 
-  const ryml::Tree yaml =
-    ryml::parse_in_place(to_csubstr(path), c4::substr(reinterpret_cast<char*>(yaml_data->data()), yaml_data->size()));
+  const ryml::Tree yaml = ryml::parse_in_place(
+    to_csubstr(filename), c4::substr(reinterpret_cast<char*>(yaml_data->data()), yaml_data->size()));
   const ryml::ConstNodeRef root = yaml.rootref();
   if (root.empty())
   {
@@ -1972,8 +1984,9 @@ bool VideoPresenter::LoadOverlayPreset(Error* error, Image* image)
     return false;
   }
 
-  path.format("overlays/{}", image_filename);
-  std::optional<DynamicHeapArray<u8>> image_data = Host::ReadResourceFile(path, true, error);
+  std::optional<DynamicHeapArray<u8>> image_data =
+    is_disk_path ? FileSystem::ReadBinaryFile(Path::Combine(EmuFolders::Overlays, image_filename).c_str(), error) :
+                   Host::ReadResourceFile(fmt::format("overlays/{}", image_filename), false, error);
   if (!image_data.has_value() || !image->LoadFromBuffer(image_filename, image_data.value(), error))
     return false;
 

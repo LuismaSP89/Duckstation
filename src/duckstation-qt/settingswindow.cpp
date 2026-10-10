@@ -63,11 +63,13 @@ SettingsWindow::SettingsWindow(const GameList::Entry* entry, std::unique_ptr<INI
   if (const QIcon icon = g_main_window->getIconForGame(QString::fromStdString(entry->path)); !icon.isNull())
     setWindowIcon(icon);
 
-  setGameTitle(entry->GetDisplayTitle(GameList::ShouldShowLocalizedTitles()));
+  const bool show_localized_titles = Core::GetBaseBoolSettingValue(
+    GameList::UI_SECTION_NAME, GameList::SETTING_KEY_LOCALIZED_TITLES, GameList::DEFAULT_LOCALIZED_TITLES);
+  setGameTitle(entry->GetDisplayTitle(show_localized_titles));
   setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
-  addWidget(m_game_summary = new GameSummaryWidget(entry, this, m_ui.settingsContainer), tr("Summary"),
-            u":/icons/monochrome/svg/file-list-line.svg"_s,
+  addWidget(m_game_summary = new GameSummaryWidget(entry, show_localized_titles, this, m_ui.settingsContainer),
+            tr("Summary"), u":/icons/monochrome/svg/file-list-line.svg"_s,
             tr("<strong>Summary</strong><hr>This page shows information about the selected game, and allows you to "
                "validate your disc was dumped correctly."));
   addPages();
@@ -198,7 +200,8 @@ void SettingsWindow::addPages()
          "not modify anything on this page without a good reason to do so."));
   }
 
-  SettingWidgetBinder::BindWidgetToBoolSetting(m_sif.get(), m_ui.safeMode, "Main", "DisableAllEnhancements", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(m_sif.get(), m_ui.safeMode, Settings::INTERFACE_SECTION_NAME,
+                                               "DisableAllEnhancements", false);
 
   registerWidgetHelp(m_ui.safeMode, tr("Safe Mode"), tr("Unchecked"),
                      tr("Disables all enhancement options, simulating the system as accurately as possible. Use to "
@@ -720,7 +723,7 @@ void SettingsWindow::setGameTitle(std::string_view title)
 bool SettingsWindow::hasGameTrait(GameDatabase::Trait trait)
 {
   return (m_database_entry && m_database_entry->HasTrait(trait) &&
-          m_sif->GetBoolValue("Main", "ApplyCompatibilitySettings", true));
+          m_sif->GetBoolValue(Settings::INTERFACE_SECTION_NAME, "ApplyCompatibilitySettings", true));
 }
 
 bool SettingsWindow::isGameHashStable() const
@@ -733,22 +736,22 @@ MultitapMode SettingsWindow::getEffectiveMultitapMode() const
   TinyString str;
   if (isPerGameSettings())
   {
-    if (m_sif->GetBoolValue("ControllerPorts", "UseGameSettingsForController", false))
+    if (m_sif->GetBoolValue(Settings::CONTROLLER_PORTS_SECTION_NAME, "UseGameSettingsForController", false))
     {
-      str = m_sif->GetTinyStringValue("ControllerPorts", "MultitapMode");
+      str = m_sif->GetTinyStringValue(Settings::CONTROLLER_PORTS_SECTION_NAME, "MultitapMode");
     }
-    else if (!(str = m_sif->GetTinyStringValue("ControllerPorts", "InputProfileName")).empty())
+    else if (!(str = m_sif->GetTinyStringValue(Settings::CONTROLLER_PORTS_SECTION_NAME, "InputProfileName")).empty())
     {
       // this is massive ugh, we need to load the input profile...
       INISettingsInterface profile_sif(System::GetInputProfilePath(str));
       if (profile_sif.Load())
-        str = profile_sif.GetTinyStringValue("ControllerPorts", "MultitapMode");
+        str = profile_sif.GetTinyStringValue(Settings::CONTROLLER_PORTS_SECTION_NAME, "MultitapMode");
     }
   }
 
   // fall back to global
   if (str.empty())
-    str = Core::GetBaseTinyStringSettingValue("ControllerPorts", "MultitapMode");
+    str = Core::GetBaseTinyStringSettingValue(Settings::CONTROLLER_PORTS_SECTION_NAME, "MultitapMode");
 
   return Settings::ParseMultitapModeName(str).value_or(Settings::DEFAULT_MULTITAP_MODE);
 }

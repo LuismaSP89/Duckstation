@@ -66,6 +66,41 @@ static bool IsUNCPath(const T& path)
 }
 #endif
 
+std::string_view Path::StripTrailingSlashes(std::string_view path)
+{
+  size_t new_length = path.length();
+  while (new_length > 0 && (path[new_length - 1] == '/' || path[new_length - 1] == '\\'))
+    new_length--;
+  return path.substr(0, new_length);
+}
+
+void Path::StripTrailingSlashes(std::string* path)
+{
+  while (path->length() > 0 && (path->back() == '/' || path->back() == '\\'))
+    path->pop_back();
+}
+
+bool Path::ContainsTraversal(std::string_view path)
+{
+  // Check for any .. or . components in the path.
+  size_t pos = 0;
+  while (pos < path.length())
+  {
+    pos = path.find_first_of("/\\", pos);
+    if (pos == std::string_view::npos)
+      break;
+    if (pos + 1 < path.length() && path[pos + 1] == '.')
+    {
+      if (pos + 2 < path.length() && path[pos + 2] == '.')
+        return true; // found a .. component
+      else if (pos + 2 == path.length() || path[pos + 2] == '/' || path[pos + 2] == '\\')
+        return true; // found a . component
+    }
+    pos++;
+  }
+  return false;
+}
+
 static inline bool FileSystemCharacterIsSane(char32_t c, bool strip_slashes)
 {
   // no newlines, don't be silly. or other control characters...
@@ -93,6 +128,20 @@ static inline bool FileSystemCharacterIsSane(char32_t c, bool strip_slashes)
     return false;
 #endif
 #endif
+
+  return true;
+}
+
+bool Path::IsValidFileName(std::string_view str, bool allow_slashes /*= false*/)
+{
+  size_t pos = 0;
+  while (pos < str.length())
+  {
+    char32_t ch;
+    pos += StringUtil::DecodeUTF8(str, pos, &ch);
+    if (!FileSystemCharacterIsSane(ch, !allow_slashes))
+      return false;
+  }
 
   return true;
 }
@@ -1083,10 +1132,7 @@ std::FILE* FileSystem::OpenSharedCFile(const char* path, const char* mode, FileS
   Error::SetErrno(error, errno);
   return nullptr;
 #else
-  std::FILE* fp = std::fopen(path, mode);
-  if (!fp)
-    Error::SetErrno(error, errno);
-  return fp;
+  return OpenCFile(path, mode, error);
 #endif
 }
 
@@ -1314,8 +1360,7 @@ FileSystem::ManagedCFilePtr FileSystem::OpenManagedCFile(const char* path, const
   return ManagedCFilePtr(OpenCFile(path, mode, error));
 }
 
-std::FILE* FileSystem::OpenTemporaryCFile(std::string_view base_path, std::string* out_path,
-                                          Error* error /*= nullptr*/)
+std::FILE* FileSystem::OpenTemporaryCFile(std::string_view base_path, std::string* out_path, Error* error /*= nullptr*/)
 {
   if (base_path.empty())
   {
@@ -1426,12 +1471,18 @@ bool FileSystem::FSeek64(std::FILE* fp, s64 offset, int whence, Error* error)
   return false;
 }
 
-s64 FileSystem::FTell64(std::FILE* fp)
+s64 FileSystem::FTell64(std::FILE* fp, Error* error)
 {
 #ifdef _WIN32
-  return static_cast<s64>(_ftelli64(fp));
+  const s64 result = static_cast<s64>(_ftelli64(fp));
+  if (result < 0)
+    Error::SetErrno(error, "_ftelli64() failed: ", errno);
+  return result;
 #else
-  return static_cast<s64>(ftello(fp));
+  const s64 result = static_cast<s64>(ftello(fp));
+  if (result < 0)
+    Error::SetErrno(error, "ftello() failed: ", errno);
+  return result;
 #endif
 }
 
@@ -1608,31 +1659,26 @@ void FileSystem::LockedFile::reset()
 
 std::optional<DynamicHeapArray<u8>> FileSystem::ReadBinaryFile(const char* path, Error* error)
 {
-  std::optional<DynamicHeapArray<u8>> ret;
-
-  ManagedCFilePtr fp = OpenManagedCFile(path, "rb", error);
+  ManagedCFilePtr fp = OpenManagedSharedCFile(path, "rb", FileShareMode::DenyWrite, error);
   if (!fp)
-    return ret;
+    return {};
 
-  ret = ReadBinaryFile(fp.get(), error);
-  return ret;
+  return ReadBinaryFile(fp.get(), error);
 }
 
 std::optional<DynamicHeapArray<u8>> FileSystem::ReadBinaryFile(std::FILE* fp, Error* error)
 {
-  std::optional<DynamicHeapArray<u8>> ret;
-
   if (FSeek64(fp, 0, SEEK_END) != 0) [[unlikely]]
   {
     Error::SetErrno(error, "FSeek64() to end failed: ", errno);
-    return ret;
+    return {};
   }
 
   const s64 size = FTell64(fp);
   if (size < 0) [[unlikely]]
   {
     Error::SetErrno(error, "FTell64() for length failed: ", errno);
-    return ret;
+    return {};
   }
 
   if constexpr (sizeof(s64) != sizeof(size_t))
@@ -1640,21 +1686,21 @@ std::optional<DynamicHeapArray<u8>> FileSystem::ReadBinaryFile(std::FILE* fp, Er
     if (size > static_cast<s64>(std::numeric_limits<long>::max())) [[unlikely]]
     {
       Error::SetStringFmt(error, "File size of {} is too large to read on this platform.", size);
-      return ret;
+      return {};
     }
   }
 
   if (FSeek64(fp, 0, SEEK_SET) != 0) [[unlikely]]
   {
     Error::SetErrno(error, "FSeek64() to start failed: ", errno);
-    return ret;
+    return {};
   }
 
-  ret = DynamicHeapArray<u8>(static_cast<size_t>(size));
-  if (size > 0 && std::fread(ret->data(), 1u, static_cast<size_t>(size), fp) != static_cast<size_t>(size)) [[unlikely]]
+  DynamicHeapArray<u8> ret(static_cast<size_t>(size));
+  if (size > 0 && std::fread(ret.data(), 1u, static_cast<size_t>(size), fp) != static_cast<size_t>(size)) [[unlikely]]
   {
     Error::SetErrno(error, "fread() failed: ", errno);
-    ret.reset();
+    return {};
   }
 
   return ret;
@@ -1662,31 +1708,44 @@ std::optional<DynamicHeapArray<u8>> FileSystem::ReadBinaryFile(std::FILE* fp, Er
 
 std::optional<std::string> FileSystem::ReadFileToString(const char* path, Error* error)
 {
-  std::optional<std::string> ret;
-
-  ManagedCFilePtr fp = OpenManagedCFile(path, "rb", error);
+  ManagedCFilePtr fp = OpenManagedSharedCFile(path, "rb", FileShareMode::DenyWrite, error);
   if (!fp)
-    return ret;
+    return {};
 
-  ret = ReadFileToString(fp.get());
-  return ret;
+  return ReadFileToString(fp.get(), error);
 }
 
 std::optional<std::string> FileSystem::ReadFileToString(std::FILE* fp, Error* error)
 {
-  std::optional<std::string> ret;
+  std::string ret;
+  if (!ReadFileToString(fp, &ret, error))
+    return {};
 
+  return ret;
+}
+
+bool FileSystem::ReadFileToString(const char* path, std::string* str, Error* error /*= nullptr*/)
+{
+  ManagedCFilePtr fp = OpenManagedSharedCFile(path, "rb", FileShareMode::DenyWrite, error);
+  if (!fp)
+    return false;
+
+  return ReadFileToString(fp.get(), str, error);
+}
+
+bool FileSystem::ReadFileToString(std::FILE* fp, std::string* str, Error* error /*= nullptr*/)
+{
   if (FSeek64(fp, 0, SEEK_END) != 0) [[unlikely]]
   {
     Error::SetErrno(error, "FSeek64() to end failed: ", errno);
-    return ret;
+    return false;
   }
 
   const s64 size = FTell64(fp);
   if (size < 0) [[unlikely]]
   {
     Error::SetErrno(error, "FTell64() for length failed: ", errno);
-    return ret;
+    return false;
   }
 
   if constexpr (sizeof(s64) != sizeof(size_t))
@@ -1694,25 +1753,24 @@ std::optional<std::string> FileSystem::ReadFileToString(std::FILE* fp, Error* er
     if (size > static_cast<s64>(std::numeric_limits<long>::max())) [[unlikely]]
     {
       Error::SetStringFmt(error, "File size of {} is too large to read on this platform.", size);
-      return ret;
+      return false;
     }
   }
 
   if (FSeek64(fp, 0, SEEK_SET) != 0) [[unlikely]]
   {
     Error::SetErrno(error, "FSeek64() to start failed: ", errno);
-    return ret;
+    return false;
   }
 
-  ret = std::string();
-  ret->resize(static_cast<size_t>(size));
+  str->resize(static_cast<size_t>(size));
   // NOTE - assumes mode 'rb', for example, this will fail over missing Windows carriage return bytes
   if (size > 0)
   {
-    if (std::fread(ret->data(), 1u, static_cast<size_t>(size), fp) != static_cast<size_t>(size))
+    if (std::fread(str->data(), 1u, static_cast<size_t>(size), fp) != static_cast<size_t>(size))
     {
       Error::SetErrno(error, "fread() failed: ", errno);
-      ret.reset();
+      return false;
     }
     else
     {
@@ -1720,28 +1778,28 @@ std::optional<std::string> FileSystem::ReadFileToString(std::FILE* fp, Error* er
       static constexpr const u8 UTF16_LE_BOM[] = {0xFF, 0xFE};
       static constexpr const u8 UTF8_BOM[] = {0xEF, 0xBB, 0xBF};
 
-      if (ret->size() >= sizeof(UTF8_BOM) && std::memcmp(ret->data(), UTF8_BOM, sizeof(UTF8_BOM)) == 0)
+      if (str->size() >= sizeof(UTF8_BOM) && std::memcmp(str->data(), UTF8_BOM, sizeof(UTF8_BOM)) == 0)
       {
         // Remove UTF-8 BOM.
-        ret->erase(0, sizeof(UTF8_BOM));
+        str->erase(0, sizeof(UTF8_BOM));
       }
-      else if (ret->size() >= sizeof(UTF16_LE_BOM) && (ret->size() % 2) == 0)
+      else if (str->size() >= sizeof(UTF16_LE_BOM) && (str->size() % 2) == 0)
       {
-        const bool le = (std::memcmp(ret->data(), UTF16_LE_BOM, sizeof(UTF16_LE_BOM)) == 0);
-        const bool be = (std::memcmp(ret->data(), UTF16_BE_BOM, sizeof(UTF16_BE_BOM)) == 0);
+        const bool le = (std::memcmp(str->data(), UTF16_LE_BOM, sizeof(UTF16_LE_BOM)) == 0);
+        const bool be = (std::memcmp(str->data(), UTF16_BE_BOM, sizeof(UTF16_BE_BOM)) == 0);
         if (le || be)
         {
-          const std::string utf16 = std::move(ret.value());
+          const std::string utf16 = std::move(*str);
           const std::string_view no_bom = std::string_view(utf16).substr(sizeof(UTF16_LE_BOM));
-          ret = no_bom.empty() ? std::string() :
-                                 (be ? StringUtil::DecodeUTF16BEString(no_bom.data(), no_bom.size()) :
-                                       StringUtil::DecodeUTF16String(no_bom.data(), no_bom.size()));
+          *str = no_bom.empty() ? std::string() :
+                                  (be ? StringUtil::DecodeUTF16BEString(no_bom.data(), no_bom.size()) :
+                                        StringUtil::DecodeUTF16String(no_bom.data(), no_bom.size()));
         }
       }
     }
   }
 
-  return ret;
+  return true;
 }
 
 bool FileSystem::WriteBinaryFile(const char* path, const void* data, size_t data_length, Error* error)
@@ -1914,6 +1972,20 @@ bool FileSystem::CopyFilePath(const char* source, const char* destination, bool 
 #endif
 }
 
+static void SortFindResultsByName(FileSystem::FindResultsArray* results)
+{
+  std::sort(results->begin(), results->end(), [](const FILESYSTEM_FIND_DATA& lhs, const FILESYSTEM_FIND_DATA& rhs) {
+    // directories first
+    if ((lhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY) !=
+        (rhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY))
+    {
+      return ((lhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY) != 0);
+    }
+
+    return (StringUtil::Strcasecmp(lhs.FileName.c_str(), rhs.FileName.c_str()) < 0);
+  });
+}
+
 #ifdef _WIN32
 
 static u32 TranslateWin32Attributes(u32 w32attrs)
@@ -2082,18 +2154,7 @@ bool FileSystem::FindFiles(const char* path, const char* pattern, u32 flags, Fin
     return false;
 
   if (flags & FILESYSTEM_FIND_SORT_BY_NAME)
-  {
-    std::sort(results->begin(), results->end(), [](const FILESYSTEM_FIND_DATA& lhs, const FILESYSTEM_FIND_DATA& rhs) {
-      // directories first
-      if ((lhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY) !=
-          (rhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY))
-      {
-        return ((lhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY) != 0);
-      }
-
-      return (StringUtil::Strcasecmp(lhs.FileName.c_str(), rhs.FileName.c_str()) < 0);
-    });
-  }
+    SortFindResultsByName(results);
 
   return true;
 }
@@ -2702,18 +2763,7 @@ bool FileSystem::FindFiles(const char* path, const char* pattern, u32 flags, Fin
     return false;
 
   if (flags & FILESYSTEM_FIND_SORT_BY_NAME)
-  {
-    std::sort(results->begin(), results->end(), [](const FILESYSTEM_FIND_DATA& lhs, const FILESYSTEM_FIND_DATA& rhs) {
-      // directories first
-      if ((lhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY) !=
-          (rhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY))
-      {
-        return ((lhs.Attributes & FILESYSTEM_FILE_ATTRIBUTE_DIRECTORY) != 0);
-      }
-
-      return (StringUtil::Strcasecmp(lhs.FileName.c_str(), rhs.FileName.c_str()) < 0);
-    });
-  }
+    SortFindResultsByName(results);
 
   return true;
 }

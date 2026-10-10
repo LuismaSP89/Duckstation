@@ -184,6 +184,9 @@ public:
 
 namespace InputManager {
 
+/// Section that input source configuration is stored in.
+extern const char* const SOURCES_CONFIG_SECTION;
+
 /// Used to determine the icons for controller buttons.
 enum class GamepadButtonType : u8
 {
@@ -275,7 +278,7 @@ DeviceEffectList EnumerateDeviceEffects(std::optional<InputBindingInfo::Type> ty
 u32 GetPollableDeviceCount();
 
 /// Retrieves bindings that match the generic bindings for the specified device.
-GenericInputBindingMapping GetGenericBindingMapping(std::string_view device);
+bool GetGenericBindingMapping(std::string_view device, GenericInputBindingMapping* mapping, Error* error = nullptr);
 
 /// Synchronizes handlers with the current state of all registered bindings.
 void SynchronizeBindingHandlerState();
@@ -375,9 +378,8 @@ void CopyConfiguration(SettingsInterface* dest_si, const SettingsInterface& src_
                        bool copy_source_config = true, bool copy_pad_bindings = true, bool copy_hotkey_bindings = true);
 
 /// Performs automatic controller mapping with the provided list of generic mappings.
-bool MapController(SettingsInterface& si, u32 controller,
-                   const std::vector<std::pair<GenericInputBinding, std::string>>& mapping,
-                   bool clear_existing_mappings);
+bool MapController(SettingsInterface& si, u32 controller, const GenericInputBindingMapping& mapping,
+                   bool clear_existing_mappings, Error* error = nullptr);
 
 /// Returns the name of the first physical device mapped to the emulated controller, "None", or "Multiple Devices".
 std::string GetPhysicalDeviceForController(SettingsInterface& si, u32 controller);

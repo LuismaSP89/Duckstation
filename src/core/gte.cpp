@@ -99,39 +99,43 @@ ALWAYS_INLINE u32 CountLeadingBits(u32 value)
 }
 
 template<u32 index>
-ALWAYS_INLINE void CheckMACOverflow(s64 value)
+ALWAYS_INLINE bool IsMACOutOfRange(s64 value)
 {
   constexpr s64 MIN_VALUE = (index == 0) ? MAC0_MIN_VALUE : MAC123_MIN_VALUE;
   constexpr s64 MAX_VALUE = (index == 0) ? MAC0_MAX_VALUE : MAC123_MAX_VALUE;
-  if (value < MIN_VALUE)
-  {
-    if constexpr (index == 0)
-      REGS.FLAG.mac0_underflow = true;
-    else if constexpr (index == 1)
-      REGS.FLAG.mac1_underflow = true;
-    else if constexpr (index == 2)
-      REGS.FLAG.mac2_underflow = true;
-    else if constexpr (index == 3)
-      REGS.FLAG.mac3_underflow = true;
-  }
-  else if (value > MAX_VALUE)
-  {
-    if constexpr (index == 0)
-      REGS.FLAG.mac0_overflow = true;
-    else if constexpr (index == 1)
-      REGS.FLAG.mac1_overflow = true;
-    else if constexpr (index == 2)
-      REGS.FLAG.mac2_overflow = true;
-    else if constexpr (index == 3)
-      REGS.FLAG.mac3_overflow = true;
-  }
+
+  // Biasing by the minimum value wraps anything below it around to a large unsigned value, which allows both bounds
+  // to be tested with a single comparison.
+  return (static_cast<u64>(value) - static_cast<u64>(MIN_VALUE)) > static_cast<u64>(MAX_VALUE - MIN_VALUE);
+}
+
+template<u32 index>
+ALWAYS_INLINE void SetMACOverflowFlag(s64 value)
+{
+  // FLAG.mac0_overflow/underflow are bits 16/15, FLAG.mac[1-3]_overflow are bits 30..28, underflow are bits 27..25.
+  constexpr u32 OVERFLOW_FLAG = UINT32_C(1) << ((index == 0) ? 16 : (31 - index));
+  constexpr u32 UNDERFLOW_FLAG = UINT32_C(1) << ((index == 0) ? 15 : (28 - index));
+  REGS.FLAG.bits |= (value < 0) ? UNDERFLOW_FLAG : OVERFLOW_FLAG;
+}
+
+template<u32 index>
+ALWAYS_INLINE void CheckMACOverflow(s64 value)
+{
+  if (IsMACOutOfRange<index>(value)) [[unlikely]]
+    SetMACOverflowFlag<index>(value);
 }
 
 template<u32 index>
 ALWAYS_INLINE s64 SignExtendMACResult(s64 value)
 {
-  CheckMACOverflow<index>(value);
-  return SignExtendN < index == 0 ? 31 : 44 > (value);
+  // Sign extension is a no-op for values which are in range, so it only needs to happen when overflowing.
+  if (IsMACOutOfRange<index>(value)) [[unlikely]]
+  {
+    SetMACOverflowFlag<index>(value);
+    value = SignExtendN<index == 0 ? 31 : 44>(value);
+  }
+
+  return value;
 }
 
 template<u32 index>
@@ -151,7 +155,10 @@ ALWAYS_INLINE void TruncateAndSetIR(s32 value, bool lm)
   constexpr s32 MIN_VALUE = (index == 0) ? IR0_MIN_VALUE : IR123_MIN_VALUE;
   constexpr s32 MAX_VALUE = (index == 0) ? IR0_MAX_VALUE : IR123_MAX_VALUE;
   const s32 actual_min_value = lm ? 0 : MIN_VALUE;
-  if (value < actual_min_value)
+
+  // Saturation is rare outside of lighting, the hints stop the compiler from turning these into conditional moves,
+  // which costs more than a correctly predicted branch.
+  if (value < actual_min_value) [[unlikely]]
   {
     value = actual_min_value;
     if constexpr (index == 0)
@@ -163,7 +170,7 @@ ALWAYS_INLINE void TruncateAndSetIR(s32 value, bool lm)
     else if constexpr (index == 3)
       REGS.FLAG.ir3_saturated = true;
   }
-  else if (value > MAX_VALUE)
+  else if (value > MAX_VALUE) [[unlikely]]
   {
     value = MAX_VALUE;
     if constexpr (index == 0)
@@ -196,10 +203,30 @@ ALWAYS_INLINE void TruncateAndSetMACAndIR(s64 value, u8 shift, bool lm)
   TruncateAndSetIR<index>(value32, lm);
 }
 
+// Variant for when saturation depends on the data, and the branches above would be frequently mispredicted, i.e. the
+// light matrix multiply with lm set, where every normal which faces away from a light is clamped to zero. Costs more
+// than the above when saturation is predictable, so should not be used elsewhere.
+template<u32 index>
+ALWAYS_INLINE void TruncateAndSetMACAndIRBranchless(s64 value, u8 shift, bool lm)
+{
+  // FLAG.ir[1-3]_saturated are bits 24..22.
+  static_assert(index >= 1 && index <= 3);
+  constexpr u32 FLAG_SHIFT = 25 - index;
+
+  CheckMACOverflow<index>(value);
+
+  const s32 value32 = static_cast<s32>(value >> shift);
+  REGS.dr32[24 + index] = value32;
+
+  const s32 clamped_value = std::clamp(value32, lm ? 0 : IR123_MIN_VALUE, IR123_MAX_VALUE);
+  REGS.FLAG.bits |= static_cast<u32>(clamped_value != value32) << FLAG_SHIFT;
+  REGS.dr32[8 + index] = clamped_value;
+}
+
 template<u32 index>
 ALWAYS_INLINE u32 TruncateRGB(s32 value)
 {
-  if (value < 0 || value > 0xFF)
+  if (value < 0 || value > 0xFF) [[unlikely]]
   {
     if constexpr (index == 0)
       REGS.FLAG.color_r_saturated = true;
@@ -226,6 +253,7 @@ static void MulMatVecBuggy(const s16* M_, const s32 T[3], const s16 Vx, const s1
 
 static void InterpolateColor(s64 in_MAC1, s64 in_MAC2, s64 in_MAC3, u8 shift, bool lm);
 static void RTPS(const s16 V[3], u8 shift, bool lm, bool last);
+static void RTPS_PGXP(const s16 V[3], u8 shift, bool lm, s64 x, s64 y, s64 z);
 static void NCS(const s16 V[3], u8 shift, bool lm);
 static void NCCS(const s16 V[3], u8 shift, bool lm);
 static void NCDS(const s16 V[3], u8 shift, bool lm);
@@ -329,9 +357,10 @@ u32 GTE::ReadRegister(u32 index)
     case 29: // ORGB
     {
       // ORGB register, convert 16-bit to 555
-      const u8 r = static_cast<u8>(std::clamp(REGS.IR1 / 0x80, 0x00, 0x1F));
-      const u8 g = static_cast<u8>(std::clamp(REGS.IR2 / 0x80, 0x00, 0x1F));
-      const u8 b = static_cast<u8>(std::clamp(REGS.IR3 / 0x80, 0x00, 0x1F));
+      // Shifting rounds negative values down instead of towards zero, but they get clamped to zero either way.
+      const u8 r = static_cast<u8>(std::clamp(REGS.IR1 >> 7, 0x00, 0x1F));
+      const u8 g = static_cast<u8>(std::clamp(REGS.IR2 >> 7, 0x00, 0x1F));
+      const u8 b = static_cast<u8>(std::clamp(REGS.IR3 >> 7, 0x00, 0x1F));
       return ZeroExtend32(r) | (ZeroExtend32(g) << 5) | (ZeroExtend32(b) << 10);
     }
 
@@ -561,13 +590,14 @@ ALWAYS_INLINE u32 GTE::UNRDivide(u32 lhs, u32 rhs)
   return std::min<u32>(0x1FFFF, result);
 }
 
-void GTE::MulMatVec(const s16* M_, const s16 Vx, const s16 Vy, const s16 Vz, u8 shift, bool lm)
+ALWAYS_INLINE void GTE::MulMatVec(const s16* M_, const s16 Vx, const s16 Vy, const s16 Vz, u8 shift, bool lm)
 {
 #define M(i, j) M_[((i) * 3) + (j)]
+  // Only used for the light matrix, see TruncateAndSetMACAndIRBranchless().
 #define dot3(i)                                                                                                        \
-  TruncateAndSetMACAndIR<i + 1>(SignExtendMACResult<i + 1>((s64(M(i, 0)) * s64(Vx)) + (s64(M(i, 1)) * s64(Vy))) +      \
-                                  (s64(M(i, 2)) * s64(Vz)),                                                            \
-                                shift, lm)
+  TruncateAndSetMACAndIRBranchless<i + 1>(                                                                             \
+    SignExtendMACResult<i + 1>((s64(M(i, 0)) * s64(Vx)) + (s64(M(i, 1)) * s64(Vy))) + (s64(M(i, 2)) * s64(Vz)), shift, \
+    lm)
 
   dot3(0);
   dot3(1);
@@ -577,7 +607,8 @@ void GTE::MulMatVec(const s16* M_, const s16 Vx, const s16 Vy, const s16 Vz, u8 
 #undef M
 }
 
-void GTE::MulMatVec(const s16* M_, const s32 T[3], const s16 Vx, const s16 Vy, const s16 Vz, u8 shift, bool lm)
+ALWAYS_INLINE void GTE::MulMatVec(const s16* M_, const s32 T[3], const s16 Vx, const s16 Vy, const s16 Vz, u8 shift,
+                                  bool lm)
 {
 #define M(i, j) M_[((i) * 3) + (j)]
 #define dot3(i)                                                                                                        \
@@ -595,7 +626,8 @@ void GTE::MulMatVec(const s16* M_, const s32 T[3], const s16 Vx, const s16 Vy, c
 #undef M
 }
 
-void GTE::MulMatVecBuggy(const s16* M_, const s32 T[3], const s16 Vx, const s16 Vy, const s16 Vz, u8 shift, bool lm)
+ALWAYS_INLINE void GTE::MulMatVecBuggy(const s16* M_, const s32 T[3], const s16 Vx, const s16 Vy, const s16 Vz,
+                                       u8 shift, bool lm)
 {
 #define M(i, j) M_[((i) * 3) + (j)]
 #define dot3(i)                                                                                                        \
@@ -617,7 +649,7 @@ void GTE::MulMatVecBuggy(const s16* M_, const s32 T[3], const s16 Vx, const s16 
 #undef M
 }
 
-void GTE::Execute_MVMVA(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_MVMVA(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -662,7 +694,7 @@ void GTE::Execute_MVMVA(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_SQR(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_SQR(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -680,7 +712,7 @@ void GTE::Execute_SQR(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_OP(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_OP(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -703,7 +735,7 @@ void GTE::Execute_OP(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::RTPS(const s16 V[3], u8 shift, bool lm, bool last)
+ALWAYS_INLINE void GTE::RTPS(const s16 V[3], u8 shift, bool lm, bool last)
 {
 #define dot3(i)                                                                                                        \
   SignExtendMACResult<i + 1>(SignExtendMACResult<i + 1>((s64(REGS.TR[i]) << 12) + (s64(REGS.RT[i][0]) * s64(V[0]))) +  \
@@ -773,99 +805,7 @@ void GTE::RTPS(const s16 V[3], u8 shift, bool lm, bool last)
   PushSXY(s32(Sx >> 16), s32(Sy >> 16));
 
   if (g_settings.gpu_pgxp_enable)
-  {
-    float precise_sz3, precise_ir1, precise_ir2;
-
-    if (g_settings.gpu_pgxp_preserve_proj_fp)
-    {
-      float precise_x, precise_y, precise_z;
-      if (shift > 0)
-      {
-        // TODO: This isn't handling the sign extended cases.
-        constexpr GSVector4 unscale = GSVector4::cxpr(1.0f / 4096.0f);
-        const GSVector4 FV = GSVector4(GSVector4i::loadl<false>(V).s16to32()).insert32<3>(0.0f);
-        const GSVector4 RT0 = GSVector4(GSVector4i::loadl<false>(REGS.RT[0]).s16to32()) * unscale;
-        const GSVector4 RT1 = GSVector4(GSVector4i::loadl<false>(REGS.RT[1]).s16to32()) * unscale;
-        const GSVector4 RT2 = GSVector4(GSVector4i::loadl<false>(REGS.RT[2]).s16to32()) * unscale;
-
-        precise_x = RT0.dot(FV) + static_cast<float>(REGS.TR[0]);
-        precise_y = RT1.dot(FV) + static_cast<float>(REGS.TR[1]);
-        precise_z = RT2.dot(FV) + static_cast<float>(REGS.TR[2]);
-
-        if (s_config.freecam_active)
-        {
-          const GSVector4 offset_pos = s_config.freecam_matrix * GSVector4(precise_x, precise_y, precise_z, 1.0f);
-          precise_x = offset_pos.extract32<0>();
-          precise_y = offset_pos.extract32<1>();
-          precise_z = offset_pos.extract32<2>();
-        }
-      }
-      else
-      {
-        precise_x = static_cast<float>(x) / (static_cast<float>(1 << shift));
-        precise_y = static_cast<float>(y) / (static_cast<float>(1 << shift));
-        precise_z = static_cast<float>(z) / 4096.0f;
-      }
-
-      precise_sz3 = precise_z;
-      precise_ir1 = precise_x;
-      precise_ir2 = precise_y;
-      if (lm)
-      {
-        precise_ir1 = std::clamp(precise_ir1, float(IR123_MIN_VALUE), float(IR123_MAX_VALUE));
-        precise_ir2 = std::clamp(precise_ir2, float(IR123_MIN_VALUE), float(IR123_MAX_VALUE));
-      }
-      else
-      {
-        precise_ir1 = std::min(precise_ir1, float(IR123_MAX_VALUE));
-        precise_ir2 = std::min(precise_ir2, float(IR123_MAX_VALUE));
-      }
-    }
-    else
-    {
-      precise_sz3 = float(REGS.SZ3);
-      precise_ir1 = float(REGS.IR1);
-      precise_ir2 = float(REGS.IR2);
-    }
-
-    // this can potentially use increased precision on Z
-    const float precise_z = std::max<float>(float(REGS.H) / 2.0f, precise_sz3);
-    const float precise_h_div_sz = float(REGS.H) / precise_z;
-    const float fofx = float(REGS.OFX) / float(1 << 16);
-    const float fofy = float(REGS.OFY) / float(1 << 16);
-    float precise_x = precise_ir1 * precise_h_div_sz;
-
-    switch (s_config.aspect_ratio)
-    {
-      case GTEAspectRatio::Custom:
-        precise_x = precise_x * s_config.custom_aspect_ratio_f;
-        break;
-
-      case GTEAspectRatio::R16_9:
-        precise_x = (precise_x * 3.0f) / 4.0f;
-        break;
-
-      case GTEAspectRatio::R19_9:
-        precise_x = (precise_x * 12.0f) / 19.0f;
-        break;
-
-      case GTEAspectRatio::R20_9:
-        precise_x = (precise_x * 3.0f) / 5.0f;
-        break;
-
-      case GTEAspectRatio::None:
-      default:
-        break;
-    }
-
-    precise_x += fofx;
-
-    float precise_y = fofy + (precise_ir2 * precise_h_div_sz);
-
-    precise_x = std::clamp<float>(precise_x, -1024.0f, 1023.0f);
-    precise_y = std::clamp<float>(precise_y, -1024.0f, 1023.0f);
-    CPU::PGXP::GTE_RTPS(precise_x, precise_y, precise_z, REGS.dr32[14]);
-  }
+    RTPS_PGXP(V, shift, lm, x, y, z);
 
   if (last)
   {
@@ -876,14 +816,109 @@ void GTE::RTPS(const s16 V[3], u8 shift, bool lm, bool last)
   }
 }
 
-void GTE::Execute_RTPS(Instruction inst)
+NEVER_INLINE void GTE::RTPS_PGXP(const s16 V[3], u8 shift, bool lm, s64 x, s64 y, s64 z)
+{
+  float precise_sz3, precise_ir1, precise_ir2;
+
+  if (g_settings.gpu_pgxp_preserve_proj_fp)
+  {
+    float precise_x, precise_y, precise_z;
+    if (shift > 0)
+    {
+      // TODO: This isn't handling the sign extended cases.
+      constexpr GSVector4 unscale = GSVector4::cxpr(1.0f / 4096.0f);
+      const GSVector4 FV = GSVector4(GSVector4i::loadl<false>(V).s16to32()).insert32<3>(0.0f);
+      const GSVector4 RT0 = GSVector4(GSVector4i::loadl<false>(REGS.RT[0]).s16to32()) * unscale;
+      const GSVector4 RT1 = GSVector4(GSVector4i::loadl<false>(REGS.RT[1]).s16to32()) * unscale;
+      const GSVector4 RT2 = GSVector4(GSVector4i::loadl<false>(REGS.RT[2]).s16to32()) * unscale;
+
+      precise_x = RT0.dot(FV) + static_cast<float>(REGS.TR[0]);
+      precise_y = RT1.dot(FV) + static_cast<float>(REGS.TR[1]);
+      precise_z = RT2.dot(FV) + static_cast<float>(REGS.TR[2]);
+
+      if (s_config.freecam_active)
+      {
+        const GSVector4 offset_pos = s_config.freecam_matrix * GSVector4(precise_x, precise_y, precise_z, 1.0f);
+        precise_x = offset_pos.extract32<0>();
+        precise_y = offset_pos.extract32<1>();
+        precise_z = offset_pos.extract32<2>();
+      }
+    }
+    else
+    {
+      precise_x = static_cast<float>(x) / (static_cast<float>(1 << shift));
+      precise_y = static_cast<float>(y) / (static_cast<float>(1 << shift));
+      precise_z = static_cast<float>(z) / 4096.0f;
+    }
+
+    precise_sz3 = precise_z;
+    precise_ir1 = precise_x;
+    precise_ir2 = precise_y;
+    if (lm)
+    {
+      precise_ir1 = std::clamp(precise_ir1, float(IR123_MIN_VALUE), float(IR123_MAX_VALUE));
+      precise_ir2 = std::clamp(precise_ir2, float(IR123_MIN_VALUE), float(IR123_MAX_VALUE));
+    }
+    else
+    {
+      precise_ir1 = std::min(precise_ir1, float(IR123_MAX_VALUE));
+      precise_ir2 = std::min(precise_ir2, float(IR123_MAX_VALUE));
+    }
+  }
+  else
+  {
+    precise_sz3 = float(REGS.SZ3);
+    precise_ir1 = float(REGS.IR1);
+    precise_ir2 = float(REGS.IR2);
+  }
+
+  // this can potentially use increased precision on Z
+  const float precise_z = std::max<float>(float(REGS.H) / 2.0f, precise_sz3);
+  const float precise_h_div_sz = float(REGS.H) / precise_z;
+  const float fofx = float(REGS.OFX) / float(1 << 16);
+  const float fofy = float(REGS.OFY) / float(1 << 16);
+  float precise_x = precise_ir1 * precise_h_div_sz;
+
+  switch (s_config.aspect_ratio)
+  {
+    case GTEAspectRatio::Custom:
+      precise_x = precise_x * s_config.custom_aspect_ratio_f;
+      break;
+
+    case GTEAspectRatio::R16_9:
+      precise_x = (precise_x * 3.0f) / 4.0f;
+      break;
+
+    case GTEAspectRatio::R19_9:
+      precise_x = (precise_x * 12.0f) / 19.0f;
+      break;
+
+    case GTEAspectRatio::R20_9:
+      precise_x = (precise_x * 3.0f) / 5.0f;
+      break;
+
+    case GTEAspectRatio::None:
+    default:
+      break;
+  }
+
+  precise_x += fofx;
+
+  float precise_y = fofy + (precise_ir2 * precise_h_div_sz);
+
+  precise_x = std::clamp<float>(precise_x, -1024.0f, 1023.0f);
+  precise_y = std::clamp<float>(precise_y, -1024.0f, 1023.0f);
+  CPU::PGXP::GTE_RTPS(precise_x, precise_y, precise_z, REGS.dr32[14]);
+}
+
+ALWAYS_INLINE void GTE::Execute_RTPS(Instruction inst)
 {
   REGS.FLAG.Clear();
   RTPS(REGS.V0, inst.GetShift(), inst.lm, true);
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_RTPT(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_RTPT(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -902,10 +937,13 @@ void GTE::Execute_NCLIP(Instruction inst)
   // MAC0 =   SX0*SY1 + SX1*SY2 + SX2*SY0 - SX0*SY2 - SX1*SY0 - SX2*SY1
   REGS.FLAG.Clear();
 
-  TruncateAndSetMAC<0>(s64(REGS.SXY0[0]) * s64(REGS.SXY1[1]) + s64(REGS.SXY1[0]) * s64(REGS.SXY2[1]) +
-                         s64(REGS.SXY2[0]) * s64(REGS.SXY0[1]) - s64(REGS.SXY0[0]) * s64(REGS.SXY2[1]) -
-                         s64(REGS.SXY1[0]) * s64(REGS.SXY0[1]) - s64(REGS.SXY2[0]) * s64(REGS.SXY1[1]),
-                       0);
+  // Factorized to halve the number of multiplies. The intermediates cannot overflow 64 bits, and only the sum is
+  // checked for overflow, so the result and flags are the same as the expanded form above.
+  const s64 SY0 = s64(REGS.SXY0[1]);
+  const s64 SY1 = s64(REGS.SXY1[1]);
+  const s64 SY2 = s64(REGS.SXY2[1]);
+  TruncateAndSetMAC<0>(
+    s64(REGS.SXY0[0]) * (SY1 - SY2) + s64(REGS.SXY1[0]) * (SY2 - SY0) + s64(REGS.SXY2[0]) * (SY0 - SY1), 0);
 
   REGS.FLAG.UpdateError();
 }
@@ -960,7 +998,7 @@ ALWAYS_INLINE void GTE::InterpolateColor(s64 in_MAC1, s64 in_MAC2, s64 in_MAC3, 
   TruncateAndSetMACAndIR<3>(s64(s32(REGS.IR3) * s32(REGS.IR0)) + in_MAC3, shift, lm);
 }
 
-void GTE::NCS(const s16 V[3], u8 shift, bool lm)
+ALWAYS_INLINE void GTE::NCS(const s16 V[3], u8 shift, bool lm)
 {
   // [IR1,IR2,IR3] = [MAC1,MAC2,MAC3] = (LLM*V0) SAR (sf*12)
   MulMatVec(&REGS.LLM[0][0], V[0], V[1], V[2], shift, lm);
@@ -972,7 +1010,7 @@ void GTE::NCS(const s16 V[3], u8 shift, bool lm)
   PushRGBFromMAC();
 }
 
-void GTE::Execute_NCS(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_NCS(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -981,7 +1019,7 @@ void GTE::Execute_NCS(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_NCT(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_NCT(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -995,7 +1033,7 @@ void GTE::Execute_NCT(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::NCCS(const s16 V[3], u8 shift, bool lm)
+ALWAYS_INLINE void GTE::NCCS(const s16 V[3], u8 shift, bool lm)
 {
   // [IR1,IR2,IR3] = [MAC1,MAC2,MAC3] = (LLM*V0) SAR (sf*12)
   MulMatVec(&REGS.LLM[0][0], V[0], V[1], V[2], shift, lm);
@@ -1013,7 +1051,7 @@ void GTE::NCCS(const s16 V[3], u8 shift, bool lm)
   PushRGBFromMAC();
 }
 
-void GTE::Execute_NCCS(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_NCCS(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1022,7 +1060,7 @@ void GTE::Execute_NCCS(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_NCCT(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_NCCT(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1036,7 +1074,7 @@ void GTE::Execute_NCCT(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::NCDS(const s16 V[3], u8 shift, bool lm)
+ALWAYS_INLINE void GTE::NCDS(const s16 V[3], u8 shift, bool lm)
 {
   // [IR1,IR2,IR3] = [MAC1,MAC2,MAC3] = (LLM*V0) SAR (sf*12)
   MulMatVec(&REGS.LLM[0][0], V[0], V[1], V[2], shift, lm);
@@ -1057,7 +1095,7 @@ void GTE::NCDS(const s16 V[3], u8 shift, bool lm)
   PushRGBFromMAC();
 }
 
-void GTE::Execute_NCDS(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_NCDS(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1066,7 +1104,7 @@ void GTE::Execute_NCDS(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_NCDT(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_NCDT(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1080,7 +1118,7 @@ void GTE::Execute_NCDT(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_CC(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_CC(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1102,7 +1140,7 @@ void GTE::Execute_CC(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_CDP(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_CDP(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1128,7 +1166,7 @@ void GTE::Execute_CDP(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::DPCS(const u8 color[3], u8 shift, bool lm)
+ALWAYS_INLINE void GTE::DPCS(const u8 color[3], u8 shift, bool lm)
 {
   // In: [IR1,IR2,IR3]=Vector, FC=Far Color, IR0=Interpolation value, CODE=MSB of RGBC
   // [MAC1,MAC2,MAC3] = [R,G,B] SHL 16                     ;<--- for DPCS/DPCT
@@ -1143,7 +1181,7 @@ void GTE::DPCS(const u8 color[3], u8 shift, bool lm)
   PushRGBFromMAC();
 }
 
-void GTE::Execute_DPCS(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_DPCS(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1152,7 +1190,7 @@ void GTE::Execute_DPCS(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_DPCT(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_DPCT(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1165,7 +1203,7 @@ void GTE::Execute_DPCT(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_DCPL(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_DCPL(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1187,7 +1225,7 @@ void GTE::Execute_DCPL(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_INTPL(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_INTPL(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1205,7 +1243,7 @@ void GTE::Execute_INTPL(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_GPL(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_GPL(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1224,7 +1262,7 @@ void GTE::Execute_GPL(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
-void GTE::Execute_GPF(Instruction inst)
+ALWAYS_INLINE void GTE::Execute_GPF(Instruction inst)
 {
   REGS.FLAG.Clear();
 
@@ -1243,6 +1281,32 @@ void GTE::Execute_GPF(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
+namespace GTE {
+
+/// Wraps an instruction handler, fixing the sf/lm bits at compile time. Once the handler is inlined, the shift amounts
+/// and saturation limits become constants, instead of being decoded and selected on each execution.
+template<void (*handler)(Instruction), bool sf, bool lm>
+static void SpecializedHandler(Instruction inst)
+{
+  inst.sf = BoolToUInt8(sf);
+  inst.lm = lm;
+  handler(inst);
+}
+
+/// Returns the specialization of the handler which matches the sf/lm bits in the instruction.
+template<void (*handler)(Instruction)>
+ALWAYS_INLINE InstructionImpl GetSpecializedHandler(Instruction inst)
+{
+  static constexpr InstructionImpl handlers[2][2] = {
+    {&SpecializedHandler<handler, false, false>, &SpecializedHandler<handler, false, true>},
+    {&SpecializedHandler<handler, true, false>, &SpecializedHandler<handler, true, true>},
+  };
+
+  return handlers[inst.sf][BoolToUInt8(inst.lm)];
+}
+
+} // namespace GTE
+
 void GTE::ExecuteInstruction(u32 inst_bits)
 {
   const Instruction inst{inst_bits};
@@ -1250,7 +1314,7 @@ void GTE::ExecuteInstruction(u32 inst_bits)
   {
     case 0x01:
       CPU::AddGTETicks(15);
-      Execute_RTPS(inst);
+      GetSpecializedHandler<&Execute_RTPS>(inst)(inst);
       break;
 
     case 0x06:
@@ -1265,72 +1329,72 @@ void GTE::ExecuteInstruction(u32 inst_bits)
 
     case 0x0C:
       CPU::AddGTETicks(6);
-      Execute_OP(inst);
+      GetSpecializedHandler<&Execute_OP>(inst)(inst);
       break;
 
     case 0x10:
       CPU::AddGTETicks(8);
-      Execute_DPCS(inst);
+      GetSpecializedHandler<&Execute_DPCS>(inst)(inst);
       break;
 
     case 0x11:
       CPU::AddGTETicks(8);
-      Execute_INTPL(inst);
+      GetSpecializedHandler<&Execute_INTPL>(inst)(inst);
       break;
 
     case 0x12:
       CPU::AddGTETicks(8);
-      Execute_MVMVA(inst);
+      GetSpecializedHandler<&Execute_MVMVA>(inst)(inst);
       break;
 
     case 0x13:
       CPU::AddGTETicks(19);
-      Execute_NCDS(inst);
+      GetSpecializedHandler<&Execute_NCDS>(inst)(inst);
       break;
 
     case 0x14:
       CPU::AddGTETicks(13);
-      Execute_CDP(inst);
+      GetSpecializedHandler<&Execute_CDP>(inst)(inst);
       break;
 
     case 0x16:
       CPU::AddGTETicks(44);
-      Execute_NCDT(inst);
+      GetSpecializedHandler<&Execute_NCDT>(inst)(inst);
       break;
 
     case 0x1B:
       CPU::AddGTETicks(17);
-      Execute_NCCS(inst);
+      GetSpecializedHandler<&Execute_NCCS>(inst)(inst);
       break;
 
     case 0x1C:
       CPU::AddGTETicks(11);
-      Execute_CC(inst);
+      GetSpecializedHandler<&Execute_CC>(inst)(inst);
       break;
 
     case 0x1E:
       CPU::AddGTETicks(14);
-      Execute_NCS(inst);
+      GetSpecializedHandler<&Execute_NCS>(inst)(inst);
       break;
 
     case 0x20:
       CPU::AddGTETicks(30);
-      Execute_NCT(inst);
+      GetSpecializedHandler<&Execute_NCT>(inst)(inst);
       break;
 
     case 0x28:
       CPU::AddGTETicks(5);
-      Execute_SQR(inst);
+      GetSpecializedHandler<&Execute_SQR>(inst)(inst);
       break;
 
     case 0x29:
       CPU::AddGTETicks(8);
-      Execute_DCPL(inst);
+      GetSpecializedHandler<&Execute_DCPL>(inst)(inst);
       break;
 
     case 0x2A:
       CPU::AddGTETicks(17);
-      Execute_DPCT(inst);
+      GetSpecializedHandler<&Execute_DPCT>(inst)(inst);
       break;
 
     case 0x2D:
@@ -1345,22 +1409,22 @@ void GTE::ExecuteInstruction(u32 inst_bits)
 
     case 0x30:
       CPU::AddGTETicks(23);
-      Execute_RTPT(inst);
+      GetSpecializedHandler<&Execute_RTPT>(inst)(inst);
       break;
 
     case 0x3D:
       CPU::AddGTETicks(5);
-      Execute_GPF(inst);
+      GetSpecializedHandler<&Execute_GPF>(inst)(inst);
       break;
 
     case 0x3E:
       CPU::AddGTETicks(5);
-      Execute_GPL(inst);
+      GetSpecializedHandler<&Execute_GPL>(inst)(inst);
       break;
 
     case 0x3F:
       CPU::AddGTETicks(39);
-      Execute_NCCT(inst);
+      GetSpecializedHandler<&Execute_NCCT>(inst)(inst);
       break;
 
       // clang-format off
@@ -1390,7 +1454,7 @@ GTE::InstructionImpl GTE::GetInstructionImpl(u32 inst_bits, TickCount* ticks)
   {
     case 0x01:
       *ticks = 15;
-      return &Execute_RTPS;
+      return GetSpecializedHandler<&Execute_RTPS>(inst);
 
     case 0x06:
     {
@@ -1403,59 +1467,59 @@ GTE::InstructionImpl GTE::GetInstructionImpl(u32 inst_bits, TickCount* ticks)
 
     case 0x0C:
       *ticks = 6;
-      return &Execute_OP;
+      return GetSpecializedHandler<&Execute_OP>(inst);
 
     case 0x10:
       *ticks = 8;
-      return &Execute_DPCS;
+      return GetSpecializedHandler<&Execute_DPCS>(inst);
 
     case 0x11:
       *ticks = 8;
-      return &Execute_INTPL;
+      return GetSpecializedHandler<&Execute_INTPL>(inst);
 
     case 0x12:
       *ticks = 8;
-      return &Execute_MVMVA;
+      return GetSpecializedHandler<&Execute_MVMVA>(inst);
 
     case 0x13:
       *ticks = 19;
-      return &Execute_NCDS;
+      return GetSpecializedHandler<&Execute_NCDS>(inst);
 
     case 0x14:
       *ticks = 13;
-      return &Execute_CDP;
+      return GetSpecializedHandler<&Execute_CDP>(inst);
 
     case 0x16:
       *ticks = 44;
-      return &Execute_NCDT;
+      return GetSpecializedHandler<&Execute_NCDT>(inst);
 
     case 0x1B:
       *ticks = 17;
-      return &Execute_NCCS;
+      return GetSpecializedHandler<&Execute_NCCS>(inst);
 
     case 0x1C:
       *ticks = 11;
-      return &Execute_CC;
+      return GetSpecializedHandler<&Execute_CC>(inst);
 
     case 0x1E:
       *ticks = 14;
-      return &Execute_NCS;
+      return GetSpecializedHandler<&Execute_NCS>(inst);
 
     case 0x20:
       *ticks = 30;
-      return &Execute_NCT;
+      return GetSpecializedHandler<&Execute_NCT>(inst);
 
     case 0x28:
       *ticks = 5;
-      return &Execute_SQR;
+      return GetSpecializedHandler<&Execute_SQR>(inst);
 
     case 0x29:
       *ticks = 8;
-      return &Execute_DCPL;
+      return GetSpecializedHandler<&Execute_DCPL>(inst);
 
     case 0x2A:
       *ticks = 17;
-      return &Execute_DPCT;
+      return GetSpecializedHandler<&Execute_DPCT>(inst);
 
     case 0x2D:
       *ticks = 5;
@@ -1467,19 +1531,19 @@ GTE::InstructionImpl GTE::GetInstructionImpl(u32 inst_bits, TickCount* ticks)
 
     case 0x30:
       *ticks = 23;
-      return &Execute_RTPT;
+      return GetSpecializedHandler<&Execute_RTPT>(inst);
 
     case 0x3D:
       *ticks = 5;
-      return &Execute_GPF;
+      return GetSpecializedHandler<&Execute_GPF>(inst);
 
     case 0x3E:
       *ticks = 5;
-      return &Execute_GPL;
+      return GetSpecializedHandler<&Execute_GPL>(inst);
 
     case 0x3F:
       *ticks = 39;
-      return &Execute_NCCT;
+      return GetSpecializedHandler<&Execute_NCCT>(inst);
 
     default:
       Panic("Missing handler");

@@ -349,6 +349,10 @@ bool CPU::Recompiler::Recompiler::TrySwapDelaySlot(Reg rs, Reg rt, Reg rd)
   if constexpr (!SWAP_BRANCH_DELAY_SLOTS)
     return false;
 
+  // Branch-and-link has an implicit destination register.
+  if (inst->op == InstructionOp::b && (static_cast<u8>(inst->i.rt.GetValue()) & 0x1E) == 0x10)
+    rd = Reg::ra;
+
   const Instruction* next_instruction = inst + 1;
   DebugAssert(next_instruction < (m_block->Instructions() + m_block->size));
 
@@ -366,17 +370,17 @@ bool CPU::Recompiler::Recompiler::TrySwapDelaySlot(Reg rs, Reg rt, Reg rd)
   const u32 backup_instruction_pc = m_current_instruction_pc;
   const bool backup_instruction_delay_slot = m_current_instruction_branch_delay_slot;
 
-  if (next_instruction->bits == 0)
-  {
-    // nop
-    goto is_safe;
-  }
-
   // can't swap when the branch is the first instruction because of bloody load delays
   if ((EMULATE_LOAD_DELAYS && m_block->pc == m_current_instruction_pc) || m_load_delay_dirty ||
       (HasLoadDelay() && (m_load_delay_register == rs || m_load_delay_register == rt || m_load_delay_register == rd)))
   {
     goto is_unsafe;
+  }
+
+  if (next_instruction->bits == 0)
+  {
+    // nop
+    goto is_safe;
   }
 
   switch (next_instruction->op)
@@ -410,8 +414,14 @@ bool CPU::Recompiler::Recompiler::TrySwapDelaySlot(Reg rs, Reg rt, Reg rd)
     case InstructionOp::swl:
     case InstructionOp::sw:
     case InstructionOp::swr:
+      if (rd != Reg::zero && (rd == opcode_rs || rd == opcode_rt))
+        goto is_unsafe;
+      break;
+
     case InstructionOp::lwc2:
     case InstructionOp::swc2:
+      if (rd != Reg::zero && rd == opcode_rs)
+        goto is_unsafe;
       break;
 
     case InstructionOp::funct: // SPECIAL
@@ -436,7 +446,7 @@ bool CPU::Recompiler::Recompiler::TrySwapDelaySlot(Reg rs, Reg rt, Reg rd)
         case InstructionFunct::sltu:
         {
           if ((rs != Reg::zero && rs == opcode_rd) || (rt != Reg::zero && rt == opcode_rd) ||
-              (rd != Reg::zero && (rd == opcode_rs || rd == opcode_rt)))
+              (rd != Reg::zero && (rd == opcode_rs || rd == opcode_rt || rd == opcode_rd)))
           {
             goto is_unsafe;
           }
@@ -447,6 +457,8 @@ bool CPU::Recompiler::Recompiler::TrySwapDelaySlot(Reg rs, Reg rt, Reg rd)
         case InstructionFunct::multu:
         case InstructionFunct::div:
         case InstructionFunct::divu:
+          if (rd != Reg::zero && (rd == opcode_rs || rd == opcode_rt))
+            goto is_unsafe;
           break;
 
         default:
@@ -477,6 +489,8 @@ bool CPU::Recompiler::Recompiler::TrySwapDelaySlot(Reg rs, Reg rt, Reg rd)
 
           case CopCommonInstruction::mtcn: // MTC0
           case CopCommonInstruction::ctcn: // CTC0
+            if (rd != Reg::zero && rd == opcode_rt)
+              goto is_unsafe;
             break;
         }
       }
@@ -1752,13 +1766,14 @@ void CPU::Recompiler::Recompiler::FlushForLoadStore(const std::optional<VirtualM
 
 void CPU::Recompiler::Recompiler::CompileMoveRegTemplate(Reg dst, Reg src, bool pgxp_move)
 {
-  if (dst == src || dst == Reg::zero)
+  if (dst == Reg::zero)
     return;
 
   if (HasConstantReg(src))
   {
+    const u32 value = GetConstantRegU32(src);
     DeleteMIPSReg(dst, false);
-    SetConstantReg(dst, GetConstantRegU32(src));
+    SetConstantReg(dst, value);
   }
   else
   {
@@ -1796,7 +1811,8 @@ void CPU::Recompiler::Recompiler::Compile_jr_const(CompileFlags cf)
   const u32 newpc = GetConstantRegU32(cf.MipsS());
   if (newpc & 3 && g_settings.cpu_recompiler_memory_exceptions)
   {
-    EndBlockWithException(Exception::AdEL);
+    StoreConstantToCPUPointer(newpc, &g_state.cop0_regs.BadVaddr);
+    EndBlockWithBranchTargetException();
     return;
   }
 
@@ -1819,6 +1835,13 @@ void CPU::Recompiler::Recompiler::Compile_jalr_const(CompileFlags cf)
   if (MipsD() != Reg::zero)
     SetConstantReg(MipsD(), GetBranchReturnAddress({}));
 
+  if (newpc & 3 && g_settings.cpu_recompiler_memory_exceptions)
+  {
+    StoreConstantToCPUPointer(newpc, &g_state.cop0_regs.BadVaddr);
+    EndBlockWithBranchTargetException();
+    return;
+  }
+
   CompileBranchDelaySlot();
   EndBlock(newpc, true);
 }
@@ -1826,6 +1849,20 @@ void CPU::Recompiler::Recompiler::Compile_jalr_const(CompileFlags cf)
 void CPU::Recompiler::Recompiler::Compile_syscall()
 {
   EndBlockWithException(Exception::Syscall);
+}
+
+void CPU::Recompiler::Recompiler::EndBlockWithBranchTargetException()
+{
+  Flush(FLUSH_END_BLOCK | FLUSH_FOR_EXCEPTION | FLUSH_FOR_C_CALL);
+  const u32 cause_reg = AllocateTempHostReg();
+  const u32 epc_reg = AllocateTempHostReg();
+  LoadHostRegWithConstant(cause_reg, Cop0Registers::CAUSE::MakeValueForException(Exception::AdEL, false, false, 0));
+  LoadHostRegFromCPUPointer(epc_reg, &g_state.cop0_regs.BadVaddr);
+  GenerateCall(reinterpret_cast<const void*>(static_cast<void (*)(u32, u32)>(&CPU::RaiseException)), cause_reg, epc_reg);
+  FreeHostReg(cause_reg);
+  FreeHostReg(epc_reg);
+  m_dirty_pc = false;
+  EndBlock(std::nullopt, true);
 }
 
 void CPU::Recompiler::Recompiler::Compile_break()
@@ -2102,10 +2139,14 @@ void CPU::Recompiler::Recompiler::Compile_divu_const(CompileFlags cf)
 
 void CPU::Recompiler::Recompiler::Compile_add_const(CompileFlags cf)
 {
-  // TODO: Overflow
   DebugAssert(HasConstantReg(cf.MipsS()) && HasConstantReg(cf.MipsT()));
-  if (MipsD() != Reg::zero)
-    SetConstantReg(MipsD(), GetConstantRegU32(cf.MipsS()) + GetConstantRegU32(cf.MipsT()));
+  const u32 rs = GetConstantRegU32(cf.MipsS());
+  const u32 rt = GetConstantRegU32(cf.MipsT());
+  const u32 result = rs + rt;
+  if (g_settings.cpu_recompiler_memory_exceptions && ((result ^ rs) & (result ^ rt) & 0x80000000u) != 0)
+    Compile_Fallback();
+  else if (MipsD() != Reg::zero)
+    SetConstantReg(MipsD(), result);
 }
 
 void CPU::Recompiler::Recompiler::Compile_addu_const(CompileFlags cf)
@@ -2116,10 +2157,14 @@ void CPU::Recompiler::Recompiler::Compile_addu_const(CompileFlags cf)
 
 void CPU::Recompiler::Recompiler::Compile_sub_const(CompileFlags cf)
 {
-  // TODO: Overflow
   DebugAssert(HasConstantReg(cf.MipsS()) && HasConstantReg(cf.MipsT()));
-  if (MipsD() != Reg::zero)
-    SetConstantReg(MipsD(), GetConstantRegU32(cf.MipsS()) - GetConstantRegU32(cf.MipsT()));
+  const u32 rs = GetConstantRegU32(cf.MipsS());
+  const u32 rt = GetConstantRegU32(cf.MipsT());
+  const u32 result = rs - rt;
+  if (g_settings.cpu_recompiler_memory_exceptions && ((result ^ rs) & (rs ^ rt) & 0x80000000u) != 0)
+    Compile_Fallback();
+  else if (MipsD() != Reg::zero)
+    SetConstantReg(MipsD(), result);
 }
 
 void CPU::Recompiler::Recompiler::Compile_subu_const(CompileFlags cf)
@@ -2130,10 +2175,14 @@ void CPU::Recompiler::Recompiler::Compile_subu_const(CompileFlags cf)
 
 void CPU::Recompiler::Recompiler::Compile_addi_const(CompileFlags cf)
 {
-  // TODO: Overflow
   DebugAssert(HasConstantReg(cf.MipsS()));
-  if (cf.MipsT() != Reg::zero)
-    SetConstantReg(cf.MipsT(), GetConstantRegU32(cf.MipsS()) + inst->i.imm_sext32());
+  const u32 rs = GetConstantRegU32(cf.MipsS());
+  const u32 imm = inst->i.imm_sext32();
+  const u32 result = rs + imm;
+  if (g_settings.cpu_recompiler_memory_exceptions && ((result ^ rs) & (result ^ imm) & 0x80000000u) != 0)
+    Compile_Fallback();
+  else if (cf.MipsT() != Reg::zero)
+    SetConstantReg(cf.MipsT(), result);
 }
 
 void CPU::Recompiler::Recompiler::Compile_addiu_const(CompileFlags cf)
@@ -2293,25 +2342,23 @@ CPU::Recompiler::Recompiler::GetGTERegisterPointer(u32 index, bool writing)
 
 void CPU::Recompiler::Recompiler::AddGTETicks(TickCount ticks)
 {
-  // TODO: check, int has +1 here
   m_gte_done_cycle = m_cycles + ticks;
   DEBUG_LOG("Adding {} GTE ticks", ticks);
 }
 
 void CPU::Recompiler::Recompiler::StallUntilGTEComplete()
 {
-  // TODO: hack to match old rec.. this may or may not be correct behavior
-  // it's the difference between stalling before and after the current instruction's cycle
+  // m_cycles includes the current instruction here. There is no stall when there is only a single cycle remaining,
+  // i.e. the command completes in this cycle, otherwise the instruction executes in the cycle after it completes.
   DebugAssert(m_cycles > 0);
-  m_cycles--;
 
   if (!m_dirty_gte_done_cycle)
   {
     // simple case - in block scheduling
     if (m_gte_done_cycle > m_cycles)
     {
-      DEBUG_LOG("Stalling for {} ticks from GTE", m_gte_done_cycle - m_cycles);
-      m_cycles += (m_gte_done_cycle - m_cycles);
+      DEBUG_LOG("Stalling for {} ticks from GTE", m_gte_done_cycle + 1 - m_cycles);
+      m_cycles = m_gte_done_cycle + 1;
     }
   }
   else
@@ -2320,8 +2367,6 @@ void CPU::Recompiler::Recompiler::StallUntilGTEComplete()
     DEBUG_LOG("Flushing GTE stall from state");
     Flush(FLUSH_GTE_STALL_FROM_STATE);
   }
-
-  m_cycles++;
 }
 
 void CPU::Recompiler::BackpatchLoadStore(void* exception_pc, const CodeCache::LoadstoreBackpatchInfo& info)

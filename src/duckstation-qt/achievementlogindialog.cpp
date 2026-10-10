@@ -53,15 +53,21 @@ void AchievementLoginDialog::loginClicked()
 
   // Use QPointer<> to safely check if the dialog still exists when the login finishes, since the callback
   // runs on the core thread and we need to queue it back to the UI thread.
-  Achievements::LoginAsync(username.toUtf8().constData(), password.toUtf8().constData(),
-                           [dialog = QPointer(this)](bool result, std::string&& error_message) mutable {
-                             DebugAssert(Host::IsOnCoreThread());
-                             Host::RunOnUIThread(
-                               [dialog = std::move(dialog), error_message = std::move(error_message), result]() {
-                                 if (dialog)
-                                   dialog->processLoginResult(result, QString::fromStdString(error_message));
-                               });
-                           });
+  Achievements::LoginAsync(
+    username.toUtf8().constData(), password.toUtf8().constData(),
+    [dialog = QPointer(this)](bool result, std::string&& error_message, Achievements::LoginResult&& ldata) mutable {
+      DebugAssert(Host::IsOnCoreThread());
+      if (result)
+      {
+        const auto settings_lock = Core::GetSettingsLock();
+        Achievements::SaveLoginSettings(*Core::GetBaseSettingsLayer(), ldata);
+        Host::CommitBaseSettingChanges();
+      }
+      Host::RunOnUIThread([dialog = std::move(dialog), error_message = std::move(error_message), result]() {
+        if (dialog)
+          dialog->processLoginResult(result, QString::fromStdString(error_message));
+      });
+    });
 }
 
 void AchievementLoginDialog::cancelClicked()
@@ -102,7 +108,7 @@ void AchievementLoginDialog::processLoginResult(bool result, const QString& mess
 
 void AchievementLoginDialog::askToEnableAchievementsAndAccept()
 {
-  if (Core::GetBaseBoolSettingValue("Cheevos", "Enabled", false))
+  if (Core::GetBaseBoolSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Enabled", false))
   {
     askToEnableHardcoreModeAndAccept();
     return;
@@ -114,7 +120,7 @@ void AchievementLoginDialog::askToEnableAchievementsAndAccept()
                               "after tracking is enabled.\n\nDo you want to enable tracking now?"),
                            QMessageBox::Yes | QMessageBox::No, QMessageBox::NoButton);
   msgbox->connect(msgbox, &QMessageBox::accepted, this, [this]() {
-    Core::SetBaseBoolSettingValue("Cheevos", "Enabled", true);
+    Core::SetBaseBoolSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Enabled", true);
     Host::CommitBaseSettingChanges();
     g_core_thread->applySettings();
     askToEnableHardcoreModeAndAccept();
@@ -125,7 +131,7 @@ void AchievementLoginDialog::askToEnableAchievementsAndAccept()
 
 void AchievementLoginDialog::askToEnableHardcoreModeAndAccept()
 {
-  if (Core::GetBaseBoolSettingValue("Cheevos", "ChallengeMode", false))
+  if (Core::GetBaseBoolSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "ChallengeMode", false))
   {
     askToResetGameAndAccept();
     return;
@@ -138,7 +144,7 @@ void AchievementLoginDialog::askToEnableHardcoreModeAndAccept()
        "states, cheats and slowdown functionality.\n\nDo you want to enable hardcore mode?"),
     QMessageBox::Yes | QMessageBox::No, QMessageBox::NoButton);
   msgbox->connect(msgbox, &QMessageBox::accepted, this, [this]() {
-    Core::SetBaseBoolSettingValue("Cheevos", "ChallengeMode", true);
+    Core::SetBaseBoolSettingValue(Settings::ACHIEVEMENTS_SECTION_NAME, "ChallengeMode", true);
     Host::CommitBaseSettingChanges();
     g_core_thread->applySettings();
     askToResetGameAndAccept();

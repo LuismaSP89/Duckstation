@@ -2,8 +2,11 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ClCompile Include="..\..\dep\googletest\src\gtest_main.cc" />
+    <ClCompile Include="cdrom_tests.cpp" />
     <ClCompile Include="cheats_tests.cpp" />
     <ClCompile Include="cpu_disasm_tests.cpp" />
+    <ClCompile Include="gte_tests.cpp" />
+    <ClCompile Include="gte_timing_tests.cpp" />
     <ClCompile Include="stub_host.cpp" />
     <ClCompile Include="spu_tests.cpp" />
     <ClCompile Include="lightgun_controller_tests.cpp" />

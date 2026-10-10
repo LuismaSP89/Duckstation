@@ -128,6 +128,7 @@ struct MainWindowLocals
   QString current_game_serial;
   QString current_game_path;
   QIcon current_game_icon;
+  GameHash current_game_hash;
   std::optional<std::time_t> undo_state_timestamp;
   std::atomic_uint32_t system_locked{false};
   bool system_starting = false;
@@ -177,6 +178,11 @@ const QString& QtHost::GetCurrentGameSerial()
 const QString& QtHost::GetCurrentGamePath()
 {
   return s_locals.current_game_path;
+}
+
+GameHash QtHost::GetCurrentGameHash()
+{
+  return s_locals.current_game_hash;
 }
 
 #ifdef _WIN32
@@ -334,20 +340,23 @@ std::optional<WindowInfo> MainWindow::acquireRenderWindow(RenderAPI render_api, 
 
 bool MainWindow::canRenderToMainWindow() const
 {
-  return !Core::GetBoolSettingValue("Main", "RenderToSeparateWindow", false) && !QtHost::InNoGUIMode();
+  return !Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "RenderToSeparateWindow", false) &&
+         !QtHost::InNoGUIMode();
 }
 
 bool MainWindow::useMainWindowGeometryForRenderWindow() const
 {
   // nogui _or_ main window mode, since we want to use it for temporary unfullscreens
-  return !Core::GetBoolSettingValue("Main", "RenderToSeparateWindow", false) || QtHost::InNoGUIMode();
+  return !Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "RenderToSeparateWindow", false) ||
+         QtHost::InNoGUIMode();
 }
 
 bool MainWindow::wantsLogWidget() const
 {
-  return (wantsDisplayWidget() && Core::GetBoolSettingValue("Main", "RenderToSeparateWindow", false) &&
-          !Core::GetBaseBoolSettingValue("Main", "HideMainWindowWhenRunning", false) &&
-          Core::GetBoolSettingValue("Main", "DisplayLogInMainWindow", false));
+  return (wantsDisplayWidget() &&
+          Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "RenderToSeparateWindow", false) &&
+          !Core::GetBaseBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "HideMainWindowWhenRunning", false) &&
+          Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "DisplayLogInMainWindow", false));
 }
 
 bool MainWindow::wantsDisplayWidget() const
@@ -597,11 +606,18 @@ void MainWindow::onSystemStarting()
   updateDisplayRelatedActions();
 }
 
-void MainWindow::onSystemStarted()
+void MainWindow::onSystemStarted(const QString& path, const QString& game_serial, const QString& game_title,
+                                 GameHash hash)
 {
   m_was_disc_change_request = false;
   s_locals.system_starting = false;
   s_locals.system_valid = true;
+
+  s_locals.current_game_path = path;
+  s_locals.current_game_title = game_title;
+  s_locals.current_game_serial = game_serial;
+  s_locals.current_game_icon = getIconForGame(path);
+  s_locals.current_game_hash = hash;
 
   updateEmulationActions();
   updateDisplayRelatedActions();
@@ -647,6 +663,13 @@ void MainWindow::onSystemStopping()
 void MainWindow::onSystemDestroyed()
 {
   Assert(!QtHost::IsSystemValidOrStarting());
+
+  s_locals.current_game_path = {};
+  s_locals.current_game_title = {};
+  s_locals.current_game_serial = {};
+  s_locals.current_game_icon = {};
+  s_locals.current_game_hash = 0;
+
   updateLogWidget();
 
   // If we're closing or in batch mode, quit the whole application now.
@@ -663,12 +686,14 @@ void MainWindow::onSystemDestroyed()
     switchToGameListView();
 }
 
-void MainWindow::onSystemGameChanged(const QString& path, const QString& game_serial, const QString& game_title)
+void MainWindow::onSystemGameChanged(const QString& path, const QString& game_serial, const QString& game_title,
+                                     GameHash hash)
 {
   s_locals.current_game_path = path;
   s_locals.current_game_title = game_title;
   s_locals.current_game_serial = game_serial;
   s_locals.current_game_icon = getIconForGame(path);
+  s_locals.current_game_hash = hash;
 
   updateWindowTitle();
   updateEmulationActions();
@@ -1462,6 +1487,10 @@ void MainWindow::onFullscreenUIStartedOrStopped(bool running)
   s_locals.fullscreen_ui_started = running;
   m_ui.actionStartFullscreenUI->setText(running ? tr("Stop Big Picture Mode") : tr("Start Big Picture Mode"));
   m_ui.actionToolbarStartFullscreenUI->setText(running ? tr("Exit Big Picture") : tr("Big Picture"));
+
+  // If big picture was exited, then we should refresh the game list settings because they may have changed.
+  if (!running && !m_is_closing && !QtHost::InBatchMode())
+    m_game_list_widget->reloadSettings();
 }
 
 void MainWindow::onCloseGameActionTriggered()
@@ -1517,7 +1546,7 @@ void MainWindow::onScanForNewGamesTriggered()
 
 void MainWindow::onViewShowToolbarActionTriggered(bool checked)
 {
-  Core::SetBaseBoolSettingValue("UI", "ShowToolbar", checked);
+  Core::SetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ShowToolbar", checked);
   Host::CommitBaseSettingChanges();
   m_ui.toolBar->setVisible(checked);
   updateToolbarIconStyle();
@@ -1525,7 +1554,7 @@ void MainWindow::onViewShowToolbarActionTriggered(bool checked)
 
 void MainWindow::onViewLockToolbarActionTriggered(bool checked)
 {
-  Core::SetBaseBoolSettingValue("UI", "LockToolbar", checked);
+  Core::SetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "LockToolbar", checked);
   Host::CommitBaseSettingChanges();
   m_ui.toolBar->setMovable(!checked);
 
@@ -1535,7 +1564,7 @@ void MainWindow::onViewLockToolbarActionTriggered(bool checked)
 
 void MainWindow::onViewToolbarSmallIconsActionTriggered(bool checked)
 {
-  Core::SetBaseBoolSettingValue("UI", "ToolbarSmallIcons", checked);
+  Core::SetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarSmallIcons", checked);
   Host::CommitBaseSettingChanges();
   updateToolbarIconStyle();
 
@@ -1545,7 +1574,7 @@ void MainWindow::onViewToolbarSmallIconsActionTriggered(bool checked)
 
 void MainWindow::onViewToolbarLabelsActionTriggered(bool checked)
 {
-  Core::SetBaseBoolSettingValue("UI", "ToolbarLabels", checked);
+  Core::SetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabels", checked);
   Host::CommitBaseSettingChanges();
   updateToolbarIconStyle();
 
@@ -1555,7 +1584,7 @@ void MainWindow::onViewToolbarLabelsActionTriggered(bool checked)
 
 void MainWindow::onViewToolbarLabelsBesideIconsActionTriggered(bool checked)
 {
-  Core::SetBaseBoolSettingValue("UI", "ToolbarLabelsBesideIcons", checked);
+  Core::SetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabelsBesideIcons", checked);
   Host::CommitBaseSettingChanges();
   updateToolbarIconStyle();
 
@@ -1565,7 +1594,7 @@ void MainWindow::onViewToolbarLabelsBesideIconsActionTriggered(bool checked)
 
 void MainWindow::onViewStatusBarActionTriggered(bool checked)
 {
-  Core::SetBaseBoolSettingValue("UI", "ShowStatusBar", checked);
+  Core::SetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ShowStatusBar", checked);
   Host::CommitBaseSettingChanges();
   m_ui.statusBar->setVisible(checked);
 }
@@ -1893,22 +1922,24 @@ void MainWindow::clearGameListEntryPlayTime(const GameList::Entry* entry)
 
 void MainWindow::setupAdditionalUi()
 {
-  const bool status_bar_visible = Core::GetBaseBoolSettingValue("UI", "ShowStatusBar", true);
+  const bool status_bar_visible = Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ShowStatusBar", true);
   m_ui.actionViewStatusBar->setChecked(status_bar_visible);
   m_ui.statusBar->setVisible(status_bar_visible);
 
-  const bool toolbar_visible = Core::GetBaseBoolSettingValue("UI", "ShowToolbar", false);
+  const bool toolbar_visible = Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ShowToolbar", false);
   m_ui.actionViewShowToolbar->setChecked(toolbar_visible);
   m_ui.toolBar->setVisible(toolbar_visible);
 
-  const bool toolbars_locked = Core::GetBaseBoolSettingValue("UI", "LockToolbar", false);
+  const bool toolbars_locked = Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "LockToolbar", false);
   m_ui.actionViewLockToolbar->setChecked(toolbars_locked);
   m_ui.toolBar->setMovable(!toolbars_locked);
 
-  m_ui.actionViewSmallToolbarIcons->setChecked(Core::GetBaseBoolSettingValue("UI", "ToolbarSmallIcons", false));
-  m_ui.actionViewToolbarLabels->setChecked(Core::GetBaseBoolSettingValue("UI", "ToolbarLabels", true));
+  m_ui.actionViewSmallToolbarIcons->setChecked(
+    Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarSmallIcons", false));
+  m_ui.actionViewToolbarLabels->setChecked(
+    Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabels", true));
   m_ui.actionViewToolbarLabelsBesideIcons->setChecked(
-    Core::GetBaseBoolSettingValue("UI", "ToolbarLabelsBesideIcons", false));
+    Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabelsBesideIcons", false));
 
   // mutually exclusive actions
   QActionGroup* group = new QActionGroup(this);
@@ -2018,7 +2049,8 @@ void MainWindow::setupAdditionalUi()
   m_shortcuts.settings = new QShortcut(QKeySequence::Preferences, this, [this] { doSettings(); });
 
 #ifdef _WIN32
-  s_locals.disable_window_rounded_corners = Core::GetBaseBoolSettingValue("Main", "DisableWindowRoundedCorners", false);
+  s_locals.disable_window_rounded_corners =
+    Core::GetBaseBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "DisableWindowRoundedCorners", false);
   if (s_locals.disable_window_rounded_corners)
     QtUtils::SetWindowRoundedCornerState(this, false);
 #endif
@@ -2075,7 +2107,7 @@ void MainWindow::onViewSortOrderActionTriggered()
 void MainWindow::updateToolbarActions()
 {
   const std::string active_buttons_str =
-    Core::GetBaseStringSettingValue("UI", "ToolbarButtons", DEFAULT_TOOLBAR_ACTIONS);
+    Core::GetBaseStringSettingValue(Settings::UI_SECTION_NAME, "ToolbarButtons", DEFAULT_TOOLBAR_ACTIONS);
   const std::vector<std::string_view> active_buttons = StringUtil::SplitString(active_buttons_str, ',');
 
   m_ui.toolBar->clear();
@@ -2111,10 +2143,11 @@ void MainWindow::updateToolbarActions()
 
 void MainWindow::updateToolbarIconStyle()
 {
-  const bool show_toolbar = Core::GetBaseBoolSettingValue("UI", "ShowToolbar", false);
-  const bool show_labels = Core::GetBaseBoolSettingValue("UI", "ToolbarLabels", true);
-  const bool small_icons = Core::GetBaseBoolSettingValue("UI", "ToolbarSmallIcons", false);
-  const bool labels_beside_icons = Core::GetBaseBoolSettingValue("UI", "ToolbarLabelsBesideIcons", false);
+  const bool show_toolbar = Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ShowToolbar", false);
+  const bool show_labels = Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabels", true);
+  const bool small_icons = Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarSmallIcons", false);
+  const bool labels_beside_icons =
+    Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabelsBesideIcons", false);
 
   Qt::ToolButtonStyle style;
   if (!show_labels)
@@ -2138,7 +2171,7 @@ void MainWindow::updateToolbarIconStyle()
 
 void MainWindow::updateToolbarArea()
 {
-  const TinyString cfg_name = Core::GetBaseTinyStringSettingValue("UI", "ToolbarArea", "Top");
+  const TinyString cfg_name = Core::GetBaseTinyStringSettingValue(Settings::UI_SECTION_NAME, "ToolbarArea", "Top");
   Qt::ToolBarArea cfg_area = Qt::TopToolBarArea;
   for (const auto& [area, name] : s_toolbar_areas)
   {
@@ -2156,17 +2189,17 @@ void MainWindow::updateToolbarArea()
   addToolBar(cfg_area, m_ui.toolBar);
 
   // need to explicitly make it visible again
-  if (Core::GetBaseBoolSettingValue("UI", "ShowToolbar", false))
+  if (Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ShowToolbar", false))
     m_ui.toolBar->show();
 }
 
 void MainWindow::onToolbarContextMenuRequested(const QPoint& pos)
 {
   {
-    const bool show_labels = Core::GetBaseBoolSettingValue("UI", "ToolbarLabels", true);
+    const bool show_labels = Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabels", true);
 
     const std::string active_buttons_str =
-      Core::GetBaseStringSettingValue("UI", "ToolbarButtons", DEFAULT_TOOLBAR_ACTIONS);
+      Core::GetBaseStringSettingValue(Settings::UI_SECTION_NAME, "ToolbarButtons", DEFAULT_TOOLBAR_ACTIONS);
     std::vector<std::string_view> active_buttons = StringUtil::SplitString(active_buttons_str, ',');
 
     QMenu* const menu = QtUtils::NewPopupMenu(this);
@@ -2178,17 +2211,17 @@ void MainWindow::onToolbarContextMenuRequested(const QPoint& pos)
 
     action = menu->addAction(tr("Small Icons"));
     action->setCheckable(true);
-    action->setChecked(Core::GetBaseBoolSettingValue("UI", "ToolbarSmallIcons", false));
+    action->setChecked(Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarSmallIcons", false));
     connect(action, &QAction::triggered, this, &MainWindow::onViewToolbarSmallIconsActionTriggered);
 
     action = menu->addAction(tr("Show Labels"));
     action->setCheckable(true);
-    action->setChecked(Core::GetBaseBoolSettingValue("UI", "ToolbarLabels", true));
+    action->setChecked(Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabels", true));
     connect(action, &QAction::triggered, this, &MainWindow::onViewToolbarLabelsActionTriggered);
 
     action = menu->addAction(tr("Labels Beside Icons"));
     action->setCheckable(true);
-    action->setChecked(Core::GetBaseBoolSettingValue("UI", "ToolbarLabelsBesideIcons", false));
+    action->setChecked(Core::GetBaseBoolSettingValue(Settings::UI_SECTION_NAME, "ToolbarLabelsBesideIcons", false));
     action->setEnabled(show_labels);
     connect(action, &QAction::triggered, this, &MainWindow::onViewToolbarLabelsBesideIconsActionTriggered);
 
@@ -2197,7 +2230,7 @@ void MainWindow::onToolbarContextMenuRequested(const QPoint& pos)
     for (const auto& [area, name] : s_toolbar_areas)
     {
       QAction* const position_action = position_menu->addAction(tr(name), [this, name]() {
-        Core::SetBaseStringSettingValue("UI", "ToolbarArea", name);
+        Core::SetBaseStringSettingValue(Settings::UI_SECTION_NAME, "ToolbarArea", name);
         Host::CommitBaseSettingChanges();
         updateToolbarArea();
       });
@@ -2220,12 +2253,13 @@ void MainWindow::onToolbarContextMenuRequested(const QPoint& pos)
       menu_action->setChecked(StringUtil::IsInStringList(active_buttons, name));
       connect(menu_action, &QAction::triggered, this, [this, name](bool checked) {
         const std::string active_buttons_str =
-          Core::GetBaseStringSettingValue("UI", "ToolbarButtons", DEFAULT_TOOLBAR_ACTIONS);
+          Core::GetBaseStringSettingValue(Settings::UI_SECTION_NAME, "ToolbarButtons", DEFAULT_TOOLBAR_ACTIONS);
         std::vector<std::string_view> active_buttons = StringUtil::SplitString(active_buttons_str, ',');
         if (checked ? StringUtil::AddToStringList(active_buttons, name) :
                       StringUtil::RemoveFromStringList(active_buttons, name))
         {
-          Core::SetBaseStringSettingValue("UI", "ToolbarButtons", StringUtil::JoinString(active_buttons, ',').c_str());
+          Core::SetBaseStringSettingValue(Settings::UI_SECTION_NAME, "ToolbarButtons",
+                                          StringUtil::JoinString(active_buttons, ',').c_str());
           Host::CommitBaseSettingChanges();
           updateToolbarActions();
         }
@@ -2248,7 +2282,7 @@ void MainWindow::onToolbarTopLevelChanged(bool top_level)
   {
     if (current_area == area)
     {
-      Core::SetBaseStringSettingValue("UI", "ToolbarArea", name);
+      Core::SetBaseStringSettingValue(Settings::UI_SECTION_NAME, "ToolbarArea", name);
       Host::CommitBaseSettingChanges();
       break;
     }
@@ -2405,8 +2439,8 @@ void MainWindow::updateWindowState()
     return;
 
   const bool visible = !shouldHideMainWindow();
-  const bool resizeable = (!Core::GetBoolSettingValue("Main", "DisableWindowResize", false) || !wantsDisplayWidget() ||
-                           isRenderingFullscreen());
+  const bool resizeable = (!Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "DisableWindowResize", false) ||
+                           !wantsDisplayWidget() || isRenderingFullscreen());
 
   if (isVisible() != visible)
     setVisible(visible);
@@ -2463,16 +2497,16 @@ bool MainWindow::isRenderingToMain() const
 
 bool MainWindow::shouldHideMouseCursor() const
 {
-  return m_hide_mouse_cursor ||
-         (isRenderingFullscreen() && Core::GetBoolSettingValue("Main", "HideCursorInFullscreen", true));
+  return m_hide_mouse_cursor || (isRenderingFullscreen() && Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME,
+                                                                                      "HideCursorInFullscreen", true));
 }
 
 bool MainWindow::shouldHideMainWindow() const
 {
   // CanRenderToMain check is for temporary unfullscreens.
   return (!isRenderingToMain() && wantsDisplayWidget() &&
-          ((Core::GetBoolSettingValue("Main", "RenderToSeparateWindow", false) &&
-            Core::GetBoolSettingValue("Main", "HideMainWindowWhenRunning", false)) ||
+          ((Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "RenderToSeparateWindow", false) &&
+            Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "HideMainWindowWhenRunning", false)) ||
            (canRenderToMainWindow() &&
             (isRenderingFullscreen() || s_locals.system_locked.load(std::memory_order_relaxed))))) ||
          QtHost::InNoGUIMode();
@@ -2705,37 +2739,41 @@ void MainWindow::connectSignals()
   connect(m_game_list_widget->getListView()->horizontalHeader(), &QHeaderView::sortIndicatorChanged, this,
           &MainWindow::onGameListSortIndicatorOrderChanged);
 
-  SettingWidgetBinder::BindMenuToEnumSetting(m_ui.menuCPUExecutionMode, "CPU", "ExecutionMode",
+  SettingWidgetBinder::BindMenuToEnumSetting(m_ui.menuCPUExecutionMode, Settings::CPU_SECTION_NAME, "ExecutionMode",
                                              &Settings::ParseCPUExecutionMode, &Settings::GetCPUExecutionModeName,
                                              &Settings::GetCPUExecutionModeDisplayName,
                                              Settings::DEFAULT_CPU_EXECUTION_MODE, CPUExecutionMode::Count);
-  SettingWidgetBinder::BindMenuToEnumSetting(m_ui.menuRenderer, "GPU", "Renderer", &Settings::ParseRendererName,
-                                             &Settings::GetRendererName, &Settings::GetRendererDisplayName,
-                                             Settings::DEFAULT_GPU_RENDERER, GPURenderer::Count);
   SettingWidgetBinder::BindMenuToEnumSetting(
-    m_ui.menuCropMode, "Display", "CropMode", &Settings::ParseDisplayCropMode, &Settings::GetDisplayCropModeName,
-    &Settings::GetDisplayCropModeDisplayName, Settings::DEFAULT_DISPLAY_CROP_MODE, DisplayCropMode::MaxCount);
-  SettingWidgetBinder::BindMenuToEnumSetting(m_ui.menuLogLevel, "Logging", "LogLevel", &Settings::ParseLogLevelName,
-                                             &Settings::GetLogLevelName, &Settings::GetLogLevelDisplayName,
-                                             Log::DEFAULT_LOG_LEVEL, Log::Level::MaxCount);
+    m_ui.menuRenderer, Settings::GPU_SECTION_NAME, "Renderer", &Settings::ParseRendererName, &Settings::GetRendererName,
+    &Settings::GetRendererDisplayName, Settings::DEFAULT_GPU_RENDERER, GPURenderer::Count);
+  SettingWidgetBinder::BindMenuToEnumSetting(m_ui.menuCropMode, Settings::DISPLAY_SECTION_NAME, "CropMode",
+                                             &Settings::ParseDisplayCropMode, &Settings::GetDisplayCropModeName,
+                                             &Settings::GetDisplayCropModeDisplayName,
+                                             Settings::DEFAULT_DISPLAY_CROP_MODE, DisplayCropMode::MaxCount);
+  SettingWidgetBinder::BindMenuToEnumSetting(
+    m_ui.menuLogLevel, Settings::LOGGING_SECTION_NAME, "LogLevel", &Settings::ParseLogLevelName,
+    &Settings::GetLogLevelName, &Settings::GetLogLevelDisplayName, Log::DEFAULT_LOG_LEVEL, Log::Level::MaxCount);
   connect(m_ui.menuLogChannels, &QMenu::aboutToShow, this, &MainWindow::onDebugLogChannelsMenuAboutToShow);
   connect(m_ui.actionCDROMLidStateAutomatic, &QAction::triggered, this, &MainWindow::onDebugCDROMLidStateChanged);
   connect(m_ui.actionCDROMLidStateOpen, &QAction::triggered, this, &MainWindow::onDebugCDROMLidStateChanged);
   connect(m_ui.actionCDROMLidStateClosed, &QAction::triggered, this, &MainWindow::onDebugCDROMLidStateChanged);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogToSystemConsole, "Logging", "LogToConsole",
-                                               false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogToFile, "Logging", "LogToFile", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogToWindow, "Logging", "LogToWindow", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogTimestamps, "Logging", "LogTimestamps", true);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogFileTimestamps, "Logging", "LogFileTimestamps",
-                                               false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogToSystemConsole, Settings::LOGGING_SECTION_NAME,
+                                               "LogToConsole", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogToFile, Settings::LOGGING_SECTION_NAME,
+                                               "LogToFile", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogToWindow, Settings::LOGGING_SECTION_NAME,
+                                               "LogToWindow", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogTimestamps, Settings::LOGGING_SECTION_NAME,
+                                               "LogTimestamps", true);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionLogFileTimestamps, Settings::LOGGING_SECTION_NAME,
+                                               "LogFileTimestamps", false);
 
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnableSafeMode, "Main", "DisableAllEnhancements",
-                                               false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugDumpCPUtoVRAMCopies, "Debug",
-                                               "DumpCPUToVRAMCopies", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugDumpVRAMtoCPUCopies, "Debug",
-                                               "DumpVRAMToCPUCopies", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionEnableSafeMode, Settings::INTERFACE_SECTION_NAME,
+                                               "DisableAllEnhancements", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugDumpCPUtoVRAMCopies,
+                                               Settings::DEBUG_SECTION_NAME, "DumpCPUToVRAMCopies", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugDumpVRAMtoCPUCopies,
+                                               Settings::DEBUG_SECTION_NAME, "DumpVRAMToCPUCopies", false);
   connect(m_ui.actionDumpRAM, &QAction::triggered, [this]() {
     const QString filename = QDir::toNativeSeparators(
       QFileDialog::getSaveFileName(this, tr("Destination File"), QString(), tr("Binary Files (*.bin)")));
@@ -2760,15 +2798,22 @@ void MainWindow::connectSignals()
 
     g_core_thread->dumpSPURAM(filename);
   });
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowVRAM, "Debug", "ShowVRAM", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionFreeCamera, "DebugWindows", "Freecam", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowGPUState, "DebugWindows", "GPU", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowCDROMState, "DebugWindows", "CDROM", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowSPUState, "DebugWindows", "SPU", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowTimersState, "DebugWindows", "Timers",
-                                               false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowMDECState, "DebugWindows", "MDEC", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowDMAState, "DebugWindows", "DMA", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowVRAM, Settings::DEBUG_SECTION_NAME,
+                                               "ShowVRAM", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionFreeCamera, Settings::DEBUG_WINDOWS_SECTION_NAME,
+                                               "Freecam", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowGPUState,
+                                               Settings::DEBUG_WINDOWS_SECTION_NAME, "GPU", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowCDROMState,
+                                               Settings::DEBUG_WINDOWS_SECTION_NAME, "CDROM", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowSPUState,
+                                               Settings::DEBUG_WINDOWS_SECTION_NAME, "SPU", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowTimersState,
+                                               Settings::DEBUG_WINDOWS_SECTION_NAME, "Timers", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowMDECState,
+                                               Settings::DEBUG_WINDOWS_SECTION_NAME, "MDEC", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(nullptr, m_ui.actionDebugShowDMAState,
+                                               Settings::DEBUG_WINDOWS_SECTION_NAME, "DMA", false);
 
   // Set status tip to the same as tooltip for accessibility.
   for (QAction* action : findChildren<QAction*>())
@@ -3086,7 +3131,7 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::startupUpdateCheck()
 {
-  if (!Core::GetBaseBoolSettingValue("AutoUpdater", "CheckAtStartup", true))
+  if (!Core::GetBaseBoolSettingValue(AutoUpdaterDialog::CONFIG_SECTION_NAME, "CheckAtStartup", true))
     return;
 
   checkForUpdates(false, false);
@@ -3140,7 +3185,7 @@ void MainWindow::requestShutdown(bool allow_confirm, bool allow_save_to_state, b
 
   // Only confirm on UI thread because we need to display a msgbox.
   if (!m_is_closing && s_locals.system_valid && allow_confirm &&
-      Core::GetBoolSettingValue("Main", "ConfirmPowerOff", true))
+      Core::GetBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "ConfirmPowerOff", true))
   {
     // Hardcore mode restrictions.
     if (check_pause && !s_locals.system_paused && s_locals.achievements_hardcore_mode && allow_confirm)
@@ -3219,7 +3264,7 @@ void MainWindow::onSettingsReloaded()
 {
 #ifdef _WIN32
   if (const bool disable_window_rounded_corners =
-        Core::GetBaseBoolSettingValue("Main", "DisableWindowRoundedCorners", false);
+        Core::GetBaseBoolSettingValue(Settings::INTERFACE_SECTION_NAME, "DisableWindowRoundedCorners", false);
       disable_window_rounded_corners != s_locals.disable_window_rounded_corners)
   {
     s_locals.disable_window_rounded_corners = disable_window_rounded_corners;
@@ -3344,9 +3389,9 @@ void MainWindow::onAchievementsLoginSuccess(const QString& username, quint32 poi
 
   // Automatically show the achievements column after first login. If the user has manually hidden it,
   // it will not be automatically shown again.
-  if (!Core::GetBaseBoolSettingValue("GameListTableView", "TriedShowingAchievementsColumn", false))
+  if (!Core::GetBaseBoolSettingValue(GameList::UI_SECTION_NAME, "TriedShowingAchievementsColumn", false))
   {
-    Core::SetBaseBoolSettingValue("GameListTableView", "TriedShowingAchievementsColumn", true);
+    Core::SetBaseBoolSettingValue(GameList::UI_SECTION_NAME, "TriedShowingAchievementsColumn", true);
     m_game_list_widget->getListView()->setAndSaveColumnHidden(GameListModel::Column_Achievements, false);
   }
 }

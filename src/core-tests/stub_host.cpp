@@ -181,7 +181,8 @@ void Host::OnSystemStarting()
 {
 }
 
-void Host::OnSystemStarted()
+void Host::OnSystemStarted(const std::string& disc_path, const std::string& game_serial, const std::string& game_name,
+                           GameHash game_hash)
 {
 }
 
@@ -261,7 +262,7 @@ void Host::RequestResizeHostDisplay(s32 width, s32 height)
 {
 }
 
-void Host::SetDefaultSettings(SettingsInterface& si)
+void Host::SetDefaultSettings(SettingsInterface& si, bool ignore_user_prefs)
 {
 }
 
