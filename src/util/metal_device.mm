@@ -405,7 +405,7 @@ void MetalDevice::SetFeatures(CreateFlags create_flags)
   m_features.feedback_loops = false;
   m_features.geometry_shaders = false;
   m_features.partial_msaa_resolve = false;
-  m_features.memory_import = true;
+  m_features.memory_import = !HasCreateFlag(create_flags, CreateFlags::DisableMemoryImport);
   m_features.exclusive_fullscreen = false;
   m_features.explicit_present = false;
   m_features.timed_present = true;
@@ -2404,26 +2404,6 @@ void MetalDevice::Dispatch(u32 threads_x, u32 threads_y, u32 threads_z, u32 grou
   }
 
   DebugAssert(m_current_pipeline && m_current_pipeline->IsComputePipeline());
-
-  // TODO: We could remap to the optimal group size..
-  [m_compute_encoder dispatchThreads:MTLSizeMake(threads_x, threads_y, threads_z)
-               threadsPerThreadgroup:MTLSizeMake(group_size_x, group_size_y, group_size_z)];
-}
-
-void MetalDevice::DispatchWithPushConstants(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x,
-                                            u32 group_size_y, u32 group_size_z, const void* push_constants,
-                                            u32 push_constants_size)
-{
-  if (!InComputePass())
-  {
-    if (InRenderPass())
-      EndRenderPass();
-
-    BeginComputePass();
-  }
-
-  DebugAssert(m_current_pipeline && m_current_pipeline->IsComputePipeline());
-  [m_compute_encoder setBytes:push_constants length:push_constants_size atIndex:2];
 
   // TODO: We could remap to the optimal group size..
   [m_compute_encoder dispatchThreads:MTLSizeMake(threads_x, threads_y, threads_z)

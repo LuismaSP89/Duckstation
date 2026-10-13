@@ -15,6 +15,7 @@
 
 #include <array>
 #include <malloc.h>
+#include <mutex>
 
 LOG_CHANNEL(GPUDevice);
 
@@ -156,11 +157,13 @@ D3D11Device::ComPtr<ID3D11RasterizerState> D3D11Device::GetRasterizationState(co
 {
   ComPtr<ID3D11RasterizerState> drs;
 
-  const auto it = m_rasterization_states.find(rs.key);
-  if (it != m_rasterization_states.end())
   {
-    drs = it->second;
-    return drs;
+    const Threading::SharedLockGuard lock(m_state_map_mutex);
+    if (const auto it = m_rasterization_states.find(rs.key); it != m_rasterization_states.end())
+    {
+      drs = it->second;
+      return drs;
+    }
   }
 
   static constexpr std::array<D3D11_CULL_MODE, static_cast<u32>(GPUPipeline::CullMode::MaxCount)> cull_mapping = {{
@@ -173,13 +176,18 @@ D3D11Device::ComPtr<ID3D11RasterizerState> D3D11Device::GetRasterizationState(co
   desc.FillMode = D3D11_FILL_SOLID;
   desc.CullMode = cull_mapping[static_cast<u8>(rs.cull_mode.GetValue())];
   desc.ScissorEnable = TRUE;
-  // desc.MultisampleEnable ???
+  desc.MultisampleEnable = (rs.multisamples > 1); // needed for MSAA at feature level 10.0
 
   HRESULT hr = m_device->CreateRasterizerState(&desc, drs.GetAddressOf());
   if (FAILED(hr)) [[unlikely]]
+  {
     Error::SetHResult(error, "CreateRasterizerState() failed: ", hr);
+  }
   else
+  {
+    const std::lock_guard lock(m_state_map_mutex);
     m_rasterization_states.emplace(rs.key, drs);
+  }
 
   return drs;
 }
@@ -188,11 +196,13 @@ D3D11Device::ComPtr<ID3D11DepthStencilState> D3D11Device::GetDepthState(const GP
 {
   ComPtr<ID3D11DepthStencilState> dds;
 
-  const auto it = m_depth_states.find(ds.key);
-  if (it != m_depth_states.end())
   {
-    dds = it->second;
-    return dds;
+    const Threading::SharedLockGuard lock(m_state_map_mutex);
+    if (const auto it = m_depth_states.find(ds.key); it != m_depth_states.end())
+    {
+      dds = it->second;
+      return dds;
+    }
   }
 
   static constexpr std::array<D3D11_COMPARISON_FUNC, static_cast<u32>(GPUPipeline::DepthFunc::MaxCount)> func_mapping =
@@ -213,9 +223,14 @@ D3D11Device::ComPtr<ID3D11DepthStencilState> D3D11Device::GetDepthState(const GP
 
   HRESULT hr = m_device->CreateDepthStencilState(&desc, dds.GetAddressOf());
   if (FAILED(hr)) [[unlikely]]
+  {
     Error::SetHResult(error, "CreateDepthStencilState() failed: ", hr);
+  }
   else
+  {
+    const std::lock_guard lock(m_state_map_mutex);
     m_depth_states.emplace(ds.key, dds);
+  }
 
   return dds;
 }
@@ -232,12 +247,16 @@ D3D11Device::ComPtr<ID3D11BlendState> D3D11Device::GetBlendState(const GPUPipeli
 {
   ComPtr<ID3D11BlendState> dbs;
 
-  const std::pair<u64, u32> key(bs.key, num_rts);
-  const auto it = m_blend_states.find(key);
-  if (it != m_blend_states.end())
+  // The blend constant is set separately, so keep it out of the key.
+  const std::pair<u64, u32> key(bs.key & 0xFFFFFFFFu, num_rts);
   {
-    dbs = it->second;
-    return dbs;
+    const Threading::SharedLockGuard lock(m_state_map_mutex);
+    const auto it = m_blend_states.find(key);
+    if (it != m_blend_states.end())
+    {
+      dbs = it->second;
+      return dbs;
+    }
   }
 
   static constexpr std::array<D3D11_BLEND, static_cast<u32>(GPUPipeline::BlendFunc::MaxCount)> blend_mapping = {{
@@ -284,9 +303,14 @@ D3D11Device::ComPtr<ID3D11BlendState> D3D11Device::GetBlendState(const GPUPipeli
 
   HRESULT hr = m_device->CreateBlendState(&blend_desc, dbs.GetAddressOf());
   if (FAILED(hr)) [[unlikely]]
+  {
     Error::SetHResult(error, "CreateBlendState() failed: ", hr);
+  }
   else
+  {
+    const std::lock_guard lock(m_state_map_mutex);
     m_blend_states.emplace(key, dbs);
+  }
 
   return dbs;
 }
@@ -295,11 +319,13 @@ D3D11Device::ComPtr<ID3D11InputLayout> D3D11Device::GetInputLayout(const GPUPipe
                                                                    const D3D11Shader* vs, Error* error)
 {
   ComPtr<ID3D11InputLayout> dil;
-  const auto it = m_input_layouts.find(il);
-  if (it != m_input_layouts.end())
   {
-    dil = it->second;
-    return dil;
+    const Threading::SharedLockGuard lock(m_state_map_mutex);
+    if (const auto it = m_input_layouts.find(il); it != m_input_layouts.end())
+    {
+      dil = it->second.layout;
+      return dil;
+    }
   }
 
   static constexpr u32 MAX_COMPONENTS = 4;
@@ -337,9 +363,17 @@ D3D11Device::ComPtr<ID3D11InputLayout> D3D11Device::GetInputLayout(const GPUPipe
   HRESULT hr = m_device->CreateInputLayout(elems, static_cast<UINT>(il.vertex_attributes.size()),
                                            vs->GetBytecode().data(), vs->GetBytecode().size(), dil.GetAddressOf());
   if (FAILED(hr)) [[unlikely]]
+  {
     Error::SetHResult(error, "CreateInputLayout() failed: ", hr);
+  }
   else
-    m_input_layouts.emplace(il, dil);
+  {
+    // The key has to reference our own copy of the attributes, the caller's may not outlive the cache.
+    InputLayoutEntry entry = {{il.vertex_attributes.begin(), il.vertex_attributes.end()}, dil};
+    const GPUPipeline::InputLayout key = {entry.attributes, il.vertex_stride};
+    const std::lock_guard lock(m_state_map_mutex);
+    m_input_layouts.emplace(key, std::move(entry));
+  }
 
   return dil;
 }
@@ -424,7 +458,15 @@ void D3D11Device::SetPipeline(GPUPipeline* pipeline)
   if (!PL->IsComputePipeline())
   {
     if (was_compute)
+    {
       UnbindComputePipeline();
+
+      // OM targets were unbound when switching to compute, and the UBO was only bound to CS.
+      if (m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages)
+        BindRenderTargetImages();
+      if (m_current_uniform_size > 0)
+        BindUniformBuffer(m_current_uniform_offset, m_current_uniform_size);
+    }
 
     if (ID3D11InputLayout* il = PL->GetInputLayout(); m_current_input_layout != il)
     {
@@ -494,27 +536,17 @@ void D3D11Device::SetPipeline(GPUPipeline* pipeline)
     if (!was_compute)
     {
       // need to bind all SRVs/samplers
-      u32 count;
-      for (count = 0; count < MAX_TEXTURE_SAMPLERS; count++)
-      {
-        if (!m_current_textures[count])
-          break;
-      }
-      if (count > 0)
-      {
-        m_context->CSSetShaderResources(0, count, m_current_textures.data());
-        m_context->CSSetSamplers(0, count, m_current_samplers.data());
-      }
+      m_context->CSSetShaderResources(0, MAX_TEXTURE_SAMPLERS, m_current_textures.data());
+      m_context->CSSetSamplers(0, MAX_TEXTURE_SAMPLERS, m_current_samplers.data());
 
       if (m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages)
       {
-        ID3D11UnorderedAccessView* uavs[MAX_TEXTURE_SAMPLERS];
-        for (u32 i = 0; i < m_num_current_render_targets; i++)
-          uavs[i] = m_current_render_targets[i]->GetD3DUAV();
-
         m_context->OMSetRenderTargets(0, nullptr, nullptr);
-        m_context->CSSetUnorderedAccessViews(0, m_num_current_render_targets, uavs, nullptr);
+        BindRenderTargetImages();
       }
+
+      if (m_current_uniform_size > 0)
+        BindUniformBuffer(m_current_uniform_offset, m_current_uniform_size);
     }
   }
 }
@@ -541,6 +573,7 @@ void D3D11Device::UnbindComputePipeline()
   m_context->CSSetShader(nullptr, nullptr, 0);
   m_context->CSSetShaderResources(0, MAX_TEXTURE_SAMPLERS, null_srvs);
   m_context->CSSetSamplers(0, MAX_TEXTURE_SAMPLERS, null_samplers);
-  if (m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages)
-    m_context->CSSetUnorderedAccessViews(0, m_num_current_render_targets, null_uavs, nullptr);
+
+  // Always clear these, the render pass flags may have changed since they were bound.
+  m_context->CSSetUnorderedAccessViews(0, MAX_RENDER_TARGETS, null_uavs, nullptr);
 }

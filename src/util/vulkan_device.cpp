@@ -63,8 +63,8 @@ enum : u32
   UNIFORM_PUSH_CONSTANTS_STAGES = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 
   // This is needed here as an upper bound because the descriptor needs an upper bound, and it's invalid to
-  // read past the end of that even if we're actually using less.
-  MAX_UNIFORM_BUFFER_SIZE = 1024,
+  // read past the end of that even if we're actually using less. This is the minimum maxUniformBufferRange.
+  MAX_UNIFORM_BUFFER_SIZE = 16384,
 };
 
 const std::array<VkFormat, static_cast<u32>(GPUTextureFormat::MaxCount)> VulkanDevice::TEXTURE_FORMAT_MAPPING = {
@@ -196,6 +196,8 @@ bool VulkanDevice::EnableOptionalDeviceExtensions(VkPhysicalDevice physical_devi
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR, nullptr, VK_FALSE};
   VkPhysicalDevicePipelineCreationCacheControlFeaturesEXT pipeline_cache_control_features = {
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES_EXT, nullptr, VK_FALSE};
+  VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1_feature = {
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR, nullptr, VK_FALSE};
 
   // add in optional feature structs
   // Gate most of the extension checks behind a Vulkan 1.1 device, so we don't have to deal with situations where
@@ -248,6 +250,11 @@ bool VulkanDevice::EnableOptionalDeviceExtensions(VkPhysicalDevice physical_devi
       m_optional_extensions.vk_ext_pipeline_creation_cache_control = true;
       Vulkan::AddPointerToChain(&features2, &pipeline_cache_control_features);
     }
+    if (SupportsExtension(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) ||
+        SupportsExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME))
+    {
+      Vulkan::AddPointerToChain(&features2, &swapchain_maintenance1_feature);
+    }
   }
 
   // don't bother querying if we're not actually looking at any features
@@ -285,13 +292,14 @@ bool VulkanDevice::EnableOptionalDeviceExtensions(VkPhysicalDevice physical_devi
     Vulkan::AddPointerToChain(&properties2, &m_device_driver_properties);
   }
 
-  if (SupportsExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME))
+  if (m_device_properties.apiVersion >= VK_API_VERSION_1_1 && SupportsExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME))
   {
     m_optional_extensions.vk_khr_push_descriptor = true;
     Vulkan::AddPointerToChain(&properties2, &push_descriptor_properties);
   }
 
-  if (SupportsExtension(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME))
+  if (m_device_properties.apiVersion >= VK_API_VERSION_1_1 &&
+      SupportsExtension(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME))
   {
     m_optional_extensions.vk_ext_external_memory_host = true;
     Vulkan::AddPointerToChain(&properties2, &external_memory_host_properties);
@@ -305,7 +313,8 @@ bool VulkanDevice::EnableOptionalDeviceExtensions(VkPhysicalDevice physical_devi
   SetDriverType(VulkanLoader::GuessDriverType(m_device_properties, m_device_driver_properties));
 
   // check we actually support enough
-  m_optional_extensions.vk_khr_push_descriptor &= (push_descriptor_properties.maxPushDescriptors >= 1);
+  m_optional_extensions.vk_khr_push_descriptor &=
+    (push_descriptor_properties.maxPushDescriptors >= MAX_TEXTURE_SAMPLERS);
 
   // vk_ext_external_memory_host is only used if the import alignment is the same as the system's page size
   m_optional_extensions.vk_ext_external_memory_host &=
@@ -403,6 +412,7 @@ bool VulkanDevice::EnableOptionalDeviceExtensions(VkPhysicalDevice physical_devi
     // Driver support for swapchain maintenance is a mess... try KHR first, then EXT.
     m_optional_extensions.vk_khr_swapchain_maintenance1 =
       enable_surface && VulkanLoader::GetOptionalExtensions().vk_khr_surface_maintenance1 &&
+      swapchain_maintenance1_feature.swapchainMaintenance1 == VK_TRUE &&
       (SupportsAndAddExtension(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) ||
        SupportsAndAddExtension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME));
   }
@@ -816,8 +826,7 @@ bool VulkanDevice::CreateCommandBuffers()
                                  MAX_COMBINED_IMAGE_SAMPLER_DESCRIPTORS_PER_FRAME};
     }
     pool_sizes[num_pools++] = {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, MAX_INPUT_ATTACHMENT_DESCRIPTORS_PER_FRAME};
-    if (m_optional_extensions.vk_ext_fragment_shader_interlock)
-      pool_sizes[num_pools++] = {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_INPUT_ATTACHMENT_DESCRIPTORS_PER_FRAME};
+    pool_sizes[num_pools++] = {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_INPUT_ATTACHMENT_DESCRIPTORS_PER_FRAME};
 
     VkDescriptorPoolCreateInfo pool_create_info = {
       VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0, MAX_DESCRIPTOR_SETS_PER_FRAME, num_pools, pool_sizes};
@@ -1037,48 +1046,6 @@ VkRenderPass VulkanDevice::GetSwapChainRenderPass(GPUTextureFormat format, VkAtt
 
   m_render_pass_cache_mutex.unlock_shared();
   return CreateCachedRenderPass(key);
-}
-
-VkRenderPass VulkanDevice::GetRenderPassForRestarting(VkRenderPass pass)
-{
-  m_render_pass_cache_mutex.lock_shared();
-  for (const auto& it : m_render_pass_cache)
-  {
-    if (it.second != pass)
-      continue;
-
-    RenderPassCacheKey modified_key = it.first;
-    for (u32 i = 0; i < MAX_RENDER_TARGETS; i++)
-    {
-      if (modified_key.color[i].load_op == VK_ATTACHMENT_LOAD_OP_CLEAR)
-        modified_key.color[i].load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-    }
-
-    if (modified_key.depth_load_op == VK_ATTACHMENT_LOAD_OP_CLEAR)
-      modified_key.depth_load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-    if (modified_key.stencil_load_op == VK_ATTACHMENT_LOAD_OP_CLEAR)
-      modified_key.stencil_load_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-
-    if (modified_key == it.first)
-    {
-      m_render_pass_cache_mutex.unlock_shared();
-      return pass;
-    }
-
-    auto fit = m_render_pass_cache.find(modified_key);
-    if (fit != m_render_pass_cache.end())
-    {
-      const VkRenderPass ret = fit->second;
-      m_render_pass_cache_mutex.unlock_shared();
-      return ret;
-    }
-
-    m_render_pass_cache_mutex.unlock_shared();
-    return CreateCachedRenderPass(modified_key);
-  }
-
-  m_render_pass_cache_mutex.unlock_shared();
-  return pass;
 }
 
 VkCommandBuffer VulkanDevice::GetCurrentInitCommandBuffer()
@@ -1327,15 +1294,20 @@ void VulkanDevice::EndAndSubmitCommandBuffer(bool wait_for_completion, VulkanSwa
   u32 wait_bits;
   std::array<VkSemaphore, 2> signal_semaphores;
   std::array<u64, 2> signal_values = {};
-  if (present_swap_chain)
+
+  // Submitting mid-present still has to wait for the image. The acquire semaphore is signaled again in this case,
+  // so that the final submission can wait on it too.
+  VulkanSwapChain* const wait_swap_chain = present_swap_chain ? present_swap_chain : m_current_swap_chain;
+  if (wait_swap_chain)
   {
     wait_bits = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-    submit_info.pWaitSemaphores = present_swap_chain->GetImageAcquireSemaphorePtr();
+    submit_info.pWaitSemaphores = wait_swap_chain->GetImageAcquireSemaphorePtr();
     submit_info.waitSemaphoreCount = 1;
     submit_info.pWaitDstStageMask = &wait_bits;
 
-    signal_semaphores[submit_info.signalSemaphoreCount++] = present_swap_chain->GetPresentSemaphore();
+    signal_semaphores[submit_info.signalSemaphoreCount++] =
+      present_swap_chain ? present_swap_chain->GetPresentSemaphore() : wait_swap_chain->GetImageAcquireSemaphore();
   }
 
   std::array<u64, 1> wait_values = {};
@@ -1497,9 +1469,11 @@ void VulkanDevice::SubmitCommandBuffer(bool wait_for_completion, const std::stri
 
 void VulkanDevice::SubmitCommandBufferAndRestartRenderPass(const std::string_view reason)
 {
+  const bool in_render_pass = InRenderPass();
   SubmitCommandBuffer(false, reason);
 
-  BeginRenderPass();
+  if (in_render_pass)
+    BeginRenderPass();
 }
 
 void VulkanDevice::DeferBufferDestruction(VkBuffer object, VmaAllocation allocation)
@@ -1603,9 +1577,10 @@ VkRenderPass VulkanDevice::CreateCachedRenderPass(RenderPassCacheKey key)
       input_reference.layout = layout;
       input_reference_ptr = &input_reference;
 
-      if (!m_optional_extensions.vk_ext_rasterization_order_attachment_access)
+      if (!m_features.framebuffer_fetch)
       {
-        // don't need the framebuffer-local dependency when we have rasterization order attachment access
+        // don't need the framebuffer-local dependency when we have rasterization order attachment access,
+        // but if it's been disabled, barriers will still be used
         subpass_dependency.srcSubpass = 0;
         subpass_dependency.dstSubpass = 0;
         subpass_dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1779,13 +1754,20 @@ bool VulkanDevice::CreateDeviceAndMainSwapChain(std::string_view adapter, Create
   // Attempt to create the device.
   if (!CreateDevice(physical_device, swap_chain ? swap_chain->GetSurface() : VK_NULL_HANDLE, create_flags, error))
   {
+    if (swap_chain)
+      swap_chain->Destroy(*this, false);
     VulkanLoader::ReleaseVulkanInstance();
     return false;
   }
 
   // And critical resources.
   if (!CreateAllocator() || !CreatePersistentDescriptorPool() || !CreateCommandBuffers() || !CreatePipelineLayouts())
+  {
+    // Swap chain destructor would otherwise submit a command buffer we may not have.
+    if (swap_chain)
+      swap_chain->Destroy(*this, false);
     return false;
+  }
 
   m_exclusive_fullscreen_control = exclusive_fullscreen_control;
 
@@ -1819,6 +1801,12 @@ void VulkanDevice::DestroyDevice()
   // Don't both submitting the current command buffer, just toss it.
   if (m_device != VK_NULL_HANDLE)
     vkDeviceWaitIdle(m_device);
+
+  if (m_null_image_texture)
+  {
+    m_null_image_texture->Destroy(false);
+    m_null_image_texture.reset();
+  }
 
   if (m_main_swap_chain)
   {
@@ -2068,8 +2056,9 @@ void VulkanDevice::EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u
   VulkanSwapChain* const SC = static_cast<VulkanSwapChain*>(swap_chain);
 
   DebugAssert(present_time == 0);
-  DebugAssert(InRenderPass() && m_num_current_render_targets == 0 && !m_current_depth_target);
-  EndRenderPass();
+  DebugAssert(m_num_current_render_targets == 0 && !m_current_depth_target);
+  if (InRenderPass())
+    EndRenderPass();
 
   DebugAssert(SC == m_current_swap_chain);
   m_current_swap_chain = nullptr;
@@ -2185,7 +2174,8 @@ void VulkanDevice::SetFeatures(CreateFlags create_flags, VkPhysicalDevice physic
   m_features.compute_shaders = !HasCreateFlag(create_flags, CreateFlags::DisableComputeShaders);
 
   m_features.partial_msaa_resolve = true;
-  m_features.memory_import = m_optional_extensions.vk_ext_external_memory_host;
+  m_features.memory_import =
+    !HasCreateFlag(create_flags, CreateFlags::DisableMemoryImport) && m_optional_extensions.vk_ext_external_memory_host;
   m_features.exclusive_fullscreen = false;
   m_features.explicit_present = true;
   m_features.timed_present = false;
@@ -2320,6 +2310,12 @@ void VulkanDevice::ResolveTextureRegion(GPUTexture* dst, u32 dst_x, u32 dst_y, u
       D->SetState(GPUTexture::State::Dirty);
   }
 
+  // Never used? Can't transition back to undefined afterwards.
+  if (S->GetLayout() == VulkanTexture::Layout::Undefined)
+    S->TransitionToLayout(m_current_command_buffer, VulkanTexture::Layout::TransferSrc);
+  if (D->GetLayout() == VulkanTexture::Layout::Undefined)
+    D->TransitionToLayout(m_current_command_buffer, VulkanTexture::Layout::TransferDst);
+
   S->TransitionSubresourcesToLayout(m_current_command_buffer, 0, 1, 0, 1, S->GetLayout(),
                                     VulkanTexture::Layout::TransferSrc);
   D->TransitionSubresourcesToLayout(m_current_command_buffer, dst_layer, 1, dst_level, 1, D->GetLayout(),
@@ -2337,12 +2333,14 @@ void VulkanDevice::ResolveTextureRegion(GPUTexture* dst, u32 dst_x, u32 dst_y, u
                                     S->GetLayout());
   D->TransitionSubresourcesToLayout(m_current_command_buffer, dst_layer, 1, dst_level, 1,
                                     VulkanTexture::Layout::TransferDst, D->GetLayout());
+
+  D->SetState(GPUTexture::State::Dirty);
 }
 
 void VulkanDevice::ClearRenderTarget(GPUTexture* t, u32 c)
 {
   GPUDevice::ClearRenderTarget(t, c);
-  if (InRenderPass() && !(m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages))
+  if (InRenderPass())
   {
     const s32 idx = IsRenderTargetBoundIndex(t);
     if (idx >= 0)
@@ -2500,6 +2498,7 @@ void VulkanDevice::PushUniformBuffer(bool is_compute, const void* data, u32 data
 
 void* VulkanDevice::MapUniformBuffer(u32 size)
 {
+  DebugAssert(size <= MAX_UNIFORM_BUFFER_SIZE);
   const u32 used_space = Common::AlignUpPow2(size, m_uniform_buffer_alignment);
   if (!m_uniform_buffer.ReserveMemory(used_space + MAX_UNIFORM_BUFFER_SIZE, m_uniform_buffer_alignment))
   {
@@ -2522,9 +2521,12 @@ void VulkanDevice::UnmapUniformBuffer(u32 size)
 bool VulkanDevice::CreateNullTexture(Error* error)
 {
   std::unique_ptr<VulkanTexture> null_texture =
-    VulkanTexture::Create(1, 1, 1, 1, 1, GPUTexture::Type::Texture, GPUTextureFormat::RGBA8,
+    VulkanTexture::Create(1, 1, 1, 1, 1, GPUTexture::Type::Texture, GPUTextureFormat::RGBA8, GPUTexture::Flags::None,
+                          VK_FORMAT_R8G8B8A8_UNORM, error);
+  std::unique_ptr<VulkanTexture> null_image_texture =
+    VulkanTexture::Create(1, 1, 1, 1, 1, GPUTexture::Type::RenderTarget, GPUTextureFormat::RGBA8,
                           GPUTexture::Flags::AllowBindAsImage, VK_FORMAT_R8G8B8A8_UNORM, error);
-  if (!null_texture)
+  if (!null_texture || !null_image_texture)
   {
     Error::AddPrefix(error, "Failed to create null texture: ");
     return false;
@@ -2535,10 +2537,17 @@ bool VulkanDevice::CreateNullTexture(Error* error)
   const VkClearColorValue ccv{};
   null_texture->TransitionToLayout(cmdbuf, VulkanTexture::Layout::ClearDst);
   vkCmdClearColorImage(cmdbuf, null_texture->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &ccv, 1, &srr);
-  null_texture->TransitionToLayout(cmdbuf, VulkanTexture::Layout::General);
+  null_texture->TransitionToLayout(cmdbuf, VulkanTexture::Layout::ShaderReadOnly);
   Vulkan::SetObjectName(m_device, null_texture->GetImage(), "Null texture");
   Vulkan::SetObjectName(m_device, null_texture->GetView(), "Null texture view");
   m_empty_texture = std::move(null_texture);
+
+  null_image_texture->TransitionToLayout(cmdbuf, VulkanTexture::Layout::ClearDst);
+  vkCmdClearColorImage(cmdbuf, null_image_texture->GetImage(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &ccv, 1, &srr);
+  null_image_texture->TransitionToLayout(cmdbuf, VulkanTexture::Layout::General);
+  Vulkan::SetObjectName(m_device, null_image_texture->GetImage(), "Null image texture");
+  Vulkan::SetObjectName(m_device, null_image_texture->GetView(), "Null image texture view");
+  m_null_image_texture = std::move(null_image_texture);
 
   // Bind null texture and point sampler state to all.
   GPUSampler* point_sampler = GetSampler(GPUSampler::GetNearestConfig(), error);
@@ -3071,7 +3080,7 @@ void VulkanDevice::BeginRenderPass()
 
       ri.colorAttachmentCount = 1;
       ri.pColorAttachments = attachments.data();
-      ri.renderArea = {{}, {m_current_swap_chain->GetWidth(), m_current_swap_chain->GetHeight()}};
+      ri.renderArea = {{}, {m_current_swap_chain->GetPostRotatedWidth(), m_current_swap_chain->GetPostRotatedHeight()}};
     }
 
     m_current_render_pass = DYNAMIC_RENDERING_RENDER_PASS;
@@ -3136,7 +3145,8 @@ void VulkanDevice::BeginRenderPass()
       bi.framebuffer = m_current_swap_chain->GetCurrentFramebuffer();
       bi.renderPass = m_current_render_pass =
         GetSwapChainRenderPass(m_current_swap_chain->GetFormat(), VK_ATTACHMENT_LOAD_OP_LOAD);
-      bi.renderArea.extent = {m_current_swap_chain->GetWidth(), m_current_swap_chain->GetHeight()};
+      bi.renderArea.extent = {m_current_swap_chain->GetPostRotatedWidth(),
+                              m_current_swap_chain->GetPostRotatedHeight()};
     }
 
     DebugAssert(m_current_render_pass);
@@ -3554,7 +3564,9 @@ bool VulkanDevice::UpdateDescriptorSetsForLayout(u32 dirty)
   {
     Vulkan::DescriptorSetUpdateBuilder dsub;
 
-    if (m_optional_extensions.vk_khr_push_descriptor)
+    // Leave the existing textures bound if they have not changed, e.g. only the UBO offset did.
+    const bool textures_dirty = ((dirty & DIRTY_FLAG_TEXTURES_OR_SAMPLERS) != 0);
+    if (textures_dirty && m_optional_extensions.vk_khr_push_descriptor)
     {
       for (u32 i = 0; i < MAX_TEXTURE_SAMPLERS; i++)
       {
@@ -3568,7 +3580,7 @@ bool VulkanDevice::UpdateDescriptorSetsForLayout(u32 dirty)
       // set 1 if we have UBO, otherwise the push (texture) set is the first
       dsub.PushUpdate(m_current_command_buffer, vk_bind_point, vk_pipeline_layout, has_ubo ? 1 : 0);
     }
-    else
+    else if (textures_dirty)
     {
       VkDescriptorSet tds = AllocateDescriptorSet(m_multi_texture_ds_layout);
       if (tds == VK_NULL_HANDLE)
@@ -3588,19 +3600,15 @@ bool VulkanDevice::UpdateDescriptorSetsForLayout(u32 dirty)
     }
   }
 
-  if (m_num_current_render_targets > 0 &&
-      ((dirty & DIRTY_FLAG_RENDER_TARGETS) ||
-       (dirty & DIRTY_FLAG_PIPELINE_LAYOUT &&
-        (m_current_render_pass_flags & (GPUPipeline::ColorFeedbackLoop | GPUPipeline::BindRenderTargetsAsImages)))))
+  // Only the compute layout has a set for render targets. ROV is only used with HW batches, handled below.
+  if constexpr (is_compute)
   {
-    if (m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages)
+    if (m_num_current_render_targets > 0 && (dirty & (DIRTY_FLAG_RENDER_TARGETS | DIRTY_FLAG_PIPELINE_LAYOUT)) &&
+        (m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages))
     {
       VkDescriptorSet ids = AllocateDescriptorSet(m_image_ds_layout);
       if (ids == VK_NULL_HANDLE)
         return false;
-
-      // textures should have always been updated, so first_ds will correctly be either be 1 or 0
-      ds[num_ds++] = ids;
 
       Vulkan::DescriptorSetUpdateBuilder dsub;
       for (u32 i = 0; i < m_num_current_render_targets; i++)
@@ -3609,26 +3617,20 @@ bool VulkanDevice::UpdateDescriptorSetsForLayout(u32 dirty)
                                             m_current_render_targets[i]->GetVkLayout());
       }
 
-      // Annoyingly, have to update all slots...
-      const VkImageView null_view = static_cast<VulkanTexture*>(m_empty_texture.get())->GetView();
-      const VkImageLayout null_layout = static_cast<VulkanTexture*>(m_empty_texture.get())->GetVkLayout();
+      const VkImageView null_image_view = m_null_image_texture->GetView();
       for (u32 i = m_num_current_render_targets; i < MAX_IMAGE_RENDER_TARGETS; i++)
-        dsub.AddStorageImageDescriptorWrite(ids, i, null_view, null_layout);
+        dsub.AddStorageImageDescriptorWrite(ids, i, null_image_view, VK_IMAGE_LAYOUT_GENERAL);
 
       dsub.Update(m_device, false);
-    }
-    else
-    {
-      VkDescriptorSet ids = AllocateDescriptorSet(m_feedback_loop_ds_layout);
-      if (ids == VK_NULL_HANDLE)
-        return false;
 
-      ds[num_ds++] = ids;
-
-      Vulkan::DescriptorSetUpdateBuilder dsub;
-      dsub.AddInputAttachmentDescriptorWrite(ids, 0, m_current_render_targets[0]->GetView(),
-                                             m_current_render_targets[0]->GetVkLayout());
-      dsub.Update(m_device, false);
+      // Images are the last set (2). Only needs its own bind when the UBO is being bound, and the textures between
+      // them are not, i.e. they were pushed instead, or have not changed.
+      if (num_ds == 0)
+        first_ds = 2;
+      if ((first_ds + num_ds) == 2)
+        ds[num_ds++] = ids;
+      else
+        vkCmdBindDescriptorSets(m_current_command_buffer, vk_bind_point, vk_pipeline_layout, 2, 1, &ids, 0, nullptr);
     }
   }
 
@@ -3714,11 +3716,9 @@ bool VulkanDevice::UpdateDescriptorSetsForHWBatch(u32 dirty)
                                               m_current_render_targets[i]->GetVkLayout());
         }
 
-        const VulkanTexture* const empty_tex = static_cast<VulkanTexture*>(m_empty_texture.get());
+        const VkImageView null_image_view = m_null_image_texture->GetView();
         for (u32 i = m_num_current_render_targets; i < MAX_IMAGE_RENDER_TARGETS; i++)
-        {
-          dsub.AddStorageImageDescriptorWrite(rt_ds, i, empty_tex->GetView(), empty_tex->GetVkLayout());
-        }
+          dsub.AddStorageImageDescriptorWrite(rt_ds, i, null_image_view, VK_IMAGE_LAYOUT_GENERAL);
 
         dsub.Update(m_device, false);
       }
@@ -3890,21 +3890,6 @@ void VulkanDevice::Dispatch(u32 threads_x, u32 threads_y, u32 threads_z, u32 gro
 {
   PreDispatchCheck();
   s_stats.num_draws++;
-
-  const u32 groups_x = threads_x / group_size_x;
-  const u32 groups_y = threads_y / group_size_y;
-  const u32 groups_z = threads_z / group_size_z;
-  vkCmdDispatch(m_current_command_buffer, groups_x, groups_y, groups_z);
-}
-
-void VulkanDevice::DispatchWithPushConstants(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x,
-                                             u32 group_size_y, u32 group_size_z, const void* push_constants,
-                                             u32 push_constants_size)
-{
-  PreDispatchCheck();
-  s_stats.num_draws++;
-
-  PushUniformBuffer(true, push_constants, push_constants_size);
 
   const u32 groups_x = threads_x / group_size_x;
   const u32 groups_y = threads_y / group_size_y;

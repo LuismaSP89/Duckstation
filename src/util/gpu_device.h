@@ -791,6 +791,10 @@ public:
   virtual std::unique_ptr<GPUPipeline> CreatePipeline(const GPUPipeline::ComputeConfig& config,
                                                       Error* error = nullptr) = 0;
 
+  /// Writes any pending pipeline cache changes to disk, if the backend updates it incrementally.
+  /// Should be called after compiling a large number of pipelines.
+  virtual void FlushPipelineCache();
+
 #ifdef ENABLE_GPU_OBJECT_NAMES
   /// Debug messaging.
   virtual void PushDebugGroup(const char* name) = 0;
@@ -853,9 +857,6 @@ public:
                                                        DrawBarrier type);
   virtual void Dispatch(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x, u32 group_size_y,
                         u32 group_size_z) = 0;
-  virtual void DispatchWithPushConstants(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x,
-                                         u32 group_size_y, u32 group_size_z, const void* push_constants,
-                                         u32 push_constants_size) = 0;
 
   /// Returns false if the window was completely occluded.
   virtual GPUPresentResult BeginPresent(GPUSwapChain* swap_chain, u32 clear_color = DEFAULT_CLEAR_COLOR) = 0;

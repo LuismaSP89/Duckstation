@@ -112,12 +112,12 @@ public:
                                     u32 push_constants_size) override;
   void Dispatch(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x, u32 group_size_y,
                 u32 group_size_z) override;
-  void DispatchWithPushConstants(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x, u32 group_size_y,
-                                 u32 group_size_z, const void* push_constants, u32 push_constants_size) override;
 
   GPUPresentResult BeginPresent(GPUSwapChain* swap_chain, u32 clear_color) override;
   void EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u64 present_time) override;
   void SubmitPresent(GPUSwapChain* swap_chain) override;
+
+  void FlushPipelineCache() override;
 
   bool SetGPUTimingEnabled(bool enabled) override;
   float GetAndResetAccumulatedGPUTime() override;
@@ -132,8 +132,8 @@ public:
   void PostLinkProgram(const GPUPipeline::GraphicsConfig& plconfig, GLuint program_id);
   void UnrefProgram(const OpenGLPipeline::ProgramCacheKey& key);
 
-  OpenGLPipeline::VertexArrayCache::const_iterator LookupVAOCache(const OpenGLPipeline::VertexArrayCacheKey& key,
-                                                                  Error* error);
+  const OpenGLPipeline::VertexArrayCache::value_type* LookupVAOCache(const OpenGLPipeline::VertexArrayCacheKey& key,
+                                                                     Error* error);
   GLuint CreateVAO(std::span<const GPUPipeline::VertexAttribute> attributes, u32 stride, Error* error);
   void UnrefVAO(const OpenGLPipeline::VertexArrayCacheKey& key);
 
@@ -189,6 +189,7 @@ private:
                                         const GPUPipeline::GraphicsConfig& plconfig);
   void AddToPipelineCache(OpenGLPipeline::ProgramCacheItem* it);
   bool DiscardPipelineCache();
+  bool WritePipelineCacheIndex(Error* error);
 
   void ApplyRasterizationState(GPUPipeline::RasterizationState rs);
   void ApplyDepthState(GPUPipeline::DepthState ds);
@@ -209,16 +210,18 @@ private:
   OpenGLPipeline::ProgramCache m_program_cache;
   GPUFramebufferManager<GLuint, CreateFramebuffer, DestroyFramebuffer> m_framebuffer_manager;
 
-  // VAO cache - fixed max as key
-  OpenGLPipeline::VertexArrayCache::const_iterator m_last_vao = m_vao_cache.cend();
+  // VAO cache - fixed max as key. Pointers to elements are stable, iterators are not.
+  const OpenGLPipeline::VertexArrayCache::value_type* m_last_vao = nullptr;
+  GLuint m_default_vao = 0;
+  GLuint m_last_ssbo = 0;
   GPUPipeline::BlendState m_last_blend_state = {};
   GPUPipeline::RasterizationState m_last_rasterization_state = {};
   GPUPipeline::DepthState m_last_depth_state = {};
+  bool m_framebuffer_srgb = false;
   GLuint m_uniform_buffer_alignment = 1;
   GLuint m_last_program = 0;
   u32 m_last_texture_unit = 0;
   std::array<std::pair<GLuint, GLuint>, MAX_TEXTURE_SAMPLERS> m_last_samplers = {};
-  GLuint m_last_ssbo = 0;
   GSVector4i m_last_viewport = {};
   GSVector4i m_last_scissor = GSVector4i::cxpr(0, 0, 1, 1);
 
@@ -240,17 +243,17 @@ private:
   u8 m_waiting_timestamp_queries = 0;
   bool m_timestamp_query_started = false;
 
+  bool m_disable_pbo = false;
+  bool m_disable_async_download = false;
+  bool m_use_get_texture_sub_image = false;
+  bool m_pipeline_disk_cache_changed = false;
+
   std::FILE* m_pipeline_disk_cache_file = nullptr;
 #ifdef HAS_POSIX_FILE_LOCK
   FileSystem::POSIXLock m_pipeline_disk_cache_file_lock;
 #endif
   u32 m_pipeline_disk_cache_data_end = 0;
   u32 m_pipeline_disk_cache_version = 0;
-  bool m_pipeline_disk_cache_changed = false;
-
-  bool m_disable_pbo = false;
-  bool m_disable_async_download = false;
-  bool m_use_get_texture_sub_image = false;
 };
 
 class OpenGLSwapChain : public GPUSwapChain

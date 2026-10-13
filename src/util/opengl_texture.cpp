@@ -40,10 +40,10 @@ const std::tuple<GLenum, GLenum, GLenum>& OpenGLTexture::GetPixelFormatMapping(G
       {},                                                                                       // RGB5A1
       {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1},                                         // A1BGR5
       {GL_R8, GL_RED, GL_UNSIGNED_BYTE},                                                        // R8
-      {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_SHORT},                                     // D16
-      {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT},                                 // D24S8
+      {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT},                            // D16
+      {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8},                            // D24S8
       {GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT},                                    // D32F
-      {GL_DEPTH32F_STENCIL8, GL_DEPTH_STENCIL, GL_FLOAT},                                       // D32FS8
+      {GL_DEPTH32F_STENCIL8, GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV},              // D32FS8
       {GL_R16, GL_RED, GL_UNSIGNED_SHORT},                                                      // R16
       {GL_R16I, GL_RED_INTEGER, GL_SHORT},                                                      // R16I
       {GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT},                                            // R16U
@@ -58,7 +58,7 @@ const std::tuple<GLenum, GLenum, GLenum>& OpenGLTexture::GetPixelFormatMapping(G
       {GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},                                                  // RGBA16
       {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},                                                     // RGBA16F
       {GL_RGBA32F, GL_RGBA, GL_FLOAT},                                                          // RGBA32F
-      {GL_RGB10_A2, GL_BGRA, GL_UNSIGNED_INT_2_10_10_10_REV},                                   // RGB10A2
+      {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV},                                   // RGB10A2
       {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},                                             // SRGBA8
       {GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, GL_UNSIGNED_BYTE},   // BC1
       {GL_COMPRESSED_RGBA_S3TC_DXT3_EXT, GL_COMPRESSED_RGBA_S3TC_DXT3_EXT, GL_UNSIGNED_BYTE},   // BC2
@@ -71,15 +71,15 @@ const std::tuple<GLenum, GLenum, GLenum>& OpenGLTexture::GetPixelFormatMapping(G
     mapping_gles = {{
       {},                                                                                       // Unknown
       {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE},                                                    // RGBA8
-      {GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE},                                                    // BGRA8
+      {},                                                                                       // BGRA8
       {GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5},                                             // RGB565
       {},                                                                                       // RGB5A1
       {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1},                                         // A1BGR5
       {GL_R8, GL_RED, GL_UNSIGNED_BYTE},                                                        // R8
-      {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_SHORT},                                     // D16
-      {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT},                                 // D24S8
+      {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT},                            // D16
+      {GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8},                            // D24S8
       {GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT},                                    // D32F
-      {GL_DEPTH32F_STENCIL8, GL_DEPTH_STENCIL, GL_FLOAT},                                       // D32FS8
+      {GL_DEPTH32F_STENCIL8, GL_DEPTH_STENCIL, GL_FLOAT_32_UNSIGNED_INT_24_8_REV},              // D32FS8
       {GL_R16F, GL_RED, GL_HALF_FLOAT},                                                         // R16
       {GL_R16I, GL_RED_INTEGER, GL_SHORT},                                                      // R16I
       {GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT},                                            // R16U
@@ -88,13 +88,13 @@ const std::tuple<GLenum, GLenum, GLenum>& OpenGLTexture::GetPixelFormatMapping(G
       {GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT},                                              // R32U
       {GL_R32F, GL_RED, GL_FLOAT},                                                              // R32F
       {GL_RG8, GL_RG, GL_UNSIGNED_BYTE},                                                        // RG8
-      {GL_RG16, GL_RG, GL_HALF_FLOAT},                                                          // RG16
+      {GL_RG16F, GL_RG, GL_HALF_FLOAT},                                                         // RG16
       {GL_RG16F, GL_RG, GL_HALF_FLOAT},                                                         // RG16F
       {GL_RG32F, GL_RG, GL_FLOAT},                                                              // RG32F
-      {GL_RGBA16, GL_RGBA, GL_HALF_FLOAT},                                                      // RGBA16
+      {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},                                                     // RGBA16
       {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},                                                     // RGBA16F
       {GL_RGBA32F, GL_RGBA, GL_FLOAT},                                                          // RGBA32F
-      {GL_RGB10_A2, GL_BGRA, GL_UNSIGNED_INT_2_10_10_10_REV},                                   // RGB10A2
+      {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV},                                   // RGB10A2
       {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},                                             // SRGBA8
       {GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, GL_UNSIGNED_BYTE},   // BC1
       {GL_COMPRESSED_RGBA_S3TC_DXT3_EXT, GL_COMPRESSED_RGBA_S3TC_DXT3_EXT, GL_UNSIGNED_BYTE},   // BC2
@@ -108,6 +108,13 @@ const std::tuple<GLenum, GLenum, GLenum>& OpenGLTexture::GetPixelFormatMapping(G
 ALWAYS_INLINE static u32 GetUploadAlignment(u32 pitch)
 {
   return ((pitch % 4) == 0) ? 4 : (((pitch % 2) == 0) ? 2 : 1);
+}
+
+ALWAYS_INLINE static u32 GetStreamUploadPitch(GPUTextureFormat format, u32 width)
+{
+  // GL_UNPACK_ROW_LENGTH is ignored for compressed data, so it has to be tightly packed.
+  const u32 pitch = GPUTexture::CalcUploadPitch(format, width);
+  return GPUTexture::IsCompressedFormat(format) ? pitch : Common::AlignUpPow2(pitch, TEXTURE_UPLOAD_PITCH_ALIGNMENT);
 }
 
 OpenGLTexture::OpenGLTexture(u32 width, u32 height, u32 layers, u32 levels, u32 samples, Type type,
@@ -130,8 +137,10 @@ OpenGLTexture::~OpenGLTexture()
 
 bool OpenGLTexture::UseTextureStorage(bool multisampled)
 {
-  return (GLAD_GL_VERSION_4_2 || GLAD_GL_ARB_texture_storage) ||
-         (multisampled ? GLAD_GL_ES_VERSION_3_1 : GLAD_GL_ES_VERSION_3_0);
+  if (multisampled)
+    return (GLAD_GL_VERSION_4_3 || GLAD_GL_ARB_texture_storage_multisample || GLAD_GL_ES_VERSION_3_1);
+
+  return (GLAD_GL_VERSION_4_2 || GLAD_GL_ARB_texture_storage || GLAD_GL_ES_VERSION_3_0);
 }
 
 bool OpenGLTexture::UseTextureStorage() const
@@ -177,7 +186,7 @@ std::unique_ptr<OpenGLTexture> OpenGLTexture::Create(u32 width, u32 height, u32 
     }
 
     glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, levels);
+    glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, levels - 1);
   }
   else
   {
@@ -193,7 +202,6 @@ std::unique_ptr<OpenGLTexture> OpenGLTexture::Create(u32 width, u32 height, u32 
 
     if (!use_texture_storage || data)
     {
-      const u32 pixel_size = GetPixelSize(format);
       const u32 alignment = GetUploadAlignment(data_pitch);
       if (data)
       {
@@ -205,24 +213,46 @@ std::unique_ptr<OpenGLTexture> OpenGLTexture::Create(u32 width, u32 height, u32 
           glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
       }
 
+      // Compressed data can't use the row length, repack it if the caller's pitch has padding.
+      DynamicHeapArray<u8> packed_data;
+      if (data && is_compressed && data_pitch != CalcUploadPitch(format, width))
+      {
+        const u32 packed_pitch = CalcUploadPitch(format, width);
+        packed_data.resize(CalcUploadSize(format, height, packed_pitch));
+        CopyTextureDataForUpload(width, height, format, packed_data.data(), packed_pitch, data, data_pitch);
+      }
+
       const u8* data_ptr = static_cast<const u8*>(data);
       u32 current_width = width;
       u32 current_height = height;
       for (u32 i = 0; i < levels; i++)
       {
+        const u8* const level_data_ptr = data_ptr;
+        const u32 compressed_size = CalcUploadSize(format, current_height, CalcUploadPitch(format, current_width));
+        if (i == 0 && !packed_data.empty())
+        {
+          data_ptr = packed_data.data();
+        }
+        else if (data && i > 0)
+        {
+          glPixelStorei(GL_UNPACK_ROW_LENGTH, CalcUploadRowLengthFromPitch(format, data_pitch));
+          glPixelStorei(GL_UNPACK_ALIGNMENT, GetUploadAlignment(data_pitch));
+        }
+
         if (use_texture_storage)
         {
           if (is_compressed)
           {
-            const u32 size = CalcUploadSize(format, current_height, data_pitch);
             if (layers > 1)
             {
-              glCompressedTexSubImage3D(target, i, 0, 0, 0, current_width, current_height, layers, gl_format, size,
+              glCompressedTexSubImage3D(target, i, 0, 0, 0, current_width, current_height, layers, gl_format,
+                                        compressed_size,
                                         data_ptr);
             }
             else
             {
-              glCompressedTexSubImage2D(target, i, 0, 0, current_width, current_height, gl_format, size, data_ptr);
+              glCompressedTexSubImage2D(target, i, 0, 0, current_width, current_height, gl_format, compressed_size,
+                                        data_ptr);
             }
           }
           else
@@ -237,15 +267,16 @@ std::unique_ptr<OpenGLTexture> OpenGLTexture::Create(u32 width, u32 height, u32 
         {
           if (is_compressed)
           {
-            const u32 size = CalcUploadSize(format, current_height, data_pitch);
             if (layers > 1)
             {
-              glCompressedTexImage3D(target, i, gl_internal_format, current_width, current_height, layers, 0, size,
+              glCompressedTexImage3D(target, i, gl_internal_format, current_width, current_height, layers, 0,
+                                     compressed_size,
                                      data_ptr);
             }
             else
             {
-              glCompressedTexImage2D(target, i, gl_internal_format, current_width, current_height, 0, size, data_ptr);
+              glCompressedTexImage2D(target, i, gl_internal_format, current_width, current_height, 0, compressed_size,
+                                     data_ptr);
             }
           }
           else
@@ -263,19 +294,19 @@ std::unique_ptr<OpenGLTexture> OpenGLTexture::Create(u32 width, u32 height, u32 
           }
         }
 
-        if (data_ptr)
-          data_ptr += data_pitch * current_height;
+        if (level_data_ptr)
+          data_ptr = level_data_ptr + CalcUploadSize(format, current_height, data_pitch);
 
         current_width = (current_width > 1) ? (current_width / 2u) : current_width;
         current_height = (current_height > 1) ? (current_height / 2u) : current_height;
 
-        // TODO: Incorrect assumption.
-        data_pitch = pixel_size * current_width;
+        // Subsequent levels are assumed to be tightly packed.
+        data_pitch = CalcUploadPitch(format, current_width);
       }
 
       if (data)
       {
-        if (alignment != DEFAULT_UPLOAD_ALIGNMENT)
+        if (alignment != DEFAULT_UPLOAD_ALIGNMENT || levels > 1)
           glPixelStorei(GL_UNPACK_ALIGNMENT, DEFAULT_UPLOAD_ALIGNMENT);
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
       }
@@ -310,8 +341,8 @@ bool OpenGLTexture::Update(u32 x, u32 y, u32 width, u32 height, const void* data
   // Worth using the PBO? Driver probably knows better...
   const GLenum target = GetGLTarget();
   const auto [gl_internal_format, gl_format, gl_type] = GetPixelFormatMapping(m_format, OpenGLDevice::IsGLES());
-  const u32 preferred_pitch = Common::AlignUpPow2(CalcUploadPitch(width), TEXTURE_UPLOAD_PITCH_ALIGNMENT);
-  const u32 map_size = CalcUploadSize(height, pitch);
+  const u32 preferred_pitch = GetStreamUploadPitch(m_format, width);
+  const u32 map_size = CalcUploadSize(height, preferred_pitch);
   OpenGLStreamBuffer* sb = OpenGLDevice::GetTextureStreamBuffer();
 
   CommitClear();
@@ -325,6 +356,16 @@ bool OpenGLTexture::Update(u32 x, u32 y, u32 width, u32 height, const void* data
   if (!sb || map_size > sb->GetChunkSize())
   {
     GL_INS_FMT("Not using PBO for map size {}", map_size);
+
+    // Compressed data can't use the row length, repack it if the caller's pitch has padding.
+    DynamicHeapArray<u8> packed_data;
+    if (IsCompressedFormat() && pitch != preferred_pitch)
+    {
+      packed_data.resize(map_size);
+      CopyTextureDataForUpload(width, height, m_format, packed_data.data(), preferred_pitch, data, pitch);
+      data = packed_data.data();
+      pitch = preferred_pitch;
+    }
 
     const u32 alignment = GetUploadAlignment(pitch);
     if (alignment != DEFAULT_UPLOAD_ALIGNMENT)
@@ -361,7 +402,7 @@ bool OpenGLTexture::Update(u32 x, u32 y, u32 width, u32 height, const void* data
     glPixelStorei(GL_UNPACK_ROW_LENGTH, CalcUploadRowLengthFromPitch(preferred_pitch));
     if (IsCompressedFormat())
     {
-      const u32 size = CalcUploadSize(height, pitch);
+      const u32 size = map_size;
       if (IsTextureArray())
       {
         glCompressedTexSubImage3D(target, level, x, y, layer, width, height, 1, gl_format, size,
@@ -402,7 +443,7 @@ bool OpenGLTexture::Map(void** map, u32* map_stride, u32 x, u32 y, u32 width, u3
   if ((x + width) > GetMipWidth(level) || (y + height) > GetMipHeight(level) || layer >= m_layers || level >= m_levels)
     return false;
 
-  const u32 pitch = Common::AlignUpPow2(CalcUploadPitch(width), TEXTURE_UPLOAD_PITCH_ALIGNMENT);
+  const u32 pitch = GetStreamUploadPitch(m_format, width);
   const u32 upload_size = CalcUploadSize(height, pitch);
   OpenGLStreamBuffer* sb = OpenGLDevice::GetTextureStreamBuffer();
   if (!sb || upload_size > sb->GetSize())
@@ -426,7 +467,7 @@ void OpenGLTexture::Unmap()
 {
   CommitClear();
 
-  const u32 pitch = Common::AlignUpPow2(CalcUploadPitch(m_map_width), TEXTURE_UPLOAD_PITCH_ALIGNMENT);
+  const u32 pitch = GetStreamUploadPitch(m_format, m_map_width);
   const u32 upload_size = CalcUploadSize(m_map_height, pitch);
 
   GPUDevice::GetStatistics().buffer_streamed += upload_size;
@@ -508,6 +549,7 @@ OpenGLSampler::OpenGLSampler(GLuint id) : GPUSampler(), m_id(id)
 OpenGLSampler::~OpenGLSampler()
 {
   OpenGLDevice::GetInstance().UnbindSampler(m_id);
+  glDeleteSamplers(1, &m_id);
 }
 
 #ifdef ENABLE_GPU_OBJECT_NAMES
@@ -552,9 +594,16 @@ std::unique_ptr<GPUSampler> OpenGLDevice::CreateSampler(const GPUSampler::Config
     return {};
   }
 
-  glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, ta[static_cast<u8>(config.address_u.GetValue())]);
-  glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, ta[static_cast<u8>(config.address_v.GetValue())]);
-  glSamplerParameteri(sampler, GL_TEXTURE_WRAP_R, ta[static_cast<u8>(config.address_w.GetValue())]);
+  // Border clamp is not available in GLES prior to 3.2 without an extension, fall back to edge clamp.
+  const bool has_border_clamp =
+    (!IsGLES() || GLAD_GL_ES_VERSION_3_2 || GLAD_GL_EXT_texture_border_clamp || GLAD_GL_OES_texture_border_clamp);
+  const auto get_address_mode = [has_border_clamp](GPUSampler::AddressMode mode) {
+    return (mode == GPUSampler::AddressMode::ClampToBorder && !has_border_clamp) ? GL_CLAMP_TO_EDGE :
+                                                                                  ta[static_cast<u8>(mode)];
+  };
+  glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, get_address_mode(config.address_u.GetValue()));
+  glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, get_address_mode(config.address_v.GetValue()));
+  glSamplerParameteri(sampler, GL_TEXTURE_WRAP_R, get_address_mode(config.address_w.GetValue()));
   const u8 mipmap_on_off = (config.min_lod != 0 || config.max_lod != 0);
   glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER,
                       filters[mipmap_on_off][static_cast<u8>(config.mip_filter.GetValue())]
@@ -564,14 +613,48 @@ std::unique_ptr<GPUSampler> OpenGLDevice::CreateSampler(const GPUSampler::Config
     filters[0][static_cast<u8>(config.mip_filter.GetValue())][static_cast<u8>(config.mag_filter.GetValue())]);
   glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, static_cast<float>(config.min_lod));
   glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, static_cast<float>(config.max_lod));
-  glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, config.GetBorderFloatColor().data());
-  if (config.anisotropy > 1)
+  if (has_border_clamp)
+    glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, config.GetBorderFloatColor().data());
+  if (config.anisotropy > 1 && (GLAD_GL_VERSION_4_6 || GLAD_GL_ARB_texture_filter_anisotropic ||
+                                GLAD_GL_EXT_texture_filter_anisotropic))
+  {
     glSamplerParameterf(sampler, GL_TEXTURE_MAX_ANISOTROPY, static_cast<float>(config.anisotropy.GetValue()));
+  }
 
   return std::unique_ptr<GPUSampler>(new OpenGLSampler(sampler));
 }
 
 //////////////////////////////////////////////////////////////////////////
+
+static void ClearColorBuffer(const OpenGLTexture* tex, GLint idx)
+{
+  // Integer targets have to be cleared with the matching entry point, the float variant is undefined.
+  const auto color = tex->GetUNormClearColor();
+  switch (tex->GetFormat())
+  {
+    case GPUTextureFormat::R16I:
+    case GPUTextureFormat::R32I:
+    {
+      const GLint icolor[4] = {static_cast<GLint>(color[0]), static_cast<GLint>(color[1]),
+                               static_cast<GLint>(color[2]), static_cast<GLint>(color[3])};
+      glClearBufferiv(GL_COLOR, idx, icolor);
+    }
+    break;
+
+    case GPUTextureFormat::R16U:
+    case GPUTextureFormat::R32U:
+    {
+      const GLuint ucolor[4] = {static_cast<GLuint>(color[0]), static_cast<GLuint>(color[1]),
+                                static_cast<GLuint>(color[2]), static_cast<GLuint>(color[3])};
+      glClearBufferuiv(GL_COLOR, idx, ucolor);
+    }
+    break;
+
+    default:
+      glClearBufferfv(GL_COLOR, idx, color.data());
+      break;
+  }
+}
 
 void OpenGLDevice::CommitClear(OpenGLTexture* tex)
 {
@@ -581,22 +664,9 @@ void OpenGLDevice::CommitClear(OpenGLTexture* tex)
     {
       tex->SetState(GPUTexture::State::Dirty);
 
+      // Not worth switching framebuffers just for a hint if we can't invalidate the texture directly.
       if (glInvalidateTexImage)
-      {
         glInvalidateTexImage(tex->GetGLId(), 0);
-      }
-      else if (glInvalidateFramebuffer)
-      {
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_write_fbo);
-
-        const GLenum attachment = tex->IsDepthStencil() ? GL_DEPTH_ATTACHMENT : GL_COLOR_ATTACHMENT0;
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, attachment, tex->GetGLTarget(), tex->GetGLId(), 0);
-
-        glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 1, &attachment);
-
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, attachment, GL_TEXTURE_2D, 0, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_current_fbo);
-      }
     }
     break;
 
@@ -606,9 +676,30 @@ void OpenGLDevice::CommitClear(OpenGLTexture* tex)
 
       if (glClearTexImage)
       {
-        const auto [gl_internal_format, gl_format, gl_type] =
-          OpenGLTexture::GetPixelFormatMapping(tex->GetFormat(), m_gl_context->IsGLES());
-        glClearTexImage(tex->GetGLId(), 0, gl_format, gl_type, &tex->GetClearValue());
+        // The clear value is always RGBA8 or a float depth, so it can't be passed through in the texture's format.
+        const auto color = tex->GetUNormClearColor();
+        if (tex->IsDepthStencil())
+        {
+          const struct
+          {
+            float depth;
+            u32 stencil;
+          } ds = {tex->GetClearDepth(), 0};
+          const bool has_stencil = GPUTexture::IsDepthStencilFormat(tex->GetFormat());
+          glClearTexImage(tex->GetGLId(), 0, has_stencil ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
+                          has_stencil ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV : GL_FLOAT, &ds);
+        }
+        else if (tex->GetFormat() == GPUTextureFormat::R16I || tex->GetFormat() == GPUTextureFormat::R16U ||
+                 tex->GetFormat() == GPUTextureFormat::R32I || tex->GetFormat() == GPUTextureFormat::R32U)
+        {
+          const GLint icolor[4] = {static_cast<GLint>(color[0]), static_cast<GLint>(color[1]),
+                                   static_cast<GLint>(color[2]), static_cast<GLint>(color[3])};
+          glClearTexImage(tex->GetGLId(), 0, GL_RGBA_INTEGER, GL_INT, icolor);
+        }
+        else
+        {
+          glClearTexImage(tex->GetGLId(), 0, GL_RGBA, GL_FLOAT, color.data());
+        }
       }
       else
       {
@@ -619,6 +710,9 @@ void OpenGLDevice::CommitClear(OpenGLTexture* tex)
 
         if (tex->IsDepthStencil())
         {
+          // Drop any colour target left over from a copy, otherwise the clear is clipped to its size.
+          glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+
           const float depth = tex->GetClearDepth();
           glDisable(GL_SCISSOR_TEST);
           if (!m_last_depth_state.depth_write)
@@ -630,11 +724,10 @@ void OpenGLDevice::CommitClear(OpenGLTexture* tex)
         }
         else
         {
-          const auto color = tex->GetUNormClearColor();
           glDisable(GL_SCISSOR_TEST);
           if (m_last_blend_state.write_mask != 0xf)
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-          glClearBufferfv(GL_COLOR, 0, color.data());
+          ClearColorBuffer(tex, 0);
           if (m_last_blend_state.write_mask != 0xf)
           {
             glColorMask(m_last_blend_state.write_r, m_last_blend_state.write_g, m_last_blend_state.write_b,
@@ -673,11 +766,10 @@ void OpenGLDevice::CommitRTClearInFB(OpenGLTexture* tex, u32 idx)
 
     case GPUTexture::State::Cleared:
     {
-      const auto color = tex->GetUNormClearColor();
       glDisable(GL_SCISSOR_TEST);
       if (m_last_blend_state.write_mask != 0xf)
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-      glClearBufferfv(GL_COLOR, static_cast<GLint>(idx), color.data());
+      ClearColorBuffer(tex, static_cast<GLint>(idx));
       if (m_last_blend_state.write_mask != 0xf)
       {
         glColorMask(m_last_blend_state.write_r, m_last_blend_state.write_g, m_last_blend_state.write_b,
@@ -800,7 +892,7 @@ void OpenGLTextureBuffer::SetDebugName(std::string_view name)
 {
   if (glObjectLabel)
   {
-    glObjectLabel(GL_TEXTURE, m_buffer->GetGLBufferId(), static_cast<GLsizei>(name.length()),
+    glObjectLabel(GL_BUFFER, m_buffer->GetGLBufferId(), static_cast<GLsizei>(name.length()),
                   static_cast<const GLchar*>(name.data()));
   }
 }
@@ -898,7 +990,7 @@ std::unique_ptr<OpenGLDownloadTexture> OpenGLDownloadTexture::Create(u32 width, 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer_id);
 
     const u32 flags = GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
-    const u32 map_flags = GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT;
+    const u32 map_flags = GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
 
     if (GLAD_GL_VERSION_4_4 || GLAD_GL_ARB_buffer_storage)
       glBufferStorage(GL_PIXEL_PACK_BUFFER, buffer_size, nullptr, flags);
@@ -976,13 +1068,21 @@ void OpenGLDownloadTexture::CopyFromTexture(u32 dst_x, u32 dst_y, GPUTexture* sr
     OpenGLTexture::GetPixelFormatMapping(srcgl->GetFormat(), dev.IsGLES());
   if (dev.m_use_get_texture_sub_image)
   {
-    glGetTextureSubImage(srcgl->GetGLId(), src_level, src_x, src_y, 0, width, height, 1, gl_format, gl_type,
+    glGetTextureSubImage(srcgl->GetGLId(), src_level, src_x, src_y, src_layer, width, height, 1, gl_format, gl_type,
                          m_current_pitch * height, m_cpu_buffer + copy_offset);
   }
   else
   {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, dev.m_read_fbo);
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcgl->GetGLId(), 0);
+    if (srcgl->IsTextureArray())
+    {
+      glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcgl->GetGLId(), src_level, src_layer);
+    }
+    else
+    {
+      glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcgl->GetGLTarget(), srcgl->GetGLId(),
+                             src_level);
+    }
 
     glReadPixels(src_x, src_y, width, height, gl_format, gl_type, m_cpu_buffer + copy_offset);
 
@@ -1037,7 +1137,7 @@ void OpenGLDownloadTexture::Flush()
 
 void OpenGLDownloadTexture::SetDebugName(std::string_view name)
 {
-  if (name.empty())
+  if (name.empty() || m_buffer_id != 0)
     return;
 
   if (glObjectLabel)

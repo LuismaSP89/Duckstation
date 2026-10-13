@@ -404,7 +404,16 @@ GLuint OpenGLDevice::CompileProgram(const GPUPipeline::GraphicsConfig& plconfig,
     if (!is_gles)
       glBindFragDataLocation(program_id, 0, "o_col0");
 
-    if (m_features.dual_source_blend)
+    // With multiple render targets, o_col1 is the second target, not the second blend source.
+    if (plconfig.GetRenderTargetCount() > 1)
+    {
+      if (!is_gles)
+      {
+        for (u32 i = 1; i < plconfig.GetRenderTargetCount(); i++)
+          glBindFragDataLocation(program_id, i, TinyString::from_format("o_col{}", i));
+      }
+    }
+    else if (m_features.dual_source_blend)
     {
       if (GLAD_GL_VERSION_3_3 || GLAD_GL_ARB_blend_func_extended)
       {
@@ -463,6 +472,12 @@ GLuint OpenGLDevice::CompileProgram(const GPUPipeline::GraphicsConfig& plconfig,
     }
   }
 
+  // Shaders are not needed after linking, detach them so they can be freed.
+  glDetachShader(program_id, vertex_shader->GetGLId());
+  glDetachShader(program_id, fragment_shader->GetGLId());
+  if (geometry_shader)
+    glDetachShader(program_id, geometry_shader->GetGLId());
+
   PostLinkProgram(plconfig, program_id);
 
   return program_id;
@@ -516,14 +531,14 @@ void OpenGLDevice::UnrefProgram(const OpenGLPipeline::ProgramCacheKey& key)
     m_program_cache.erase(it);
 }
 
-OpenGLPipeline::VertexArrayCache::const_iterator
+const OpenGLPipeline::VertexArrayCache::value_type*
 OpenGLDevice::LookupVAOCache(const OpenGLPipeline::VertexArrayCacheKey& key, Error* error)
 {
   OpenGLPipeline::VertexArrayCache::iterator it = m_vao_cache.find(key);
   if (it != m_vao_cache.end())
   {
     it->second.reference_count++;
-    return it;
+    return &(*it);
   }
 
   OpenGLPipeline::VertexArrayCacheItem item;
@@ -531,10 +546,10 @@ OpenGLDevice::LookupVAOCache(const OpenGLPipeline::VertexArrayCacheKey& key, Err
     CreateVAO(std::span<const GPUPipeline::VertexAttribute>(key.vertex_attributes, key.num_vertex_attributes),
               key.vertex_attribute_stride, error);
   if (item.vao_id == 0)
-    return m_vao_cache.cend();
+    return nullptr;
 
   item.reference_count = 1;
-  return m_vao_cache.emplace(key, item).first;
+  return &(*m_vao_cache.emplace(key, item).first);
 }
 
 GLuint OpenGLDevice::CreateVAO(std::span<const GPUPipeline::VertexAttribute> attributes, u32 stride, Error* error)
@@ -565,8 +580,7 @@ GLuint OpenGLDevice::CreateVAO(std::span<const GPUPipeline::VertexAttribute> att
       glVertexAttribPointer(i, va.components, m.type, m.normalized, stride, ptr);
   }
 
-  if (m_last_vao != m_vao_cache.cend())
-    glBindVertexArray(m_last_vao->second.vao_id);
+  glBindVertexArray(m_last_vao ? m_last_vao->second.vao_id : m_default_vao);
 
   return vao;
 }
@@ -608,17 +622,17 @@ void OpenGLDevice::UnrefVAO(const OpenGLPipeline::VertexArrayCacheKey& key)
   if ((--it->second.reference_count) > 0)
     return;
 
-  if (m_last_vao == it)
+  if (m_last_vao == &(*it))
   {
-    m_last_vao = m_vao_cache.cend();
-    glBindVertexArray(0);
+    m_last_vao = nullptr;
+    glBindVertexArray(m_default_vao);
   }
 
   glDeleteVertexArrays(1, &it->second.vao_id);
   m_vao_cache.erase(it);
 }
 
-OpenGLPipeline::OpenGLPipeline(const ProgramCacheKey& key, GLuint program, VertexArrayCache::const_iterator vao,
+OpenGLPipeline::OpenGLPipeline(const ProgramCacheKey& key, GLuint program, const VertexArrayCache::value_type* vao,
                                const RasterizationState& rs, const DepthState& ds, const BlendState& bs,
                                GLenum topology)
   : m_key(key), m_vao(vao), m_program(program), m_blend_state(bs), m_rasterization_state(rs), m_depth_state(ds),
@@ -662,8 +676,8 @@ std::unique_ptr<GPUPipeline> OpenGLDevice::CreatePipeline(const GPUPipeline::Gra
   if (program_id == 0)
     return {};
 
-  const OpenGLPipeline::VertexArrayCache::const_iterator vao = LookupVAOCache(pkey.va_key, error);
-  if (vao == m_vao_cache.cend())
+  const OpenGLPipeline::VertexArrayCache::value_type* vao = LookupVAOCache(pkey.va_key, error);
+  if (!vao)
   {
     UnrefProgram(pkey);
     return {};
@@ -921,9 +935,17 @@ bool OpenGLDevice::CreatePipelineCache(const std::string& path, Error* error)
     return false;
 #else
   // Manually truncate it, that way we don't blow away another process's file on Linux.
-  m_pipeline_disk_cache_file = FileSystem::OpenCFile(path.c_str(), "a+b", error);
-  if (!m_pipeline_disk_cache_file || !FileSystem::FSeek64(m_pipeline_disk_cache_file, 0, SEEK_SET, error))
+  // Can't use append mode, because the index gets rewritten in the middle of the file when flushing.
+  m_pipeline_disk_cache_file = FileSystem::OpenExistingOrCreateCFile(path.c_str(), -1, error);
+  if (!m_pipeline_disk_cache_file)
     return false;
+
+  if (!FileSystem::FSeek64(m_pipeline_disk_cache_file, 0, SEEK_SET, error))
+  {
+    std::fclose(m_pipeline_disk_cache_file);
+    m_pipeline_disk_cache_file = nullptr;
+    return false;
+  }
 
   m_pipeline_disk_cache_file_lock = FileSystem::POSIXLock(m_pipeline_disk_cache_file, false, error);
   if (!m_pipeline_disk_cache_file_lock.IsLocked())
@@ -940,6 +962,7 @@ bool OpenGLDevice::CreatePipelineCache(const std::string& path, Error* error)
     m_pipeline_disk_cache_file_lock = {};
     std::fclose(m_pipeline_disk_cache_file);
     m_pipeline_disk_cache_file = nullptr;
+    return false;
   }
 #endif
 
@@ -1018,6 +1041,7 @@ void OpenGLDevice::AddToPipelineCache(OpenGLPipeline::ProgramCacheItem* it)
   else if (static_cast<size_t>(binary_size) != uncompressed_data.size()) [[unlikely]]
   {
     WARNING_LOG("Size changed from {} to {} after glGetProgramBinary()", uncompressed_data.size(), binary_size);
+    uncompressed_data.resize(static_cast<size_t>(binary_size));
   }
 
   Error error;
@@ -1037,6 +1061,7 @@ void OpenGLDevice::AddToPipelineCache(OpenGLPipeline::ProgramCacheItem* it)
       std::fwrite(compressed_data->data(), compressed_data->size(), 1, m_pipeline_disk_cache_file) != 1)
   {
     ERROR_LOG("Failed to write binary to disk cache.");
+    return;
   }
 
   it->file_format = format;
@@ -1105,12 +1130,27 @@ bool OpenGLDevice::ClosePipelineCache(const std::string& filename, Error* error)
     return true;
   }
 
-  // Rewrite footer/index entries.
+  const bool result = WritePipelineCacheIndex(error);
+  close_cache();
+  return result;
+}
+
+void OpenGLDevice::FlushPipelineCache()
+{
+  if (!m_pipeline_disk_cache_file || !m_pipeline_disk_cache_changed)
+    return;
+
+  Error error;
+  if (!WritePipelineCacheIndex(&error))
+    ERROR_LOG("Failed to flush pipeline cache: {}", error.GetDescription());
+}
+
+bool OpenGLDevice::WritePipelineCacheIndex(Error* error)
+{
+  // Rewrite footer/index entries. New programs are written over the top of the old index, so this has to happen
+  // before the file is usable again.
   if (!FileSystem::FSeek64(m_pipeline_disk_cache_file, m_pipeline_disk_cache_data_end, SEEK_SET, error))
-  {
-    close_cache();
     return false;
-  }
 
   u32 count = 0;
 
@@ -1129,7 +1169,6 @@ bool OpenGLDevice::ClosePipelineCache(const std::string& filename, Error* error)
     if (std::fwrite(&entry, sizeof(entry), 1, m_pipeline_disk_cache_file) != 1) [[unlikely]]
     {
       Error::SetErrno(error, "fwrite() for entry failed: ", errno);
-      close_cache();
       return false;
     }
 
@@ -1144,10 +1183,9 @@ bool OpenGLDevice::ClosePipelineCache(const std::string& filename, Error* error)
       std::fflush(m_pipeline_disk_cache_file) != 0) [[unlikely]]
   {
     Error::SetErrno(error, "fwrite() for footer failed: ", errno);
-    close_cache();
     return false;
   }
 
-  close_cache();
+  m_pipeline_disk_cache_changed = false;
   return true;
 }

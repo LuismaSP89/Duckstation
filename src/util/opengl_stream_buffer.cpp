@@ -447,7 +447,8 @@ public:
     glBindBuffer(target, buffer_id);
 
     const u32 flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | (coherent ? GL_MAP_COHERENT_BIT : 0);
-    const u32 map_flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | (coherent ? 0 : GL_MAP_FLUSH_EXPLICIT_BIT);
+    const u32 map_flags =
+      GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | (coherent ? GL_MAP_COHERENT_BIT : GL_MAP_FLUSH_EXPLICIT_BIT);
     if (GLAD_GL_VERSION_4_4 || GLAD_GL_ARB_buffer_storage)
       glBufferStorage(target, size, nullptr, flags);
     else if (GLAD_GL_EXT_buffer_storage)
@@ -483,6 +484,9 @@ private:
 
 std::unique_ptr<OpenGLStreamBuffer> OpenGLStreamBuffer::Create(GLenum target, u32 size, Error* error /* = nullptr */)
 {
+  // The syncing buffers split the buffer into equally-sized blocks, so the size has to be divisible.
+  size = Common::AlignUp(size, static_cast<u32>(SyncingStreamBuffer::NUM_SYNC_POINTS));
+
   // In terms of speed: persistent mapping > map+sync -> map+orphan -> bufferdata/subdata
 
   std::unique_ptr<OpenGLStreamBuffer> buf;

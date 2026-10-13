@@ -149,8 +149,6 @@ public:
                                                DrawBarrier type) override;
   void Dispatch(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x, u32 group_size_y,
                 u32 group_size_z) override;
-  void DispatchWithPushConstants(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x, u32 group_size_y,
-                                 u32 group_size_z, const void* push_constants, u32 push_constants_size) override;
 
   bool SetGPUTimingEnabled(bool enabled) override;
   float GetAndResetAccumulatedGPUTime() override;
@@ -183,9 +181,6 @@ public:
   VkRenderPass GetRenderPass(VulkanTexture* const* rts, u32 num_rts, VulkanTexture* ds,
                              GPUPipeline::RenderPassFlag render_pass_flags);
   VkRenderPass GetSwapChainRenderPass(GPUTextureFormat format, VkAttachmentLoadOp load_op);
-
-  // Gets a non-clearing version of the specified render pass. Slow, don't call in hot path.
-  VkRenderPass GetRenderPassForRestarting(VkRenderPass pass);
 
   // These command buffers are allocated per-frame. They are valid until the command buffer
   // is submitted, after that you should call these functions again.
@@ -289,7 +284,7 @@ private:
     u8 depth_store_op : 1;
     u8 stencil_load_op : 2;
     u8 stencil_store_op : 1;
-    u8 feedback_loop : 2;
+    u8 feedback_loop : 4;
     u8 samples;
 
     bool operator==(const RenderPassCacheKey& rhs) const;
@@ -450,6 +445,7 @@ private:
   VkDescriptorSetLayout m_feedback_loop_ds_layout = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_image_ds_layout = VK_NULL_HANDLE;
   std::array<VkPipelineLayout, static_cast<size_t>(GPUPipeline::Layout::MaxCount)> m_pipeline_layouts = {};
+  std::unique_ptr<VulkanTexture> m_null_image_texture;
 
   // Cold variables.
   VkPhysicalDevice m_physical_device = VK_NULL_HANDLE;

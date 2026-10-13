@@ -121,9 +121,9 @@ static void YUVToRGB_Old(u32 xx, u32 yy, const std::array<s16, 64>& Crblk, const
                          const std::array<s16, 64>& Yblk);
 
 static bool DecodeRLE_New(s16* blk, const u8* qt);
+static GSVector4i IDCTRow(const GSVector4i& row, const GSVector4i* idct_matrix, bool low_only);
 static void IDCT_New(s16* blk);
-static void YUVToRGB_New(u32 xx, u32 yy, const std::array<s16, 64>& Crblk, const std::array<s16, 64>& Cbblk,
-                         const std::array<s16, 64>& Yblk);
+static void YUVToRGB_New();
 
 static void YUVToMono(const std::array<s16, 64>& Yblk);
 
@@ -157,6 +157,8 @@ struct MDECState
 
 #if defined(_DEBUG) || defined(_DEVEL)
   u32 total_blocks_decoded = 0;
+  u32 total_idct_blocks = 0;
+  u32 fast_idct_blocks = 0;
 #endif
 };
 } // namespace
@@ -168,6 +170,8 @@ void MDEC::Initialize()
 {
 #if defined(_DEBUG) || defined(_DEVEL)
   s_state.total_blocks_decoded = 0;
+  s_state.total_idct_blocks = 0;
+  s_state.fast_idct_blocks = 0;
 #endif
   s_state.active_frame_count = 0;
   Reset();
@@ -317,7 +321,7 @@ void MDEC::DMAWrite(const u32* words, u32 word_count)
     WARNING_LOG("Input FIFO overflow (writing {}, space {})", word_count * 2, s_state.data_in_fifo.GetSpace());
   }
 
-  const u32 halfwords_to_write = std::min(word_count * 2, s_state.data_in_fifo.GetSpace() & ~u32(2));
+  const u32 halfwords_to_write = std::min(word_count * 2, s_state.data_in_fifo.GetSpace() & ~u32(1));
   s_state.data_in_fifo.PushRange(reinterpret_cast<const u16*>(words), halfwords_to_write);
   Execute();
 }
@@ -439,28 +443,31 @@ void MDEC::Execute()
 
         u32 num_words;
         State new_state;
-        switch (cw.command)
+        switch (static_cast<u8>(cw.command.GetValue()))
         {
-          case Command::DecodeMacroblock:
+          case static_cast<u8>(Command::DecodeMacroblock):
             num_words = ZeroExtend32(cw.parameter_word_count.GetValue());
             new_state = State::DecodingMacroblock;
             break;
 
-          case Command::SetIqTab:
+          case static_cast<u8>(Command::SetIqTab):
             num_words = 16 + (((cw.bits & 1) != 0) ? 16 : 0);
             new_state = State::SetIqTable;
             break;
 
-          case Command::SetScale:
+          case static_cast<u8>(Command::SetScale):
             num_words = 32;
             new_state = State::SetScaleTable;
             break;
 
-          default:
-            [[unlikely]] DEV_LOG("Invalid MDEC command 0x{:08X}", cw.bits);
+            // clang-format off
+          case 0: case 4: case 5: case 6: case 7:
+            // clang-format on
             num_words = cw.parameter_word_count.GetValue();
             new_state = State::NoCommand;
             break;
+
+            DefaultCaseIsUnreachable();
         }
 
         DEBUG_LOG("MDEC command: 0x{:08X} ({}, {} words in parameter, {} expected)", cw.bits,
@@ -633,10 +640,7 @@ bool MDEC::DecodeColoredMacroblock()
     ResetDecoder();
     s_state.state = State::WritingMacroblock;
 
-    YUVToRGB_New(0, 0, s_state.blocks[0], s_state.blocks[1], s_state.blocks[2]);
-    YUVToRGB_New(8, 0, s_state.blocks[0], s_state.blocks[1], s_state.blocks[3]);
-    YUVToRGB_New(0, 8, s_state.blocks[0], s_state.blocks[1], s_state.blocks[4]);
-    YUVToRGB_New(8, 8, s_state.blocks[0], s_state.blocks[1], s_state.blocks[5]);
+    YUVToRGB_New();
   }
 
 #if defined(_DEBUG) || defined(_DEVEL)
@@ -821,18 +825,11 @@ void MDEC::CopyOutBlock(void* param, TickCount ticks)
           GSVector4i rgb1 = GSVector4i::load<true>(&s_state.block_rgb[i + 4]);
 
           static constexpr auto rgb32_to_rgba5551 = [](const GSVector4i& rgb32, const GSVector4i& a) {
-            const GSVector4i r =
-              (rgb32 & GSVector4i::cxpr(0xff)).add32(GSVector4i::cxpr(4)).srl32(3).min_u32(GSVector4i::cxpr(0x1F));
-            const GSVector4i g = (rgb32.srl32<8>() & GSVector4i::cxpr(0xff))
-                                   .add32(GSVector4i::cxpr(4))
-                                   .srl32(3)
-                                   .min_u32(GSVector4i::cxpr(0x1F))
-                                   .sll32<5>();
-            const GSVector4i b = (rgb32.srl32<16>() & GSVector4i::cxpr(0xff))
-                                   .add32(GSVector4i::cxpr(4))
-                                   .srl32(3)
-                                   .min_u32(GSVector4i::cxpr(0x1F))
-                                   .sll32<10>();
+            // min((c + 4) >> 3, 0x1F) is the same as shifting a saturated add, which rounds all channels at once.
+            const GSVector4i rounded = rgb32.addus8(GSVector4i::cxpr(0x040404));
+            const GSVector4i r = rounded.srl32<3>() & GSVector4i::cxpr(0x1F);
+            const GSVector4i g = rounded.srl32<6>() & GSVector4i::cxpr(0x3E0);
+            const GSVector4i b = rounded.srl32<9>() & GSVector4i::cxpr(0x7C00);
             return (r | g | b | a);
           };
 
@@ -1054,67 +1051,160 @@ bool MDEC::DecodeRLE_New(s16* blk, const u8* qt)
   return false;
 }
 
-static s16 IDCTRow(const s16* blk, const s16* idct_matrix)
+ALWAYS_INLINE_RELEASE GSVector4i MDEC::IDCTRow(const GSVector4i& row, const GSVector4i* idct_matrix, bool low_only)
 {
-  // IDCT matrix is -32768..32767, block is -16384..16383. 4 adds can happen without overflow.
-  GSVector4i sum = GSVector4i::load<false>(blk).madd_s16(GSVector4i::load<true>(idct_matrix)).addp_s32();
-  return static_cast<s16>(((static_cast<s64>(sum.extract32<0>()) + static_cast<s64>(sum.extract32<1>())) + 0x20000) >>
-                          18);
+  // IDCT matrix is -32768..32767, block is -16384..16383. 4 adds can happen without overflow, so each half of the row
+  // is summed separately. Adding the halves does not fit in 32 bits, but floor((lo + hi) / 2) does, in which case
+  // (lo + hi + 0x20000) >> 18 is the same as ((avg >> 16) + 1) >> 1.
+  static constexpr auto sum_halves = [](const GSVector4i& lo, const GSVector4i& hi) {
+    const GSVector4i avg = (lo & hi).add32((lo ^ hi).sra32<1>());
+    return avg.sra32<16>().add32(GSVector4i::cxpr(1)).sra32<1>();
+  };
+
+  // Each pair of elements in the row is multiplied with the same pair of elements from all 8 rows of the matrix.
+  const GSVector4i row01 = row.xxxx();
+  const GSVector4i row23 = row.yyyy();
+  const GSVector4i lo0 = row01.madd_s16(idct_matrix[0]).add32(row23.madd_s16(idct_matrix[1]));
+  const GSVector4i lo1 = row01.madd_s16(idct_matrix[4]).add32(row23.madd_s16(idct_matrix[5]));
+
+  // The upper half of the row is zero for low_only.
+  GSVector4i hi0 = GSVector4i::zero();
+  GSVector4i hi1 = GSVector4i::zero();
+  if (!low_only)
+  {
+    const GSVector4i row45 = row.zzzz();
+    const GSVector4i row67 = row.wwww();
+    hi0 = row45.madd_s16(idct_matrix[2]).add32(row67.madd_s16(idct_matrix[3]));
+    hi1 = row45.madd_s16(idct_matrix[6]).add32(row67.madd_s16(idct_matrix[7]));
+  }
+
+  return sum_halves(lo0, hi0).ps32(sum_halves(lo1, hi1));
 }
 
 void MDEC::IDCT_New(s16* blk)
 {
-  alignas(VECTOR_ALIGNMENT) std::array<s16, 64> temp;
-  for (u32 x = 0; x < 8; x++)
+  // Rearrange the scale table so that each vector has the same pair of elements from 4 rows, see IDCTRow().
+  GSVector4i idct_matrix[8];
+  for (u32 i = 0; i < 2; i++)
   {
-    for (u32 y = 0; y < 8; y++)
-      temp[y * 8 + x] = IDCTRow(&blk[x * 8], &s_state.scale_table[y * 8]);
+    const GSVector4i row0 = GSVector4i::load<true>(&s_state.scale_table[i * 32 + 0]);
+    const GSVector4i row1 = GSVector4i::load<true>(&s_state.scale_table[i * 32 + 8]);
+    const GSVector4i row2 = GSVector4i::load<true>(&s_state.scale_table[i * 32 + 16]);
+    const GSVector4i row3 = GSVector4i::load<true>(&s_state.scale_table[i * 32 + 24]);
+    const GSVector4i row01l = row0.upl32(row1);
+    const GSVector4i row01h = row0.uph32(row1);
+    const GSVector4i row23l = row2.upl32(row3);
+    const GSVector4i row23h = row2.uph32(row3);
+    idct_matrix[i * 4 + 0] = row01l.upl64(row23l);
+    idct_matrix[i * 4 + 1] = row01l.uph64(row23l);
+    idct_matrix[i * 4 + 2] = row01h.upl64(row23h);
+    idct_matrix[i * 4 + 3] = row01h.uph64(row23h);
   }
+
+  GSVector4i rows[8];
+  for (u32 x = 0; x < 8; x++)
+    rows[x] = GSVector4i::load<true>(&blk[x * 8]);
+
+  // Most blocks only have coefficients in the top-left 4x4. The last 4 rows are zero for the first pass in this case,
+  // so they can be skipped, and the upper half of each row is zero for both passes.
+  const bool low_only =
+    ((rows[0] | rows[1] | rows[2] | rows[3]).uph64() | rows[4] | rows[5] | rows[6] | rows[7]).eq(GSVector4i::zero());
+#if defined(_DEBUG) || defined(_DEVEL)
+  s_state.total_idct_blocks++;
+  s_state.fast_idct_blocks += BoolToUInt32(low_only);
+#endif
+  if (low_only)
+  {
+    for (u32 x = 0; x < 4; x++)
+      rows[x] = IDCTRow(rows[x], idct_matrix, true);
+  }
+  else
+  {
+    for (u32 x = 0; x < 8; x++)
+      rows[x] = IDCTRow(rows[x], idct_matrix, false);
+  }
+
+  // Transpose for the second pass.
+  GSVector4i temp[8];
+  for (u32 i = 0; i < 4; i++)
+  {
+    temp[i * 2 + 0] = rows[i * 2].upl16(rows[i * 2 + 1]);
+    temp[i * 2 + 1] = rows[i * 2].uph16(rows[i * 2 + 1]);
+  }
+  for (u32 i = 0; i < 2; i++)
+  {
+    rows[i * 4 + 0] = temp[i * 4 + 0].upl32(temp[i * 4 + 2]);
+    rows[i * 4 + 1] = temp[i * 4 + 0].uph32(temp[i * 4 + 2]);
+    rows[i * 4 + 2] = temp[i * 4 + 1].upl32(temp[i * 4 + 3]);
+    rows[i * 4 + 3] = temp[i * 4 + 1].uph32(temp[i * 4 + 3]);
+  }
+  for (u32 i = 0; i < 4; i++)
+  {
+    temp[i * 2 + 0] = rows[i].upl64(rows[i + 4]);
+    temp[i * 2 + 1] = rows[i].uph64(rows[i + 4]);
+  }
+
   for (u32 x = 0; x < 8; x++)
   {
-    for (u32 y = 0; y < 8; y++)
-    {
-      const s32 sum = IDCTRow(&temp[x * 8], &s_state.scale_table[y * 8]);
-      blk[x * 8 + y] = static_cast<s16>(std::clamp(SignExtendN<9, s32>(sum), -128, 127));
-    }
+    const GSVector4i sum = low_only ? IDCTRow(temp[x], idct_matrix, true) : IDCTRow(temp[x], idct_matrix, false);
+
+    // Sign extend from 9 bits, then clamp to 8 bits.
+    GSVector4i::store<true>(&blk[x * 8],
+                            sum.sll16<7>().sra16<7>().sat_s16(GSVector4i::cxpr16(-128), GSVector4i::cxpr16(127)));
   }
 }
 
-void MDEC::YUVToRGB_New(u32 xx, u32 yy, const std::array<s16, 64>& Crblk, const std::array<s16, 64>& Cbblk,
-                        const std::array<s16, 64>& Yblk)
+void MDEC::YUVToRGB_New()
 {
   const GSVector4i addval = s_state.status.data_output_signed ? GSVector4i::cxpr(0) : GSVector4i::cxpr(0x80808080);
   for (u32 y = 0; y < 8; y++)
   {
-    const GSVector4i Cr = GSVector4i::loadl<false>(&Crblk[(xx / 2) + ((y + yy) / 2) * 8]).s16to32();
-    const GSVector4i Cb = GSVector4i::loadl<false>(&Cbblk[(xx / 2) + ((y + yy) / 2) * 8]).s16to32();
-    const GSVector4i Y = GSVector4i::load<true>(&Yblk[y * 8]);
+    const GSVector4i Cr = GSVector4i::load<true>(&s_state.blocks[0][y * 8]);
+    const GSVector4i Cb = GSVector4i::load<true>(&s_state.blocks[1][y * 8]);
 
     // BT.601 YUV->RGB coefficients, rounding formula from Mednafen.
     // r = clamp(sext9(Y + (((359 * Cr) + 0x80) >> 8)), -128, 127) + addval;
     // g = clamp(sext9(Y + ((((-88 * Cb) & ~0x1F) + ((-183 * Cr) & ~0x07) + 0x80) >> 8)), -128, 127) + addval
     // b = clamp(sext9<9, s32>(Y + (((454 * Cb) + 0x80) >> 8)), -128, 127) + addval
 
-    // Need to do the multiply as 32-bit, since 127 * 359 is greater than INT16_MAX.
-    // upl16(self) = interleave XYZW0000 -> XXYYZZWW.
-    const GSVector4i Crmul = Cr.mul32l(GSVector4i::cxpr(359)).add16(GSVector4i::cxpr(0x80)).sra32<8>().ps32();
-    const GSVector4i Cbmul = Cb.mul32l(GSVector4i::cxpr(454)).add16(GSVector4i::cxpr(0x80)).sra32<8>().ps32();
-    const GSVector4i CrCbmul = (Cb.mul32l(GSVector4i::cxpr(-88)) & GSVector4i::cxpr(~0x1F))
-                                 .add32(Cr.mul32l(GSVector4i::cxpr(-183)) & GSVector4i::cxpr(~0x07))
-                                 .add32(GSVector4i::cxpr(0x80))
-                                 .sra32<8>()
-                                 .ps32();
-    const GSVector4i r = Crmul.upl16(Crmul).add16(Y).sll16<7>().sra16<7>().ps16().add8(addval);
-    const GSVector4i g = CrCbmul.upl16(CrCbmul).add16(Y).sll16<7>().sra16<7>().ps16().add8(addval);
-    const GSVector4i b = Cbmul.upl16(Cbmul).add16(Y).sll16<7>().sra16<7>().ps16().add8(addval);
-    const GSVector4i rg = r.upl8(g);
-    const GSVector4i b0 = b.upl8();
-    const GSVector4i rgblow = rg.upl16(b0);
-    const GSVector4i rgbhigh = rg.uph16(b0);
+    // Cr/Cb are -128..127, but 127 * 359 is greater than INT16_MAX. Since 359 is 256 + 103, the multiply can be
+    // split into Cr + (((103 * Cr) + 0x80) >> 8), likewise for 454. For green, both terms and the rounding are
+    // multiples of 8, so they can be shifted down by 3 before the add without changing the result.
+    // The chroma is left shifted by 7, so that the sign extension is a single shift after adding the luma.
+    const GSVector4i Crmul =
+      Cr.add16(Cr.mul16l(GSVector4i::cxpr16(103)).add16(GSVector4i::cxpr16(0x80)).sra16<8>()).sll16<7>();
+    const GSVector4i Cbmul =
+      Cb.add16(Cb.mul16l(GSVector4i::cxpr16(198)).add16(GSVector4i::cxpr16(0x80)).sra16<8>()).sll16<7>();
+    const GSVector4i CrCbmul = (Cb.mul16l(GSVector4i::cxpr16(-88)).sra16<3>() & GSVector4i::cxpr16(~0x03))
+                                 .add16(Cr.mul16l(GSVector4i::cxpr16(-183)).sra16<3>())
+                                 .add16(GSVector4i::cxpr16(0x10))
+                                 .sra16<5>()
+                                 .sll16<7>();
 
-    u32* const out_row = &s_state.block_rgb[xx + ((y + yy) * 16)];
-    GSVector4i::store<false>(&out_row[0], rgblow);
-    GSVector4i::store<false>(&out_row[4], rgbhigh);
+    // Each row of chroma covers two rows of luma, with the left and right halves coming from different blocks.
+    for (u32 xx = 0; xx < 2; xx++)
+    {
+      // upl16(self) = interleave XYZW0000 -> XXYYZZWW.
+      const GSVector4i Crhalf = (xx == 0) ? Crmul.upl16(Crmul) : Crmul.uph16(Crmul);
+      const GSVector4i Cbhalf = (xx == 0) ? Cbmul.upl16(Cbmul) : Cbmul.uph16(Cbmul);
+      const GSVector4i CrCbhalf = (xx == 0) ? CrCbmul.upl16(CrCbmul) : CrCbmul.uph16(CrCbmul);
+      for (u32 yy = 0; yy < 2; yy++)
+      {
+        const u32 row = (y * 2) + yy;
+        const GSVector4i Y =
+          GSVector4i::load<true>(&s_state.blocks[2 + ((row / 8) * 2) + xx][(row % 8) * 8]).sll16<7>();
+        const GSVector4i rb = Crhalf.add16(Y).sra16<7>().ps16(Cbhalf.add16(Y).sra16<7>()).add8(addval);
+        const GSVector4i g = CrCbhalf.add16(Y).sra16<7>().ps16().add8(addval);
+        const GSVector4i rg = rb.upl8(g);
+        const GSVector4i b0 = rb.uph8();
+        const GSVector4i rgblow = rg.upl16(b0);
+        const GSVector4i rgbhigh = rg.uph16(b0);
+
+        u32* const out_row = &s_state.block_rgb[(xx * 8) + (row * 16)];
+        GSVector4i::store<true>(&out_row[0], rgblow);
+        GSVector4i::store<true>(&out_row[4], rgbhigh);
+      }
+    }
   }
 }
 
@@ -1122,7 +1212,7 @@ void MDEC::YUVToMono(const std::array<s16, 64>& Yblk)
 {
   const s32 addval = s_state.status.data_output_signed ? 0 : 0x80;
   for (u32 i = 0; i < 64; i++)
-    s_state.block_rgb[i] = static_cast<u32>(std::clamp(SignExtendN<9, s32>(Yblk[i]), -128, 127) + addval);
+    s_state.block_rgb[i] = ZeroExtend32(static_cast<u8>(std::clamp(SignExtendN<9, s32>(Yblk[i]), -128, 127) + addval));
 }
 
 void MDEC::HandleSetQuantTableCommand()
@@ -1173,6 +1263,10 @@ void MDEC::DrawDebugStateWindow(float scale)
 
 #if defined(_DEBUG) || defined(_DEVEL)
   ImGui::Text("Blocks Decoded: %u", s_state.total_blocks_decoded);
+  ImGui::Text("IDCT Fast Path: %u/%u (%.1f%%)", s_state.fast_idct_blocks, s_state.total_idct_blocks,
+              s_state.total_idct_blocks ? (static_cast<double>(s_state.fast_idct_blocks) * 100.0 /
+                                           static_cast<double>(s_state.total_idct_blocks)) :
+                                          0.0);
 #endif
   ImGui::Text("Data-In FIFO Size: %u (%u bytes)", s_state.data_in_fifo.GetSize(), s_state.data_in_fifo.GetSize() * 4);
   ImGui::Text("Data-Out FIFO Size: %u (%u bytes)", s_state.data_out_fifo.GetSize(),

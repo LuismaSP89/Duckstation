@@ -6,6 +6,7 @@
 #include "d3d11_stream_buffer.h"
 #include "gpu_device.h"
 
+#include "common/threading.h"
 #include "common/windows_headers.h"
 
 #include <d3d11_1.h>
@@ -107,8 +108,6 @@ public:
                                     u32 push_constants_size) override;
   void Dispatch(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x, u32 group_size_y,
                 u32 group_size_z) override;
-  void DispatchWithPushConstants(u32 threads_x, u32 threads_y, u32 threads_z, u32 group_size_x, u32 group_size_y,
-                                 u32 group_size_z, const void* push_constants, u32 push_constants_size) override;
 
   bool SetGPUTimingEnabled(bool enabled) override;
   float GetAndResetAccumulatedGPUTime() override;
@@ -138,8 +137,13 @@ private:
   using RasterizationStateMap = std::unordered_map<u16, ComPtr<ID3D11RasterizerState>>;
   using DepthStateMap = std::unordered_map<u8, ComPtr<ID3D11DepthStencilState>>;
   using BlendStateMap = std::unordered_map<BlendStateMapKey, ComPtr<ID3D11BlendState>, BlendStateMapHash>;
+  struct InputLayoutEntry
+  {
+    std::vector<GPUPipeline::VertexAttribute> attributes; // referenced by the map key
+    ComPtr<ID3D11InputLayout> layout;
+  };
   using InputLayoutMap =
-    std::unordered_map<GPUPipeline::InputLayout, ComPtr<ID3D11InputLayout>, GPUPipeline::InputLayoutHash>;
+    std::unordered_map<GPUPipeline::InputLayout, InputLayoutEntry, GPUPipeline::InputLayoutHash>;
 
   static constexpr u32 MIN_UNIFORM_BUFFER_SIZE = 16;
   static constexpr u32 UNIFORM_BUFFER_ALIGNMENT = 256;
@@ -154,6 +158,7 @@ private:
   bool CreateBuffers(Error* error);
   void DestroyBuffers();
   void BindUniformBuffer(u32 offset, u32 size);
+  void BindRenderTargetImages();
   void PushUniformBuffer(const void* data, u32 data_size);
   void UnbindComputePipeline();
 
@@ -176,6 +181,8 @@ private:
 
   ComPtr<IDXGIFactory5> m_dxgi_factory;
 
+  // Pipelines can be created from worker threads, so the state maps need to be protected.
+  Threading::SharedMutex m_state_map_mutex;
   RasterizationStateMap m_rasterization_states;
   DepthStateMap m_depth_states;
   BlendStateMap m_blend_states;
@@ -192,6 +199,7 @@ private:
   std::array<D3D11Texture*, MAX_RENDER_TARGETS> m_current_render_targets = {};
   u32 m_num_current_render_targets = 0;
   GPUPipeline::RenderPassFlag m_current_render_pass_flags = GPUPipeline::NoRenderPassFlags;
+  bool m_device_lost = false;
   D3D11Texture* m_current_depth_target = nullptr;
 
   ID3D11InputLayout* m_current_input_layout = nullptr;
@@ -205,10 +213,13 @@ private:
   D3D_PRIMITIVE_TOPOLOGY m_current_primitive_topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
   u32 m_current_vertex_stride = 0;
   u32 m_current_blend_factor = 0;
+  u32 m_current_uniform_offset = 0;
+  u32 m_current_uniform_size = 0;
 
   std::array<ID3D11ShaderResourceView*, MAX_TEXTURE_SAMPLERS> m_current_textures = {};
   std::array<ID3D11SamplerState*, MAX_TEXTURE_SAMPLERS> m_current_samplers = {};
 
+  ComPtr<ID3D11Query> m_event_query;
   std::array<std::array<ComPtr<ID3D11Query>, 3>, NUM_TIMESTAMP_QUERIES> m_timestamp_queries = {};
   u8 m_read_timestamp_query = 0;
   u8 m_write_timestamp_query = 0;

@@ -383,6 +383,32 @@ bool VulkanSwapChain::CreateSwapChain(VulkanDevice& dev, Error* error)
       DEV_LOG("Using VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR pretransform.");
       break;
 
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR:
+      transform = VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR;
+      window_prerotation = WindowInfoPrerotation::HorizontalMirror;
+      DEV_LOG("Using VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR pretransform.");
+      break;
+
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR:
+      transform = VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR;
+      window_prerotation = WindowInfoPrerotation::HorizontalMirrorRotate90Clockwise;
+      std::swap(size.width, size.height);
+      DEV_LOG("Using VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR pretransform.");
+      break;
+
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR:
+      transform = VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR;
+      window_prerotation = WindowInfoPrerotation::HorizontalMirrorRotate180Clockwise;
+      DEV_LOG("Using VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR pretransform.");
+      break;
+
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR:
+      transform = VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR;
+      window_prerotation = WindowInfoPrerotation::HorizontalMirrorRotate270Clockwise;
+      std::swap(size.width, size.height);
+      DEV_LOG("Using VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR pretransform.");
+      break;
+
     default:
     {
       if (!(surface_caps.surfaceCapabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR))
@@ -406,6 +432,10 @@ bool VulkanSwapChain::CreateSwapChain(VulkanDevice& dev, Error* error)
     // If we only support pre-multiplied/post-multiplied... :/
     if (surface_caps.surfaceCapabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
       alpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    else if (surface_caps.surfaceCapabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR)
+      alpha = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+    else
+      alpha = VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR;
   }
 
   // Select swap chain flags, we only need a colour attachment
@@ -484,16 +514,17 @@ bool VulkanSwapChain::CreateSwapChain(VulkanDevice& dev, Error* error)
 
   const VkDevice vkdev = dev.GetVulkanDevice();
   res = vkCreateSwapchainKHR(vkdev, &swap_chain_info, nullptr, &m_swap_chain);
+
+  // Now destroy the old swap chain, since it's been recreated, or retired if creation failed.
+  // We can do this immediately since all work should have been completed before calling resize.
+  if (old_swap_chain != VK_NULL_HANDLE)
+    vkDestroySwapchainKHR(vkdev, old_swap_chain, nullptr);
+
   if (res != VK_SUCCESS)
   {
     Vulkan::SetErrorObject(error, "vkCreateSwapchainKHR failed: ", res);
     return false;
   }
-
-  // Now destroy the old swap chain, since it's been recreated.
-  // We can do this immediately since all work should have been completed before calling resize.
-  if (old_swap_chain != VK_NULL_HANDLE)
-    vkDestroySwapchainKHR(vkdev, old_swap_chain, nullptr);
 
   if (window_size.width > std::numeric_limits<u16>::max() || window_size.height > std::numeric_limits<u16>::max())
   {
@@ -672,11 +703,10 @@ VkResult VulkanSwapChain::AcquireNextImage(bool handle_errors)
 {
   if (m_image_acquire_result.has_value())
   {
-    if (m_image_acquire_result.value() == VK_SUCCESS || !handle_errors ||
-        !HandleAcquireOrPresentError(m_image_acquire_result.value()))
-    {
-      return m_image_acquire_result.value();
-    }
+    // Take a copy, the result is reset when the swap chain is recreated.
+    VkResult res = m_image_acquire_result.value();
+    if (res == VK_SUCCESS || !handle_errors || !HandleAcquireOrPresentError(res))
+      return res;
   }
 
   if (!m_swap_chain)
