@@ -1322,7 +1322,10 @@ bool FullscreenUI::LoadBackgroundShader(const std::string& path, Error* error)
 
   shader.str(std::string());
   shadergen.WriteHeader(shader, false, false, false);
-  shadergen.DeclareUniformBuffer(shader, {"vec2 u_display_size", "vec2 u_rcp_display_size", "float u_time"}, true);
+  shadergen.DeclareUniformBuffer(
+    shader,
+    {"vec2 u_display_size", "vec2 u_rcp_display_size", "vec4 u_accent_color", "float u_time", "float u_light_theme"},
+    true);
   if (main_pos > 0)
     shader << std::string_view(shader_body.value()).substr(0, main_pos);
   shadergen.DeclareFragmentEntryPoint(shader, 0, 1);
@@ -1350,6 +1353,7 @@ bool FullscreenUI::LoadBackgroundShader(const std::string& path, Error* error)
   if (!s_locals.app_background_shader)
     return false;
 
+  s_locals.app_background_load_time = Timer::GetCurrentValue();
   return true;
 }
 
@@ -1363,7 +1367,9 @@ void FullscreenUI::DrawShaderBackgroundCallback(const ImDrawList* parent_list, c
   {
     float u_display_size[2];
     float u_rcp_display_size[2];
+    float u_accent_color[4];
     float u_time;
+    float u_light_theme;
   };
 
   const GSVector2 display_size = GSVector2(g_gpu_device->GetMainSwapChain()->GetSizeVec());
@@ -1372,6 +1378,8 @@ void FullscreenUI::DrawShaderBackgroundCallback(const ImDrawList* parent_list, c
   GSVector2::store<true>(uniforms.u_rcp_display_size, GSVector2::cxpr(1.0f) / display_size);
   uniforms.u_time =
     static_cast<float>(Timer::ConvertValueToSeconds(Timer::GetCurrentValue() - s_locals.app_background_load_time));
+  uniforms.u_light_theme = UIStyle.IsDarkTheme ? 0.0f : 1.0f;
+  GSVector4::store<true>(uniforms.u_accent_color, GSVector4::load<false>(&UIStyle.SecondaryStrongColor.x));
 
   g_gpu_device->SetPipeline(s_locals.app_background_shader.get());
   g_gpu_device->SetTextureSampler(0, nullptr, nullptr);
@@ -1436,12 +1444,12 @@ void FullscreenUI::DrawLandingTemplate(ImVec2* menu_pos, ImVec2* menu_size)
   if (BeginFullscreenWindow(ImVec2(0.0f, 0.0f), heading_size, "landing_heading", ImVec4()))
   {
     ImFont* const heading_font = UIStyle.Font;
-    const float heading_font_size = UIStyle.LargeFontSize;
-    const float heading_font_weight = UIStyle.BoldFontWeight;
+    static const float heading_font_size = UIStyle.LargeFontSize;
+    static constexpr const float& heading_font_weight = UIStyle.BoldFontWeight;
     ImDrawList* const dl = ImGui::GetWindowDrawList();
     SmallString heading_str;
 
-    const u32 text_color = ImGui::GetColorU32(UIStyle.PrimaryTextColor);
+    const u32 text_color = ImGui::GetColorU32(UIStyle.BackgroundTextColor);
 
     // draw branding
     {
@@ -1477,18 +1485,41 @@ void FullscreenUI::DrawLandingTemplate(ImVec2* menu_pos, ImVec2* menu_size)
       const auto lock = Achievements::GetLock();
       if (const std::string& username = Achievements::GetLoggedInUserName(); !username.empty())
       {
-        const ImVec2 name_size =
-          heading_font->CalcTextSizeA(heading_font_size, heading_font_weight, FLT_MAX, 0.0f, IMSTR_START_END(username));
-        const ImVec2 name_pos =
-          ImVec2(time_pos.x - name_size.x - LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), time_pos.y);
-        RenderShadowedTextClipped(dl, heading_font, heading_font_size, heading_font_weight, name_pos,
-                                  name_pos + name_size, text_color, username, &name_size);
+        // Drawn right-to-left from the time.
+        float right_x = time_pos.x - LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING);
+        const auto draw_right_aligned = [&heading_font, &time_pos, &right_x, &dl](std::string_view text, u32 color) {
+          const ImVec2 size =
+            heading_font->CalcTextSizeA(heading_font_size, heading_font_weight, FLT_MAX, 0.0f, IMSTR_START_END(text));
+          right_x -= size.x;
+          const ImVec2 pos = ImVec2(right_x, time_pos.y);
+          RenderShadowedTextClipped(dl, heading_font, heading_font_size, heading_font_weight, pos, pos + size, color,
+                                    text, &size);
+        };
+
+        // Casual points, followed by hardcore points in the accent colour.
+        const auto [casual_points, hardcore_points] = Achievements::GetLoggedInUserPoints();
+        draw_right_aligned(")", text_color);
+        heading_str.format("{}", hardcore_points);
+        draw_right_aligned(heading_str, ImGui::GetColorU32(UIStyle.SecondaryStrongColor));
+        heading_str.format("{} (", casual_points);
+        draw_right_aligned(heading_str, text_color);
+
+        // The trophy is drawn without a shadow, since it is a colour glyph and the shadow would be tinted.
+        const std::string_view trophy_icon = ICON_EMOJI_TROPHY;
+        const ImVec2 trophy_size = heading_font->CalcTextSizeA(heading_font_size, heading_font_weight, FLT_MAX, 0.0f,
+                                                               IMSTR_START_END(trophy_icon));
+        right_x -= trophy_size.x + LayoutScale(4.0f);
+        dl->AddText(heading_font, heading_font_size, heading_font_weight, ImVec2(right_x, time_pos.y), text_color,
+                    IMSTR_START_END(trophy_icon));
+
+        right_x -= LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING);
+        draw_right_aligned(username, text_color);
 
         if (const std::string& badge_path = Achievements::GetLoggedInUserIconURL(); !badge_path.empty())
         {
           const ImVec2 badge_size = ImVec2(UIStyle.LargeFontSize, UIStyle.LargeFontSize);
           const ImVec2 badge_pos =
-            ImVec2(name_pos.x - badge_size.x - LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), time_pos.y);
+            ImVec2(right_x - badge_size.x - LayoutScale(LAYOUT_MENU_BUTTON_X_PADDING), time_pos.y);
 
           dl->AddImage(reinterpret_cast<ImTextureID>(GetCachedTextureAsync(badge_path)), badge_pos,
                        badge_pos + badge_size);
@@ -1497,6 +1528,9 @@ void FullscreenUI::DrawLandingTemplate(ImVec2* menu_pos, ImVec2* menu_size)
     }
   }
   EndFullscreenWindow();
+
+  // Like the heading, the footer is drawn directly over the background.
+  SetFullscreenFooterBackground(FooterBackground::None);
 }
 
 void FullscreenUI::DrawLandingWindow()
@@ -1563,20 +1597,21 @@ void FullscreenUI::DrawLandingWindow()
 
   if (IsGamepadInputSource())
   {
-    SetFullscreenFooterText(std::array{std::make_pair(ICON_PF_SHARE_CAPTURE, FSUI_VSTR("About")),
-                                       std::make_pair(ICON_PF_BURGER_MENU, FSUI_VSTR("Resume Last Session")),
-                                       std::make_pair(ICON_PF_BUTTON_X, FSUI_VSTR("Toggle Fullscreen")),
-                                       std::make_pair(ICON_PF_XBOX_DPAD_LEFT_RIGHT, FSUI_VSTR("Navigate")),
+    SetFullscreenFooterText(std::array{std::make_pair(ICON_PF_XBOX_DPAD_LEFT_RIGHT, FSUI_VSTR("Navigate")),
                                        std::make_pair(ICON_PF_BUTTON_A, FSUI_VSTR("Select")),
+                                       std::make_pair(ICON_PF_BURGER_MENU, FSUI_VSTR("Resume Last Session"))},
+                            std::array{std::make_pair(ICON_PF_SHARE_CAPTURE, FSUI_VSTR("About")),
+                                       std::make_pair(ICON_PF_BUTTON_X, FSUI_VSTR("Toggle Fullscreen")),
                                        std::make_pair(ICON_PF_BUTTON_B, FSUI_VSTR("Exit"))});
   }
   else
   {
-    SetFullscreenFooterText(std::array{
-      std::make_pair(ICON_PF_F1, FSUI_VSTR("About")), std::make_pair(ICON_PF_F3, FSUI_VSTR("Resume Last Session")),
-      std::make_pair(ICON_PF_F11, FSUI_VSTR("Toggle Fullscreen")),
-      std::make_pair(ICON_PF_ARROW_LEFT ICON_PF_ARROW_RIGHT, FSUI_VSTR("Navigate")),
-      std::make_pair(ICON_PF_ENTER, FSUI_VSTR("Select")), std::make_pair(ICON_PF_ESC, FSUI_VSTR("Exit"))});
+    SetFullscreenFooterText(std::array{std::make_pair(ICON_PF_ARROW_LEFT ICON_PF_ARROW_RIGHT, FSUI_VSTR("Navigate")),
+                                       std::make_pair(ICON_PF_ENTER, FSUI_VSTR("Select")),
+                                       std::make_pair(ICON_PF_F3, FSUI_VSTR("Resume Last Session"))},
+                            std::array{std::make_pair(ICON_PF_F1, FSUI_VSTR("About")),
+                                       std::make_pair(ICON_PF_F11, FSUI_VSTR("Toggle Fullscreen")),
+                                       std::make_pair(ICON_PF_ESC, FSUI_VSTR("Exit"))});
   }
 }
 
@@ -1703,7 +1738,7 @@ float FullscreenUI::GetBackgroundAlpha()
   }
   else
   {
-    return HasBackground() ? 0.5f : 1.0f;
+    return HasBackground() ? (UIStyle.IsDarkTheme ? 0.5f : 0.9f) : 1.0f;
   }
 }
 
@@ -1959,7 +1994,7 @@ void FullscreenUI::DrawPauseMenu()
 
   EndFullscreenWindow();
 
-  SetFullscreenFooterBlur(false);
+  SetFullscreenFooterBackground(FooterBackground::Solid);
 
   if (IsGamepadInputSource())
   {
