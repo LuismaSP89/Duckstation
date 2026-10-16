@@ -159,7 +159,6 @@ static void UpdateCRTCDisplayParameters(u16 old_vram_width, u16 old_vram_height)
 static void UpdateCRTCHBlankFlag();
 
 // Update ticks for this execution slice
-static void UpdateCRTCTickEvent();
 static void UpdateCommandTickEvent();
 static u8 UpdateOrGetGPUBusyPct();
 
@@ -325,7 +324,7 @@ struct Locals
   GPUSTATReg GPUSTAT = {};
 
   bool console_is_pal = false;
-  bool set_texture_disable_mask = false;
+  bool enable_upper_vram = false;
   bool drawing_area_changed = false;
   bool force_progressive_scan = false;
   bool texture_enable_mask = false;
@@ -407,8 +406,7 @@ u16 g_gpu_clut[GPU_CLUT_SIZE];
 
 void GPU::Initialize()
 {
-  if (!System::IsReplayingGPUDump())
-    s_locals.crtc_tick_event.Activate();
+  s_locals.crtc_tick_event.Activate();
 
   s_locals.force_progressive_scan = (g_settings.display_deinterlacing_mode == DisplayDeinterlacingMode::Progressive);
   s_locals.fifo_size = g_settings.gpu_fifo_size;
@@ -443,7 +441,8 @@ void GPU::UpdateSettings(const Settings& old_settings)
     s_locals.console_is_pal = console_is_pal;
     UpdateCRTCConfig();
   }
-  else if (g_settings.display_crop_mode != old_settings.display_crop_mode ||
+  else if (g_settings.display_deinterlacing_mode != old_settings.display_deinterlacing_mode ||
+           g_settings.display_crop_mode != old_settings.display_crop_mode ||
            g_settings.display_active_start_offset != old_settings.display_active_start_offset ||
            g_settings.display_active_end_offset != old_settings.display_active_end_offset ||
            g_settings.display_line_start_offset != old_settings.display_line_start_offset ||
@@ -501,7 +500,7 @@ std::pair<u32, u32> GPU::GetFullDisplayResolution()
 void GPU::Reset(bool clear_vram)
 {
   s_locals.GPUSTAT.bits = 0x14802000;
-  s_locals.set_texture_disable_mask = false;
+  s_locals.enable_upper_vram = false;
   s_locals.GPUREAD_latch = 0;
   s_locals.crtc_state.fractional_ticks = 0;
   s_locals.crtc_state.fractional_dot_ticks = 0;
@@ -532,6 +531,9 @@ void GPU::SoftReset()
   if (s_locals.blitter_state == BlitterState::WritingVRAM)
     FinishVRAMWrite();
 
+  s_locals.GPUSTAT.interrupt_request = false;
+  InterruptController::SetLineState(InterruptController::IRQ::GPU, false);
+
   s_locals.GPUSTAT.texture_page_x_base = 0;
   s_locals.GPUSTAT.texture_page_y_base = 0;
   s_locals.GPUSTAT.semi_transparency_mode = GPUTransparencyMode::HalfBackgroundPlusHalfForeground;
@@ -541,7 +543,7 @@ void GPU::SoftReset()
   s_locals.GPUSTAT.set_mask_while_drawing = false;
   s_locals.GPUSTAT.check_mask_before_draw = false;
   s_locals.GPUSTAT.reverse_flag = false;
-  s_locals.GPUSTAT.texture_disable = false;
+  s_locals.GPUSTAT.texture_page_y_base_2 = false;
   s_locals.GPUSTAT.horizontal_resolution_2 = 0;
   s_locals.GPUSTAT.horizontal_resolution_1 = 0;
   s_locals.GPUSTAT.vertical_resolution = false;
@@ -618,7 +620,7 @@ bool GPU::DoState(StateWrapper& sw)
   if (sw.GetVersion() < 87) [[unlikely]]
     sw.SkipBytes(1); // console_is_pal
 
-  sw.Do(&s_locals.set_texture_disable_mask);
+  sw.Do(&s_locals.enable_upper_vram);
 
   sw.Do(&s_locals.crtc_state.regs.display_address_start);
   sw.Do(&s_locals.crtc_state.regs.horizontal_display_range);
@@ -750,7 +752,7 @@ void GPU::DoMemoryState(StateWrapper& sw, System::MemorySaveState& mss)
   sw.DoBytes(&s_locals.drawing_area, sizeof(s_locals.drawing_area));
   sw.DoBytes(&s_locals.drawing_offset, sizeof(s_locals.drawing_offset));
 
-  sw.Do(&s_locals.set_texture_disable_mask);
+  sw.Do(&s_locals.enable_upper_vram);
 
   sw.DoBytes(&s_locals.crtc_state, sizeof(s_locals.crtc_state));
 
@@ -864,7 +866,7 @@ u32 GPU::ReadRegister(u32 offset)
       if (IsCRTCScanlinePending())
         SynchronizeCRTC();
       if (IsCommandCompletionPending())
-        s_locals.command_tick_event.InvokeEarly();
+        s_locals.command_tick_event.InvokeEarlyNoReschedule();
 
       return s_locals.GPUSTAT.bits;
     }
@@ -888,7 +890,7 @@ void GPU::WriteRegister(u32 offset, u32 value)
       // there's no backpressure applied to the CPU. Instead force the GPU to run and catch up.
       if (s_locals.fifo.GetSize() >= s_locals.fifo_size) [[unlikely]]
       {
-        s_locals.command_tick_event.InvokeEarly();
+        s_locals.command_tick_event.InvokeEarlyNoReschedule();
 
         if (s_locals.fifo.GetSize() >= s_locals.fifo.GetCapacity()) [[unlikely]]
         {
@@ -1016,7 +1018,8 @@ void GPU::AddCommandTicks(TickCount ticks)
 
 void GPU::SynchronizeCRTC()
 {
-  s_locals.crtc_tick_event.InvokeEarly();
+  // The event always gets rescheduled.
+  s_locals.crtc_tick_event.InvokeEarlyNoReschedule();
 }
 
 float GPU::ComputeHorizontalFrequency()
@@ -1181,6 +1184,9 @@ void GPU::UpdateCRTCConfig(u16 old_vram_width, u16 old_vram_height)
   static constexpr std::array<u16, 8> dot_clock_dividers = {{10, 8, 5, 4, 7, 7, 7, 7}};
   CRTCState& cs = s_locals.crtc_state;
 
+  if (!s_locals.GPUSTAT.vertical_interlace)
+    s_locals.GPUSTAT.interlaced_field = 1u;
+
   cs.vertical_total = s_locals.GPUSTAT.pal_mode ? PAL_TOTAL_LINES : NTSC_TOTAL_LINES;
   cs.horizontal_total = s_locals.GPUSTAT.pal_mode ? PAL_TICKS_PER_LINE : NTSC_TICKS_PER_LINE;
   cs.horizontal_active_start = s_locals.GPUSTAT.pal_mode ? PAL_HORIZONTAL_ACTIVE_START : NTSC_HORIZONTAL_ACTIVE_START;
@@ -1251,7 +1257,7 @@ void GPU::UpdateCRTCConfig(u16 old_vram_width, u16 old_vram_height)
   System::SetVideoFrameRate(ComputeVerticalFrequency());
 
   UpdateCRTCDisplayParameters(old_vram_width, old_vram_height);
-  UpdateCRTCTickEvent();
+  RescheduleCRTC();
 }
 
 void GPU::UpdateCRTCDisplayParameters()
@@ -1514,7 +1520,7 @@ ALWAYS_INLINE_RELEASE TickCount GPU::GetPendingCommandTicks()
   return SystemTicksToGPUTicks(s_locals.command_tick_event.GetTicksSinceLastExecution());
 }
 
-void GPU::UpdateCRTCTickEvent()
+void GPU::RescheduleCRTC()
 {
   CRTCState& cs = s_locals.crtc_state;
 
@@ -1561,8 +1567,7 @@ void GPU::UpdateCRTCTickEvent()
     ticks_until_event = std::min(ticks_until_event, ticks_until_hblank_start_or_end);
   }
 
-  if (!System::IsReplayingGPUDump()) [[likely]]
-    s_locals.crtc_tick_event.Schedule(CRTCTicksToSystemTicks(ticks_until_event, cs.fractional_ticks));
+  s_locals.crtc_tick_event.Schedule(CRTCTicksToSystemTicks(ticks_until_event, cs.fractional_ticks));
 }
 
 bool GPU::IsCRTCScanlinePending()
@@ -1616,7 +1621,7 @@ void GPU::CRTCTickEvent(void*, TickCount ticks)
         Timers::AddTicks(HBLANK_TIMER_INDEX, static_cast<TickCount>(hblank_timer_ticks));
     }
 
-    UpdateCRTCTickEvent();
+    RescheduleCRTC();
     return;
   }
 
@@ -1706,7 +1711,7 @@ void GPU::CRTCTickEvent(void*, TickCount ticks)
       else
       {
         cs.interlaced_field = 0;
-        s_locals.GPUSTAT.interlaced_field = 0u; // new GPU = 1, old GPU = 0
+        s_locals.GPUSTAT.interlaced_field = 1u;
       }
     }
   }
@@ -1724,7 +1729,7 @@ void GPU::CRTCTickEvent(void*, TickCount ticks)
     s_locals.GPUSTAT.display_line_lsb = ConvertToBoolUnchecked((cs.regs.Y + cs.current_scanline) & u32(1));
   }
 
-  UpdateCRTCTickEvent();
+  RescheduleCRTC();
 
   if (frame_done)
   {
@@ -1844,11 +1849,13 @@ bool GPU::ConvertDisplayCoordinatesToBeamTicksAndLines(const GSVector2& display_
     return false;
   }
 
-  *out_line = (static_cast<u32>(std::round(display_y)) >> BoolToUInt8(s_locals.GPUSTAT.vertical_interlace)) +
+  const bool double_height =
+    s_locals.GPUSTAT.vertical_interlace && (!s_locals.force_progressive_scan || s_locals.GPUSTAT.vertical_resolution);
+  *out_line = (static_cast<u32>(std::round(display_y)) >> BoolToUInt8(double_height)) +
               s_locals.crtc_state.vertical_visible_start;
-  *out_tick = static_cast<u32>(System::ScaleTicksToOverclock(static_cast<TickCount>(
-                std::round(display_x * static_cast<float>(s_locals.crtc_state.dot_clock_divider))))) +
-              s_locals.crtc_state.horizontal_visible_start;
+  *out_tick = static_cast<u32>(System::ScaleTicksToOverclock(
+    static_cast<TickCount>(std::round(display_x * static_cast<float>(s_locals.crtc_state.dot_clock_divider))) +
+    s_locals.crtc_state.horizontal_visible_start));
   return true;
 }
 
@@ -1939,7 +1946,7 @@ void GPU::WriteGP1(u32 value)
     case static_cast<u8>(GP1Command::ResetGPU):
     {
       DEBUG_LOG("GP1 reset GPU");
-      s_locals.command_tick_event.InvokeEarly();
+      s_locals.command_tick_event.InvokeEarlyNoReschedule();
       SynchronizeCRTC();
       SoftReset();
     }
@@ -1948,7 +1955,7 @@ void GPU::WriteGP1(u32 value)
     case static_cast<u8>(GP1Command::ClearFIFO):
     {
       DEBUG_LOG("GP1 clear FIFO");
-      s_locals.command_tick_event.InvokeEarly();
+      s_locals.command_tick_event.InvokeEarlyNoReschedule();
       SynchronizeCRTC();
 
       // flush partial writes
@@ -1964,6 +1971,7 @@ void GPU::WriteGP1(u32 value)
       s_locals.blit_remaining_words = 0;
       s_locals.pending_command_ticks = 0;
       s_locals.command_tick_event.Deactivate();
+      InvalidateCLUT();
       UpdateDMARequest();
       UpdateGPUIdle();
     }
@@ -2065,7 +2073,7 @@ void GPU::WriteGP1(u32 value)
       {
         // Have to be careful when setting this because Synchronize() can modify GPUSTAT.
         static constexpr u32 SET_MASK = UINT32_C(0b00000000011111110100000000000000);
-        s_locals.command_tick_event.InvokeEarly();
+        s_locals.command_tick_event.InvokeEarlyNoReschedule();
         SynchronizeCRTC();
         s_locals.GPUSTAT.bits = (s_locals.GPUSTAT.bits & ~SET_MASK) | (new_GPUSTAT.bits & SET_MASK);
         UpdateCRTCConfig();
@@ -2073,10 +2081,10 @@ void GPU::WriteGP1(u32 value)
     }
     break;
 
-    case static_cast<u8>(GP1Command::SetAllowTextureDisable):
+    case static_cast<u8>(GP1Command::SetVRAMSize):
     {
-      s_locals.set_texture_disable_mask = ConvertToBoolUnchecked(param & 0x01);
-      DEBUG_LOG("Set texture disable mask <- {}", s_locals.set_texture_disable_mask ? "allowed" : "ignored");
+      s_locals.enable_upper_vram = ConvertToBoolUnchecked(param & 0x01);
+      DEBUG_LOG("Upper VRAM addressing <- {}", s_locals.enable_upper_vram ? "allowed" : "ignored");
     }
     break;
 
@@ -2109,14 +2117,28 @@ void GPU::WriteGP1(u32 value)
 
 void GPU::HandleGetGPUInfoCommand(u32 value)
 {
-  const u8 subcommand = Truncate8(value & 0x07);
+  const u8 subcommand = Truncate8(value & 0x0F);
   switch (subcommand)
   {
     case 0x00:
     case 0x01:
     case 0x06:
-    case 0x07:
+    case 0x09:
+    case 0x0A:
+    case 0x0B:
+    case 0x0C:
+    case 0x0D:
+    case 0x0E:
+    case 0x0F:
       // leave GPUREAD intact
+      break;
+
+    case 0x07: // GPU version (v2)
+      s_locals.GPUREAD_latch = 2;
+      break;
+
+    case 0x08:
+      s_locals.GPUREAD_latch = 0;
       break;
 
     case 0x02: // Get Texture Window
@@ -2150,9 +2172,7 @@ void GPU::HandleGetGPUInfoCommand(u32 value)
     }
     break;
 
-    [[unlikely]] default:
-      WARNING_LOG("Unhandled GetGPUInfo(0x{:02X})", subcommand);
-      break;
+      DefaultCaseIsUnreachable();
   }
 }
 
@@ -2204,15 +2224,12 @@ GSVector4i GPU::GetClampedDrawingArea(const GPUDrawingArea& drawing_area)
 void GPU::SetDrawMode(u16 value)
 {
   GPUDrawModeReg new_mode_reg{static_cast<u16>(value & GPUDrawModeReg::MASK)};
-  if (!s_locals.set_texture_disable_mask)
-    new_mode_reg.texture_disable = false;
-
   s_locals.draw_mode_reg.bits = new_mode_reg.bits;
 
   // Bits 0..10 are returned in the GPU status register.
   s_locals.GPUSTAT.bits = (s_locals.GPUSTAT.bits & ~(GPUDrawModeReg::GPUSTAT_MASK)) |
                           (ZeroExtend32(new_mode_reg.bits) & GPUDrawModeReg::GPUSTAT_MASK);
-  s_locals.GPUSTAT.texture_disable = s_locals.draw_mode_reg.texture_disable;
+  s_locals.GPUSTAT.texture_page_y_base_2 = s_locals.draw_mode_reg.texture_page_y_base_2;
 }
 
 void GPU::SetTexturePalette(u16 value)
@@ -2315,20 +2332,24 @@ void GPU::CalculateDrawRect(const GSVector2i& window_size, const GSVector2i& vid
     fvideo_size = fvideo_size - crop_padding_left_top - crop_padding_right_bottom;
     crop_amount = crop_amount - GSVector4::xyxy(crop_padding_left_top, crop_padding_right_bottom);
 
+    // Convert using the original active size, before removing any source pixels.
+    const GSVector2 video_to_source = fsource_rect.rsize() / fvideo_active_rect.rsize().max(GSVector2::cxpr(1.0f));
+
     // apply remaining crop to active area
     const GSVector2 crop_size = crop_amount.xy() + crop_amount.zw();
     fvideo_active_rect -= GSVector4::loadh(crop_size);
     fvideo_size -= crop_size;
 
     // need to take it off the source too
-    const GSVector2 video_to_source = fsource_rect.rsize() / fvideo_active_rect.rsize();
     const GSVector4 source_crop_amount = crop_amount * GSVector4::xyxy(video_to_source);
+    const GSVector4 original_source_rect = fsource_rect;
     fsource_rect = (fsource_rect + source_crop_amount).blend32<12>(fsource_rect - source_crop_amount);
 
     // ensure we haven't cropped everything away
-    fvideo_active_rect = fvideo_active_rect.sat(GSVector4::zero(), fvideo_active_rect);
-    fvideo_size -= crop_size.sat(GSVector2::zero(), GSVector2::cxpr(1.0f, 1.0f));
-    fsource_rect = fsource_rect.sat(GSVector4::zero(), fsource_rect);
+    fvideo_active_rect = fvideo_active_rect.max(fvideo_active_rect.xyxy());
+    fvideo_size = fvideo_size.max(GSVector2::cxpr(1.0f));
+    fsource_rect = fsource_rect.sat(original_source_rect);
+    fsource_rect = fsource_rect.max(fsource_rect.xyxy());
   }
 
   // swap width/height when rotated, the flipping of padding is taken care of in the shader with the rotation matrix
@@ -2542,28 +2563,36 @@ u8 GPU::CalculateAutomaticResolutionScale()
   // When the system is starting and all borders crop is enabled, the registers are zero, and
   // display_height therefore is also zero. Keep the existing resolution until it updates.
   u32 scale = 1;
-  if (const WindowInfo& main_window_info = VideoThread::GetRenderWindowInfo();
-      !main_window_info.IsSurfaceless() && s_locals.crtc_state.display_width > 0 &&
-      s_locals.crtc_state.display_height > 0 && s_locals.crtc_state.display_vram_width > 0 &&
-      s_locals.crtc_state.display_vram_height > 0)
+  const WindowInfo& main_window_info = VideoThread::GetRenderWindowInfo();
+  const GSVector2i crtc_video_size = GetCRTCVideoSize();
+  if (!main_window_info.IsSurfaceless() && !crtc_video_size.eq(GSVector2i::zero()))
   {
+    GSVector4i vram_active_rect, vram_source_rect;
+    if (s_locals.crtc_state.display_vram_width > 0 && s_locals.crtc_state.display_vram_height > 0)
+    {
+      vram_active_rect = GetCRTCVideoActiveRect();
+      vram_source_rect = GetCRTCVRAMSourceRect();
+    }
+    else
+    {
+      // No video yet -> assume full screen.
+      vram_active_rect = vram_source_rect = GSVector4i::loadh(crtc_video_size);
+    }
+
     GSVector4i source_rect, display_rect, draw_rect;
-    CalculateDrawRect(GSVector2i(main_window_info.surface_width, main_window_info.surface_height), GetCRTCVideoSize(),
-                      GetCRTCVideoActiveRect(), GetCRTCVRAMSourceRect(), g_settings.display_rotation,
-                      g_settings.display_alignment, g_settings.gpu_show_vram ? 1.0f : ComputePixelAspectRatio(),
+    CalculateDrawRect(GSVector2i(main_window_info.surface_width, main_window_info.surface_height), crtc_video_size,
+                      vram_active_rect, vram_source_rect, g_settings.display_rotation, g_settings.display_alignment,
+                      g_settings.gpu_show_vram ? 1.0f : ComputePixelAspectRatio(),
                       g_settings.IsUsingIntegerDisplayScaling(false), g_settings.display_fine_crop_mode,
                       g_settings.display_fine_crop_amount, &source_rect, &display_rect, &draw_rect);
 
     // We use the draw rect to determine scaling. This way we match the resolution as best we can, regardless of the
     // anamorphic aspect ratio.
-    const s32 draw_width = draw_rect.width();
-    const s32 draw_height = draw_rect.height();
-    scale = static_cast<u32>(std::ceil(
-      std::max(static_cast<float>(draw_width) / static_cast<float>(s_locals.crtc_state.display_vram_width),
-               static_cast<float>(draw_height) / static_cast<float>(s_locals.crtc_state.display_vram_height))));
+    const GSVector2i draw_size = draw_rect.rsize();
+    const GSVector2i vram_size = vram_source_rect.rsize();
+    scale = GSVector2i((GSVector2(draw_size) / GSVector2(vram_size)).ceil()).maxv_s32();
     scale = std::min<u32>(scale, std::numeric_limits<decltype(g_settings.gpu_resolution_scale)>::max());
-    VERBOSE_LOG("Draw Size = {}x{}, VRAM Size = {}x{}, Preferred Scale = {}", draw_width, draw_height,
-                s_locals.crtc_state.display_vram_width, s_locals.crtc_state.display_vram_height, scale);
+    VERBOSE_LOG("Draw Size = {}, VRAM Size = {}, Preferred Scale = {}", draw_size, vram_size, scale);
   }
 
   return Truncate8(scale);
@@ -2992,7 +3021,8 @@ ALWAYS_INLINE_RELEASE void GPU::FillDrawCommand(GPUBackendDrawCommand* RESTRICT 
   else
     cmd->dither_enable = (dither_enable && (shading_enable || (texture_enable && !raw_texture_enable)));
 
-  cmd->draw_mode.bits = s_locals.draw_mode_reg.bits;
+  // Only the populated 1 MiB bank is passed to the renderer for now, until 2MB VRAM is supported.
+  cmd->draw_mode.bits = s_locals.draw_mode_reg.bits & ~(1u << 11);
   cmd->palette.bits = s_locals.texture_palette_reg.bits;
   cmd->window = s_locals.texture_window;
 }
@@ -3548,7 +3578,7 @@ bool GPU::HandleRenderPolyLineCommand()
 {
   // always read the first two vertices, we test for the terminator after that
   const GPURenderCommand rc{FifoPeek(0)};
-  const u32 min_words = rc.shading_enable ? 3 : 4;
+  const u32 min_words = rc.shading_enable ? 4 : 3;
   CHECK_COMMAND_SIZE(min_words);
 
   if (IsInterlacedRenderingEnabled() && IsCRTCScanlinePending())
@@ -3564,8 +3594,6 @@ bool GPU::HandleRenderPolyLineCommand()
   s_locals.fifo.RemoveOne();
 
   const u32 words_to_pop = min_words - 1;
-  // m_blit_buffer.resize(words_to_pop);
-  // FifoPopRange(m_blit_buffer.data(), words_to_pop);
   s_locals.polyline_buffer.reserve(words_to_pop);
   for (u32 i = 0; i < words_to_pop; i++)
     s_locals.polyline_buffer.push_back(s_locals.fifo.Pop());
@@ -3583,113 +3611,129 @@ void GPU::FinishPolyline()
   const u32 num_vertices = GetPolyLineVertexCount();
   DebugAssert(num_vertices >= 2);
 
-  if (g_settings.gpu_pgxp_enable)
+  // Keep expanded line vertices within the backend's index/depth limits and command queue capacity.
+  static constexpr u32 MAX_SEGMENTS_PER_COMMAND = 1024;
+  for (u32 first_vertex = 0; first_vertex < num_vertices - 1; first_vertex += MAX_SEGMENTS_PER_COMMAND)
   {
-    GPUBackendDrawPreciseLineCommand* RESTRICT cmd = GPUBackend::NewDrawPreciseLineCommand((num_vertices - 1) * 2);
-    FillDrawCommand<GPUPrimitive::Line>(cmd, s_locals.render_command);
-    cmd->palette.bits = 0;
-
-    u32 buffer_pos = 0;
-    u32 out_vertex_count = 0;
-    const bool shaded = s_locals.render_command.shading_enable;
-    bool valid_w = g_settings.gpu_pgxp_texture_correction;
-    GPUBackendDrawPreciseLineCommand::Vertex start, end;
-
-    const auto read_vertex = [&buffer_pos, &valid_w](GPUBackendDrawPreciseLineCommand::Vertex& RESTRICT dest,
-                                                     u32 color) {
-      const u64 maddr_and_pos = s_locals.polyline_buffer[buffer_pos++];
-      const GPUVertexPosition vp{Truncate32(maddr_and_pos)};
-      dest.native_x = s_locals.drawing_offset.x + vp.x;
-      dest.native_y = s_locals.drawing_offset.y + vp.y;
-      dest.color = color;
-      valid_w &=
-        CPU::PGXP::GetPreciseVertex(Truncate32(maddr_and_pos >> 32), vp.bits, dest.native_x, dest.native_y,
-                                    s_locals.drawing_offset.x, s_locals.drawing_offset.y, &dest.x, &dest.y, &dest.w);
-    };
-
-    read_vertex(start, s_locals.render_command.color_for_first_vertex);
-
-    for (u32 i = 1; i < num_vertices; i++)
+    const u32 batch_vertices = std::min(num_vertices - first_vertex, MAX_SEGMENTS_PER_COMMAND + 1);
+    if (g_settings.gpu_pgxp_enable)
     {
-      const u32 color = (shaded ? Truncate32(s_locals.polyline_buffer[buffer_pos++]) : s_locals.render_command.bits) &
-                        UINT32_C(0x00FFFFFF);
-      read_vertex(end, color);
+      GPUBackendDrawPreciseLineCommand* RESTRICT cmd = GPUBackend::NewDrawPreciseLineCommand((batch_vertices - 1) * 2);
+      FillDrawCommand<GPUPrimitive::Line>(cmd, s_locals.render_command);
+      cmd->palette.bits = 0;
 
-      const GSVector2i start_pos = GSVector2i::load<false>(&start.native_x);
-      const GSVector2i end_pos = GSVector2i::load<false>(&end.native_x);
-      const GSVector4i rect =
-        GSVector4i::xyxy(start_pos.min_s32(end_pos), start_pos.max_s32(end_pos)).add32(GSVector4i::cxpr(0, 0, 1, 1));
-      if (rect.width() > MAX_PRIMITIVE_WIDTH || rect.height() > MAX_PRIMITIVE_HEIGHT)
+      u32 buffer_pos = first_vertex << BoolToUInt8(s_locals.render_command.shading_enable);
+      u32 out_vertex_count = 0;
+      const bool shaded = s_locals.render_command.shading_enable;
+      bool valid_w = g_settings.gpu_pgxp_texture_correction;
+      GPUBackendDrawPreciseLineCommand::Vertex start, end;
+
+      const auto read_vertex = [&buffer_pos, &valid_w](GPUBackendDrawPreciseLineCommand::Vertex& RESTRICT dest,
+                                                       u32 color) {
+        const u64 maddr_and_pos = s_locals.polyline_buffer[buffer_pos++];
+        const GPUVertexPosition vp{Truncate32(maddr_and_pos)};
+        dest.native_x = s_locals.drawing_offset.x + vp.x;
+        dest.native_y = s_locals.drawing_offset.y + vp.y;
+        dest.color = color;
+        valid_w &=
+          CPU::PGXP::GetPreciseVertex(Truncate32(maddr_and_pos >> 32), vp.bits, dest.native_x, dest.native_y,
+                                      s_locals.drawing_offset.x, s_locals.drawing_offset.y, &dest.x, &dest.y, &dest.w);
+      };
+
+      const u32 first_color = (shaded && first_vertex > 0) ?
+                                (Truncate32(s_locals.polyline_buffer[buffer_pos - 1]) & 0x00FFFFFFu) :
+                                s_locals.render_command.color_for_first_vertex.GetValue();
+      read_vertex(start, first_color);
+
+      for (u32 i = 1; i < batch_vertices; i++)
       {
-        DEBUG_LOG("Culling too-large line: {} - {}", start_pos, end_pos);
+        const u32 color = (shaded ? Truncate32(s_locals.polyline_buffer[buffer_pos++]) : s_locals.render_command.bits) &
+                          UINT32_C(0x00FFFFFF);
+        read_vertex(end, color);
+
+        const GSVector2i start_pos = GSVector2i::load<false>(&start.native_x);
+        const GSVector2i end_pos = GSVector2i::load<false>(&end.native_x);
+        const GSVector4i rect =
+          GSVector4i::xyxy(start_pos.min_s32(end_pos), start_pos.max_s32(end_pos)).add32(GSVector4i::cxpr(0, 0, 1, 1));
+        if (rect.width() > MAX_PRIMITIVE_WIDTH || rect.height() > MAX_PRIMITIVE_HEIGHT)
+        {
+          DEBUG_LOG("Culling too-large line: {} - {}", start_pos, end_pos);
+        }
+        else
+        {
+          AddDrawLineTicks(rect, s_locals.render_command.shading_enable);
+
+          cmd->vertices[out_vertex_count++] = start;
+          cmd->vertices[out_vertex_count++] = end;
+        }
+
+        start = end;
       }
-      else
+
+      if (out_vertex_count > 0)
       {
-        AddDrawLineTicks(rect, s_locals.render_command.shading_enable);
-
-        cmd->vertices[out_vertex_count++] = start;
-        cmd->vertices[out_vertex_count++] = end;
+        DebugAssert(out_vertex_count <= cmd->num_vertices);
+        cmd->num_vertices = Truncate16(out_vertex_count);
+        if (!(cmd->valid_w = valid_w))
+        {
+          for (u32 i = 0; i < out_vertex_count; i++)
+            cmd->vertices[i].w = 1.0f;
+        }
+        GPUBackend::PushCommand(cmd);
       }
-
-      start = end;
     }
-
-    if (out_vertex_count > 0)
+    else
     {
-      DebugAssert(out_vertex_count <= cmd->num_vertices);
-      cmd->num_vertices = Truncate16(out_vertex_count);
-      GPUBackend::PushCommand(cmd);
-    }
-  }
-  else
-  {
-    GPUBackendDrawLineCommand* RESTRICT cmd = GPUBackend::NewDrawLineCommand((num_vertices - 1) * 2);
-    FillDrawCommand<GPUPrimitive::Line>(cmd, s_locals.render_command);
-    cmd->palette.bits = 0;
+      GPUBackendDrawLineCommand* RESTRICT cmd = GPUBackend::NewDrawLineCommand((batch_vertices - 1) * 2);
+      FillDrawCommand<GPUPrimitive::Line>(cmd, s_locals.render_command);
+      cmd->palette.bits = 0;
 
-    u32 buffer_pos = 0;
-    const GPUVertexPosition start_vp{Truncate32(s_locals.polyline_buffer[buffer_pos++])};
-    const GSVector2i draw_offset = GSVector2i::load<false>(&s_locals.drawing_offset.x);
-    GSVector2i start_pos = GSVector2i(start_vp.x, start_vp.y).add32(draw_offset);
-    u32 start_color = s_locals.render_command.color_for_first_vertex;
+      u32 buffer_pos = first_vertex << BoolToUInt8(s_locals.render_command.shading_enable);
+      const GPUVertexPosition start_vp{Truncate32(s_locals.polyline_buffer[buffer_pos++])};
+      const GSVector2i draw_offset = GSVector2i::load<false>(&s_locals.drawing_offset.x);
+      GSVector2i start_pos = GSVector2i(start_vp.x, start_vp.y).add32(draw_offset);
+      u32 start_color = (s_locals.render_command.shading_enable && first_vertex > 0) ?
+                          (Truncate32(s_locals.polyline_buffer[buffer_pos - 2]) & 0x00FFFFFFu) :
+                          s_locals.render_command.color_for_first_vertex.GetValue();
 
-    const bool shaded = s_locals.render_command.shading_enable;
-    u32 out_vertex_count = 0;
-    for (u32 i = 1; i < num_vertices; i++)
-    {
-      const u32 end_color = shaded ? (Truncate32(s_locals.polyline_buffer[buffer_pos++] & UINT32_C(0x00FFFFFF))) :
-                                     s_locals.render_command.color_for_first_vertex;
-      const GPUVertexPosition vp{Truncate32(s_locals.polyline_buffer[buffer_pos++])};
-      const GSVector2i end_pos = GSVector2i(vp.x, vp.y).add32(draw_offset);
-
-      const GSVector4i rect =
-        GSVector4i::xyxy(start_pos.min_s32(end_pos), start_pos.max_s32(end_pos)).add32(GSVector4i::cxpr(0, 0, 1, 1));
-      if (rect.width() > MAX_PRIMITIVE_WIDTH || rect.height() > MAX_PRIMITIVE_HEIGHT)
+      const bool shaded = s_locals.render_command.shading_enable;
+      u32 out_vertex_count = 0;
+      for (u32 i = 1; i < batch_vertices; i++)
       {
-        DEBUG_LOG("Culling too-large line: {},{} - {},{}", start_pos.x, start_pos.y, end_pos.x, end_pos.y);
-      }
-      else
-      {
-        AddDrawLineTicks(rect, s_locals.render_command.shading_enable);
+        const u32 end_color = shaded ? (Truncate32(s_locals.polyline_buffer[buffer_pos++] & UINT32_C(0x00FFFFFF))) :
+                                       s_locals.render_command.color_for_first_vertex;
+        const GPUVertexPosition vp{Truncate32(s_locals.polyline_buffer[buffer_pos++])};
+        const GSVector2i end_pos = GSVector2i(vp.x, vp.y).add32(draw_offset);
 
-        GPUBackendDrawLineCommand::Vertex* out_vertex = &cmd->vertices[out_vertex_count];
-        out_vertex_count += 2;
+        const GSVector4i rect =
+          GSVector4i::xyxy(start_pos.min_s32(end_pos), start_pos.max_s32(end_pos)).add32(GSVector4i::cxpr(0, 0, 1, 1));
+        if (rect.width() > MAX_PRIMITIVE_WIDTH || rect.height() > MAX_PRIMITIVE_HEIGHT)
+        {
+          DEBUG_LOG("Culling too-large line: {},{} - {},{}", start_pos.x, start_pos.y, end_pos.x, end_pos.y);
+        }
+        else
+        {
+          AddDrawLineTicks(rect, s_locals.render_command.shading_enable);
 
-        GSVector2i::store<false>(&out_vertex[0].x, start_pos);
-        out_vertex[0].color = start_color;
-        GSVector2i::store<false>(&out_vertex[1].x, end_pos);
-        out_vertex[1].color = end_color;
+          GPUBackendDrawLineCommand::Vertex* out_vertex = &cmd->vertices[out_vertex_count];
+          out_vertex_count += 2;
+
+          GSVector2i::store<false>(&out_vertex[0].x, start_pos);
+          out_vertex[0].color = start_color;
+          GSVector2i::store<false>(&out_vertex[1].x, end_pos);
+          out_vertex[1].color = end_color;
+        }
+
+        start_pos = end_pos;
+        start_color = end_color;
       }
 
-      start_pos = end_pos;
-      start_color = end_color;
-    }
-
-    if (out_vertex_count > 0)
-    {
-      DebugAssert(out_vertex_count <= cmd->num_vertices);
-      cmd->num_vertices = Truncate16(out_vertex_count);
-      GPUBackend::PushCommand(cmd);
+      if (out_vertex_count > 0)
+      {
+        DebugAssert(out_vertex_count <= cmd->num_vertices);
+        cmd->num_vertices = Truncate16(out_vertex_count);
+        GPUBackend::PushCommand(cmd);
+      }
     }
   }
 }
@@ -3773,7 +3817,7 @@ void GPU::FinishVRAMWrite()
 
   if (s_locals.blit_remaining_words == 0)
   {
-    if (g_settings.gpu_dump_cpu_to_vram_copies)
+    if (g_settings.gpu_dump_cpu_to_vram_copies) [[unlikely]]
     {
       DumpVRAMToFile(fmt::format("{}" FS_OSPATH_SEPARATOR_STR "cpu_to_vram_copy_{}.png", EmuFolders::DataRoot,
                                  ++s_locals.cpu_to_vram_dump_id),
@@ -3836,12 +3880,25 @@ bool GPU::HandleCopyRectangleVRAMToCPUCommand()
   ReadVRAM(s_locals.vram_transfer.x, s_locals.vram_transfer.y, s_locals.vram_transfer.width,
            s_locals.vram_transfer.height);
 
-  if (g_settings.gpu_dump_vram_to_cpu_copies)
+  if (g_settings.gpu_dump_vram_to_cpu_copies) [[unlikely]]
   {
+    // GPUREAD wraps each coordinate independently. Build a contiguous image for the dump helper.
+    const u32 width = s_locals.vram_transfer.width;
+    const u32 height = s_locals.vram_transfer.height;
+    const u32 x = s_locals.vram_transfer.x;
+    const u32 first_width = std::min(width, VRAM_WIDTH - x);
+    std::vector<u16> pixels(width * height);
+    for (u32 row = 0; row < height; row++)
+    {
+      const u16* src = &g_vram[((s_locals.vram_transfer.y + row) & VRAM_HEIGHT_MASK) * VRAM_WIDTH];
+      u16* dst = &pixels[row * width];
+      std::memcpy(dst, src + x, first_width * sizeof(u16));
+      std::memcpy(dst + first_width, src, (width - first_width) * sizeof(u16));
+    }
+
     DumpVRAMToFile(fmt::format("{}" FS_OSPATH_SEPARATOR_STR "vram_to_cpu_copy_{}.png", EmuFolders::DataRoot,
                                ++s_locals.vram_to_cpu_dump_id),
-                   s_locals.vram_transfer.width, s_locals.vram_transfer.height, sizeof(u16) * VRAM_WIDTH,
-                   &g_vram[s_locals.vram_transfer.y * VRAM_WIDTH + s_locals.vram_transfer.x], true);
+                   width, height, sizeof(u16) * width, pixels.data(), true);
   }
 
   // switch to pixel-by-pixel read state
@@ -3905,7 +3962,7 @@ void GPU::DrawDebugStateWindow(float scale)
     ImGui::Text("Draw Set Mask Bit: %s", s_locals.GPUSTAT.set_mask_while_drawing ? "Yes" : "No");
     ImGui::Text("Draw To Masked Pixels: %s", s_locals.GPUSTAT.check_mask_before_draw ? "Yes" : "No");
     ImGui::Text("Reverse Flag: %s", s_locals.GPUSTAT.reverse_flag ? "Yes" : "No");
-    ImGui::Text("Texture Disable: %s", s_locals.GPUSTAT.texture_disable ? "Yes" : "No");
+    ImGui::Text("Texture Page Upper Bank: %s", s_locals.GPUSTAT.texture_page_y_base_2 ? "Yes" : "No");
     ImGui::Text("PAL Mode: %s", s_locals.GPUSTAT.pal_mode ? "Yes" : "No");
     ImGui::Text("Interrupt Request: %s", s_locals.GPUSTAT.interrupt_request ? "Yes" : "No");
     ImGui::Text("DMA Request: %s", s_locals.GPUSTAT.dma_data_request ? "Yes" : "No");
@@ -4006,6 +4063,7 @@ void GPU::StopRecordingGPUDump()
       OSDMessageType::Error, "GPUDump", ICON_EMOJI_CAMERA_WITH_FLASH,
       fmt::format("{}\n{}", TRANSLATE_SV("GPU", "Failed to close GPU trace:"), error.GetDescription()));
     s_locals.gpu_dump.reset();
+    return;
   }
 
   // Are we compressing the dump?
@@ -4055,7 +4113,7 @@ void GPU::WriteCurrentVideoModeToDump(GPUDump::Recorder* dump)
   dump->WriteGP1Command(GP1Command::SetDisplayStartAddress, s_locals.crtc_state.regs.display_address_start);
   dump->WriteGP1Command(GP1Command::SetHorizontalDisplayRange, s_locals.crtc_state.regs.horizontal_display_range);
   dump->WriteGP1Command(GP1Command::SetVerticalDisplayRange, s_locals.crtc_state.regs.vertical_display_range);
-  dump->WriteGP1Command(GP1Command::SetAllowTextureDisable, BoolToUInt32(s_locals.set_texture_disable_mask));
+  dump->WriteGP1Command(GP1Command::SetVRAMSize, BoolToUInt32(s_locals.enable_upper_vram));
 
   // display mode
   GP1SetDisplayMode dispmode = {};
@@ -4165,6 +4223,9 @@ void GPU::ProcessGPUDumpPacket(GPUDump::PacketType type, const std::span<const u
       SystemTicksToCRTCTicks(system_ticks_per_frame, &s_locals.crtc_state.fractional_ticks);
       TimingEvents::SetGlobalTickCounter(TimingEvents::GetGlobalTickCounter() +
                                          static_cast<GlobalTicks>(system_ticks_per_frame));
+
+      // consume the ticks without running the CRTC, otherwise the next sync would raise another vblank
+      s_locals.crtc_tick_event.m_last_run_time = TimingEvents::GetGlobalTickCounter();
       System::IncrementFrameNumber();
       UpdateDisplay(true);
       System::FrameDone();

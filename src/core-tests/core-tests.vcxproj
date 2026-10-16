@@ -6,6 +6,8 @@
     <ClCompile Include="cdrom_tests.cpp" />
     <ClCompile Include="cheats_tests.cpp" />
     <ClCompile Include="cpu_disasm_tests.cpp" />
+    <ClCompile Include="gpu_sw_rasterizer_tests.cpp" />
+    <ClCompile Include="gpu_tests.cpp" />
     <ClCompile Include="gte_tests.cpp" />
     <ClCompile Include="gte_timing_tests.cpp" />
     <ClCompile Include="lightgun_controller_tests.cpp" />
@@ -13,6 +15,7 @@
     <ClCompile Include="negcon_base_tests.cpp" />
     <ClCompile Include="spu_tests.cpp" />
     <ClCompile Include="stub_host.cpp" />
+    <ClCompile Include="timers_tests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\dep\googletest\googletest.vcxproj">

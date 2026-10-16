@@ -249,7 +249,12 @@ static void DrawRectangle(const GPUBackendDrawRectangleCommand* cmd)
   const auto [r, g, b] = UnpackColorRGB24(cmd->color);
   const auto [origin_texcoord_x, origin_texcoord_y] = UnpackTexcoord(cmd->texcoord);
 
-  for (u32 offset_y = 0; offset_y < cmd->height; offset_y++)
+  // 0xFF steps backwards, since the coordinates wrap at 8 bits.
+  const u32 texcoord_step_x = cmd->draw_mode.texture_x_flip ? 0xFFu : 1u;
+  const u32 texcoord_step_y = cmd->draw_mode.texture_y_flip ? 0xFFu : 1u;
+
+  u32 texcoord_y = origin_texcoord_y;
+  for (u32 offset_y = 0; offset_y < cmd->height; offset_y++, texcoord_y += texcoord_step_y)
   {
     const s32 y = origin_y + static_cast<s32>(offset_y);
     if (y < static_cast<s32>(g_drawing_area.top) || y > static_cast<s32>(g_drawing_area.bottom) ||
@@ -260,18 +265,16 @@ static void DrawRectangle(const GPUBackendDrawRectangleCommand* cmd)
     }
 
     const u32 draw_y = static_cast<u32>(y) & VRAM_HEIGHT_MASK;
-    const u8 texcoord_y = Truncate8(ZeroExtend32(origin_texcoord_y) + offset_y);
 
-    for (u32 offset_x = 0; offset_x < cmd->width; offset_x++)
+    u32 texcoord_x = origin_texcoord_x;
+    for (u32 offset_x = 0; offset_x < cmd->width; offset_x++, texcoord_x += texcoord_step_x)
     {
       const s32 x = origin_x + static_cast<s32>(offset_x);
       if (x < static_cast<s32>(g_drawing_area.left) || x > static_cast<s32>(g_drawing_area.right))
         continue;
 
-      const u8 texcoord_x = Truncate8(ZeroExtend32(origin_texcoord_x) + offset_x);
-
-      ShadePixel<modulation_mode, transparency_enable>(cmd, static_cast<u32>(x), draw_y, r, g, b, texcoord_x,
-                                                       texcoord_y);
+      ShadePixel<modulation_mode, transparency_enable>(cmd, static_cast<u32>(x), draw_y, r, g, b, Truncate8(texcoord_x),
+                                                       Truncate8(texcoord_y));
     }
   }
 }
@@ -320,6 +323,22 @@ ALWAYS_INLINE_RELEASE static GSVector8i GatherCLUTVector(GSVector8i indices, GSV
   pixels = pixels.insert16<10>(g_gpu_clut[static_cast<u32>(offsets.extract32<5>())]);
   pixels = pixels.insert16<12>(g_gpu_clut[static_cast<u32>(offsets.extract32<6>())]);
   pixels = pixels.insert16<14>(g_gpu_clut[static_cast<u32>(offsets.extract32<7>())]);
+  return pixels;
+}
+
+// Looks up 8-bit palette indices directly, coord_x is in bytes instead of pixels. Assumes little endian.
+ALWAYS_INLINE_RELEASE static GSVector8i GatherCLUT8Vector(GSVector8i coord_x, GSVector8i coord_y)
+{
+  const GSVector8i offsets = coord_y.sll32<11>().add32(coord_x); // y * 2048 + x
+  const u8* const vram = reinterpret_cast<const u8*>(g_vram);
+  GSVector8i pixels = GSVector8i::zext32(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<0>())]]);
+  pixels = pixels.insert16<2>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<1>())]]);
+  pixels = pixels.insert16<4>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<2>())]]);
+  pixels = pixels.insert16<6>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<3>())]]);
+  pixels = pixels.insert16<8>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<4>())]]);
+  pixels = pixels.insert16<10>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<5>())]]);
+  pixels = pixels.insert16<12>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<6>())]]);
+  pixels = pixels.insert16<14>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<7>())]]);
   return pixels;
 }
 
@@ -412,6 +431,18 @@ ALWAYS_INLINE_RELEASE static GSVector4i GatherCLUTVector(GSVector4i indices, GSV
 #endif
 }
 
+// Looks up 8-bit palette indices directly, coord_x is in bytes instead of pixels. Assumes little endian.
+ALWAYS_INLINE_RELEASE static GSVector4i GatherCLUT8Vector(GSVector4i coord_x, GSVector4i coord_y)
+{
+  const GSVector4i offsets = coord_y.sll32<11>().add32(coord_x); // y * 2048 + x
+  const u8* const vram = reinterpret_cast<const u8*>(g_vram);
+  GSVector4i pixels = GSVector4i::zext32(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<0>())]]);
+  pixels = pixels.insert16<2>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<1>())]]);
+  pixels = pixels.insert16<4>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<2>())]]);
+  pixels = pixels.insert16<6>(g_gpu_clut[vram[static_cast<u32>(offsets.extract32<3>())]]);
+  return pixels;
+}
+
 ALWAYS_INLINE_RELEASE static GSVector4i LoadVector(u32 x, u32 y)
 {
   if (x <= (VRAM_WIDTH - 4))
@@ -448,22 +479,20 @@ ALWAYS_INLINE_RELEASE static void StoreVector(u32 x, u32 y, GSVector4i color)
 
 #endif
 
+// Alpha is not unpacked, it doesn't get modulated.
 ALWAYS_INLINE_RELEASE static void RGB5A1ToRG_BA(GSVectorNi rgb5a1, GSVectorNi& rg, GSVectorNi& ba)
 {
-  rg = rgb5a1 & GSVectorNi::cxpr(0x1F);                     // R | R | R | R
-  rg = rg | (rgb5a1 & GSVectorNi::cxpr(0x3E0)).sll32<11>(); // R0G0 | R0G0 | R0G0 | R0G0
-  ba = rgb5a1.srl32<10>() & GSVectorNi::cxpr(0x1F);         // B | B | B | B
-  ba = ba | (rgb5a1 & GSVectorNi::cxpr(0x8000)).sll32<1>(); // B0A0 | B0A0 | B0A0 | B0A0
+  rg = (rgb5a1 | rgb5a1.sll32<11>()) & GSVectorNi::cxpr(0x1F001F); // R0G0 | R0G0 | R0G0 | R0G0
+  ba = rgb5a1.srl32<10>() & GSVectorNi::cxpr(0x1F);                // B000 | B000 | B000 | B000
 }
 
+// Expects the components to be clamped to 5 bits, and alpha to be zero.
 ALWAYS_INLINE_RELEASE static GSVectorNi RG_BAToRGB5A1(GSVectorNi rg, GSVectorNi ba)
 {
   GSVectorNi res;
 
-  res = rg & GSVectorNi::cxpr(0x1F);                       // R | R | R | R
-  res = res | (rg.srl32<11>() & GSVectorNi::cxpr(0x3E0));  // RG | RG | RG | RG
-  res = res | ((ba & GSVectorNi::cxpr(0x1F)).sll32<10>()); // RGB | RGB | RGB | RGB
-  res = res | ba.srl32<16>().sll32<15>();                  // RGBA | RGBA | RGBA | RGBA
+  res = (rg | rg.srl32<11>()) & GSVectorNi::cxpr(0x3FF); // RG | RG | RG | RG
+  res = res | ba.sll32<10>();                            // RGB | RGB | RGB | RGB
 
   return res;
 }
@@ -498,9 +527,14 @@ struct PixelVectors
   NO_UNIQUE_ADDRESS typename std::conditional_t<texture_enable, GSVectorNi, UnusedField> texture_window_and_y;
   NO_UNIQUE_ADDRESS typename std::conditional_t<texture_enable, GSVectorNi, UnusedField> texture_window_or_y;
   NO_UNIQUE_ADDRESS typename std::conditional_t<texture_enable, GSVectorNi, UnusedField> texture_base_x;
-  NO_UNIQUE_ADDRESS typename std::conditional_t<texture_enable, GSVectorNi, UnusedField> texture_base_y;
 
-  PixelVectors(const GPUBackendDrawCommand* cmd)
+#ifdef GSVECTOR_HAS_FAST_INT_SHUFFLE8
+  // Low and high bytes of the 4-bit CLUT, so it can be looked up with shuffle8().
+  NO_UNIQUE_ADDRESS typename std::conditional_t<texture_enable, GSVectorNi, UnusedField> clut_lo;
+  NO_UNIQUE_ADDRESS typename std::conditional_t<texture_enable, GSVectorNi, UnusedField> clut_hi;
+#endif
+
+  ALWAYS_INLINE_RELEASE PixelVectors(const GPUBackendDrawCommand* cmd)
   {
     clip_left = GSVectorNi(g_drawing_area.left);
     clip_right = GSVectorNi(g_drawing_area.right);
@@ -513,60 +547,85 @@ struct PixelVectors
       texture_window_and_x = GSVectorNi(cmd->window.and_x);
       texture_window_or_x = GSVectorNi(cmd->window.or_x);
       texture_window_and_y = GSVectorNi(cmd->window.and_y);
-      texture_window_or_y = GSVectorNi(cmd->window.or_y);
+      // The base of the page is either 0 or 256, and the texture coordinate is 8 bits, so it can be ORed in too.
+      texture_window_or_y = GSVectorNi(cmd->window.or_y | cmd->draw_mode.GetTexturePageBaseY());
       texture_base_x = GSVectorNi(cmd->draw_mode.GetTexturePageBaseX());
-      texture_base_y = GSVectorNi(cmd->draw_mode.GetTexturePageBaseY());
+
+#ifdef GSVECTOR_HAS_FAST_INT_SHUFFLE8
+      if (cmd->draw_mode.texture_mode == GPUTextureMode::Palette4Bit)
+      {
+        const GSVector4i clut0 = GSVector4i::load<false>(&g_gpu_clut[0]);
+        const GSVector4i clut1 = GSVector4i::load<false>(&g_gpu_clut[8]);
+        const GSVector4i mask = GSVector4i::cxpr16(0xFF);
+        clut_lo = GSVectorNi::broadcast128((clut0 & mask).pu16(clut1 & mask));
+        clut_hi = GSVectorNi::broadcast128(clut0.srl16<8>().pu16(clut1.srl16<8>()));
+      }
+#endif
     }
   }
 };
 } // namespace
 
-template<TextureModulationMode modulation_mode, bool transparency_enable>
-ALWAYS_INLINE_RELEASE static void
-ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled>& RESTRICT pv,
-           GPUTextureMode texture_mode, GPUTransparencyMode transparency_mode, bool mask_bit_test, u32 start_x, u32 y,
-           GSVectorNi vertex_color_rg, GSVectorNi vertex_color_ba, GSVectorNi texcoord_x, GSVectorNi texcoord_y,
-           GSVectorNi preserve_mask, GSVectorNi dither)
+// Looks up the colours for 4-bit palette indices, after shifting each one out of the word it was loaded from.
+ALWAYS_INLINE_RELEASE static GSVectorNi LookupCLUT4Vector(const PixelVectors<true>& RESTRICT pv, GSVectorNi indices,
+                                                          GSVectorNi shifts)
 {
-  static constexpr bool texture_enable = (modulation_mode != TextureModulationMode::Disabled);
+#ifdef GSVECTOR_HAS_FAST_INT_SHUFFLE8
+  // The CLUT only has 16 entries in this mode, which fits in a pair of registers when split into bytes.
+  // That way the indices don't have to make another trip through scalar registers to get the colour.
+#ifdef GSVECTOR_HAS_SRLV
+  indices = indices.srlv32(shifts) & GSVectorNi::cxpr(0x0F);
+#else
+  // Without variable shifts, multiply to move the index to the top of the word instead.
+  static constexpr GSVectorNi multipliers = GSVectorNi::cxpr16(0x1000, 0, 0x100, 0, 0x10, 0, 0x1, 0);
+  indices =
+    indices.mul16l(multipliers.shuffle8(shifts | shifts.sll32<8>() | GSVectorNi::cxpr(static_cast<s32>(0x80800100u))))
+      .srl16<12>();
+#endif
+  return pv.clut_lo.shuffle8(indices | GSVectorNi::cxpr(static_cast<s32>(0x80808000u))) |
+         pv.clut_hi.shuffle8(indices.sll32<8>() | GSVectorNi::cxpr(static_cast<s32>(0x80800080u)));
+#else
+  return GatherCLUTVector<0x0F>(indices, shifts);
+#endif
+}
 
+template<bool texture_enable>
+ALWAYS_INLINE_RELEASE static GSVectorNi SampleTexture(const PixelVectors<texture_enable>& RESTRICT pv,
+                                                      GPUTextureMode texture_mode, GSVectorNi texcoord_x,
+                                                      GSVectorNi texcoord_y)
+{
   static constexpr GSVectorNi coord_mask_x = GSVectorNi::cxpr(VRAM_WIDTH_MASK);
-  static constexpr GSVectorNi coord_mask_y = GSVectorNi::cxpr(VRAM_HEIGHT_MASK);
 
-  GSVectorNi color;
+  // Hopefully optimized out when not texturing...
+  GSVectorNi texture_color = GSVectorNi::zero();
 
   if constexpr (texture_enable)
   {
-    // Apply texture window
+    // Apply texture window, this includes the base of the texture page for Y
     texcoord_x = (texcoord_x & pv.texture_window_and_x) | pv.texture_window_or_x;
     texcoord_y = (texcoord_y & pv.texture_window_and_y) | pv.texture_window_or_y;
 
-    texcoord_y = pv.texture_base_y.add32(texcoord_y) & coord_mask_y;
-
-    GSVectorNi texture_color;
     switch (texture_mode)
     {
       case GPUTextureMode::Palette4Bit:
       {
+        // Can't go past the end of VRAM, the last page starts at 960, and is only 64 pixels wide here.
         GSVectorNi load_texcoord_x = texcoord_x.srl32<2>();
         load_texcoord_x = pv.texture_base_x.add32(load_texcoord_x);
-        load_texcoord_x = load_texcoord_x & coord_mask_x;
 
         const GSVectorNi palette_shift = (texcoord_x & GSVectorNi::cxpr(3)).sll32<2>();
         const GSVectorNi palette_indices = GatherVector(load_texcoord_x, texcoord_y);
-        texture_color = GatherCLUTVector<0x0F>(palette_indices, palette_shift);
+        texture_color = LookupCLUT4Vector(pv, palette_indices, palette_shift);
       }
       break;
 
       case GPUTextureMode::Palette8Bit:
       {
-        GSVectorNi load_texcoord_x = texcoord_x.srl32<1>();
-        load_texcoord_x = pv.texture_base_x.add32(load_texcoord_x);
-        load_texcoord_x = load_texcoord_x & coord_mask_x;
-
-        const GSVectorNi palette_shift = (texcoord_x & GSVectorNi::cxpr(1)).sll32<3>();
-        const GSVectorNi palette_indices = GatherVector(load_texcoord_x, texcoord_y);
-        texture_color = GatherCLUTVector<0xFF>(palette_indices, palette_shift);
+        // Each index is one byte, so they can be read out of VRAM as-is, rather than loading and shifting words.
+        // ((base_x + (x / 2)) & 1023) * 2 + (x & 1) == ((base_x * 2) + x) & 2047
+        GSVectorNi load_texcoord_x = pv.texture_base_x.add32(pv.texture_base_x);
+        load_texcoord_x = load_texcoord_x.add32(texcoord_x) & GSVectorNi::cxpr((VRAM_WIDTH * 2) - 1);
+        texture_color = GatherCLUT8Vector(load_texcoord_x, texcoord_y);
       }
       break;
 
@@ -578,7 +637,23 @@ ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled
       }
       break;
     }
+  }
 
+  return texture_color;
+}
+
+template<TextureModulationMode modulation_mode, bool transparency_enable>
+ALWAYS_INLINE_RELEASE static void
+ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled>& RESTRICT pv,
+           GPUTransparencyMode transparency_mode, bool mask_bit_test, u32 start_x, u32 y, GSVectorNi vertex_color_rg,
+           GSVectorNi vertex_color_ba, GSVectorNi texture_color, GSVectorNi preserve_mask, GSVectorNi dither)
+{
+  static constexpr bool texture_enable = (modulation_mode != TextureModulationMode::Disabled);
+
+  GSVectorNi color;
+
+  if constexpr (texture_enable)
+  {
     // check for zero texture colour across the 4 pixels, early out if so
     const GSVectorNi texture_transparent_mask = texture_color.eq32(GSVectorNi::zero());
     if (texture_transparent_mask.alltrue())
@@ -602,9 +677,10 @@ ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled
         rg = trg.mul16l(vertex_color_rg);
         ba = tba.mul16l(vertex_color_ba);
 
-        // Convert to 5bit.
-        rg = rg.sra16<4>().add16(dither).max_s16(GSVectorNi::zero()).sra16<3>();
-        ba = ba.sra16<4>().add16(dither).max_s16(GSVectorNi::zero()).sra16<3>();
+        // Convert to 5bit. Dither is shifted up to match the colour, rather than shifting the colour down first.
+        const GSVectorNi shifted_dither = dither.sll16<4>();
+        rg = rg.add16(shifted_dither).sra16<7>().max_s16(GSVectorNi::zero());
+        ba = ba.add16(shifted_dither).sra16<7>().max_s16(GSVectorNi::zero());
       }
       else
       {
@@ -612,21 +688,19 @@ ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled
         rg = trg.mul16l(vertex_color_rg.sra16<3>());
         ba = tba.mul16l(vertex_color_ba.sra16<3>());
 
-        // Convert to 5bit.
-        rg = rg.sra16<1>().add16(dither).max_s16(GSVectorNi::zero()).sra16<3>();
-        ba = ba.sra16<1>().add16(dither).max_s16(GSVectorNi::zero()).sra16<3>();
+        // Convert to 5bit. Dither is shifted up to match the colour, rather than shifting the colour down first.
+        const GSVectorNi shifted_dither = dither.sll16<1>();
+        rg = rg.add16(shifted_dither).sra16<4>().max_s16(GSVectorNi::zero());
+        ba = ba.add16(shifted_dither).sra16<4>().max_s16(GSVectorNi::zero());
       }
-
-      // Bit15 gets passed through as-is.
-      ba = ba.blend16<0xaa>(tba);
 
       // Clamp to 5bit.
       static constexpr GSVectorNi colclamp = GSVectorNi::cxpr16(0x1F);
       rg = rg.min_u16(colclamp);
       ba = ba.min_u16(colclamp);
 
-      // And interleave back to 16bpp.
-      color = RG_BAToRGB5A1(rg, ba);
+      // And interleave back to 16bpp. Bit15 gets passed through as-is.
+      color = RG_BAToRGB5A1(rg, ba) | (texture_color & GSVectorNi::cxpr(0x8000));
     }
   }
   else
@@ -661,15 +735,14 @@ ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled
         transparent_mask = color.sra16<15>();
       }
 
-      // TODO: We don't need to OR color here with 0x8000 for textures.
-      // 0x8000 is added to match serial path.
+      // 0x8000 is added to match serial path. Textured pixels are only blended when it is already set.
 
       GSVectorNi blended_color;
       switch (transparency_mode)
       {
         case GPUTransparencyMode::HalfBackgroundPlusHalfForeground:
         {
-          const GSVectorNi fg_bits = color | GSVectorNi::cxpr(0x8000u);
+          const GSVectorNi fg_bits = texture_enable ? color : (color | GSVectorNi::cxpr(0x8000u));
           const GSVectorNi bg_bits = bg_color | GSVectorNi::cxpr(0x8000u);
           const GSVectorNi res =
             fg_bits.add32(bg_bits).sub32((fg_bits ^ bg_bits) & GSVectorNi::cxpr(0x0421u)).srl32<1>();
@@ -679,7 +752,7 @@ ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled
 
         case GPUTransparencyMode::BackgroundPlusForeground:
         {
-          const GSVectorNi fg_bits = color | GSVectorNi::cxpr(0x8000u);
+          const GSVectorNi fg_bits = texture_enable ? color : (color | GSVectorNi::cxpr(0x8000u));
           const GSVectorNi bg_bits = bg_color & GSVectorNi::cxpr(0x7FFFu);
           const GSVectorNi sum = fg_bits.add32(bg_bits);
           const GSVectorNi carry =
@@ -705,8 +778,7 @@ ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled
         default:
         {
           const GSVectorNi bg_bits = bg_color & GSVectorNi::cxpr(0x7FFFu);
-          const GSVectorNi fg_bits =
-            ((color | GSVectorNi::cxpr(0x8000)).srl32<2>() & GSVectorNi::cxpr(0x1CE7u)) | GSVectorNi::cxpr(0x8000u);
+          const GSVectorNi fg_bits = (color.srl32<2>() & GSVectorNi::cxpr(0x1CE7u)) | GSVectorNi::cxpr(0x8000u);
           const GSVectorNi sum = fg_bits.add32(bg_bits);
           const GSVectorNi carry =
             sum.sub32((fg_bits ^ bg_bits) & GSVectorNi::cxpr(0x8421u)) & GSVectorNi::cxpr(0x8420u);
@@ -727,9 +799,7 @@ ShadePixel(const PixelVectors<modulation_mode != TextureModulationMode::Disabled
     mask_bits_set = mask_bits_set.sra16<15>();         // ffff if masked else 0000
     preserve_mask = preserve_mask | mask_bits_set;     // ffff if preserved else 0000
 
-    bg_color = bg_color & preserve_mask;
-    color = (color | pv.mask_or).andnot(preserve_mask);
-    color = color | bg_color;
+    color = (color | pv.mask_or).blend8(bg_color, preserve_mask);
   }
 
   StoreVector(start_x, y, color);
@@ -749,13 +819,34 @@ static void DrawRectangle(const GPUBackendDrawRectangleCommand* RESTRICT cmd)
   const GSVectorNi rg = GSVectorNi::broadcast128(rgp.u8to16()); // R0G0 | R0G0 | R0G0 | R0G0
   const GSVectorNi ba = GSVectorNi::broadcast128(bap.u8to16()); // B0A0 | B0A0 | B0A0 | B0A0
 
-  const GSVectorNi texcoord_x = GSVectorNi(cmd->texcoord & 0xFF).add32(SPAN_OFFSET_VEC);
+  const GSVectorNi x_step =
+    cmd->draw_mode.texture_x_flip ? GSVectorNi::zero().sub32(PIXELS_PER_VEC_VEC) : PIXELS_PER_VEC_VEC;
+  const GSVectorNi y_step = GSVectorNi(cmd->draw_mode.texture_y_flip ? -1 : 1);
+  const GSVectorNi texcoord_x = cmd->draw_mode.texture_x_flip ?
+                                  GSVectorNi(cmd->texcoord & 0xFF).sub32(SPAN_OFFSET_VEC) :
+                                  GSVectorNi(cmd->texcoord & 0xFF).add32(SPAN_OFFSET_VEC);
   GSVectorNi texcoord_y = GSVectorNi(cmd->texcoord >> 8);
 
   const PixelVectors<texture_enable> pv(cmd);
   const u32 width = cmd->width;
+  const GPUTextureMode texture_mode = cmd->draw_mode.texture_mode;
   const GPUTransparencyMode transparency_mode = cmd->draw_mode.transparency_mode;
   const bool mask_bit_test = cmd->check_mask_before_draw;
+
+  // Texture coordinates increase by one for each pixel, so unless the window is rearranging them, the texels for
+  // each vector are next to each other in VRAM, and can be loaded together instead of gathering them one by one.
+  // That stops being the case when the coordinates wrap around within the vector, or for 4-bit, when the load would
+  // run past the end of the row. 8-bit indices still have to be looked up one by one, so there is nothing to gain.
+  // X-flip decrements the coordinates instead, so it always has to gather.
+  const u32 texture_base_x = cmd->draw_mode.GetTexturePageBaseX();
+  u32 sequential_texcoord_end = 0;
+  if (cmd->window.and_x == 0xFF && cmd->window.or_x == 0x00 && texture_mode != GPUTextureMode::Palette8Bit &&
+      !cmd->draw_mode.texture_x_flip)
+  {
+    sequential_texcoord_end = (0x100u - PIXELS_PER_VEC) + 1;
+    if (texture_mode == GPUTextureMode::Palette4Bit)
+      sequential_texcoord_end = std::min(sequential_texcoord_end, ((VRAM_WIDTH - 4) + 1 - texture_base_x) * 4);
+  }
 
 #ifdef CHECK_VECTOR
   BACKUP_VRAM();
@@ -769,6 +860,8 @@ static void DrawRectangle(const GPUBackendDrawRectangleCommand* RESTRICT cmd)
          cmd->active_line_lsb != ConvertToBoolUnchecked(Truncate8(static_cast<u32>(y)) & 1u)))
     {
       const s32 draw_y = (y & VRAM_HEIGHT_MASK);
+      const u32 texture_y = cmd->draw_mode.GetTexturePageBaseY() +
+                            ((static_cast<u32>(texcoord_y.extract32<0>()) & cmd->window.and_y) | cmd->window.or_y);
 
       GSVectorNi row_texcoord_x = texcoord_x;
       GSVectorNi xvec = GSVectorNi(origin_x).add32(SPAN_OFFSET_VEC);
@@ -786,21 +879,43 @@ static void DrawRectangle(const GPUBackendDrawRectangleCommand* RESTRICT cmd)
         preserve_mask = preserve_mask | xvec.gt32(pv.clip_right);
         if (!preserve_mask.alltrue())
         {
-          ShadePixel<modulation_mode, transparency_enable>(pv, cmd->draw_mode.texture_mode, transparency_mode,
-                                                           mask_bit_test, x, draw_y, rg, ba, row_texcoord_x, texcoord_y,
-                                                           preserve_mask, GSVectorNi::zero());
+          GSVectorNi texture_color = GSVectorNi::zero();
+          if constexpr (texture_enable)
+          {
+            if (const u32 load_texcoord_x = (cmd->texcoord + offset_x) & 0xFFu;
+                load_texcoord_x >= sequential_texcoord_end)
+            {
+              texture_color = SampleTexture(pv, texture_mode, row_texcoord_x, texcoord_y);
+            }
+            else if (texture_mode >= GPUTextureMode::Direct16Bit)
+            {
+              texture_color = LoadVector((texture_base_x + load_texcoord_x) & VRAM_WIDTH_MASK, texture_y);
+            }
+            else
+            {
+              // The indices are packed into the next few words, starting at any of the four in the first.
+              u64 indices;
+              std::memcpy(&indices, &g_vram[(texture_y * VRAM_WIDTH) + texture_base_x + (load_texcoord_x / 4)],
+                          sizeof(indices));
+              texture_color = LookupCLUT4Vector(
+                pv, GSVectorNi(static_cast<s32>(indices >> ((load_texcoord_x % 4) * 4))), SPAN_OFFSET_VEC.sll32<2>());
+            }
+          }
+
+          ShadePixel<modulation_mode, transparency_enable>(pv, transparency_mode, mask_bit_test, x, draw_y, rg, ba,
+                                                           texture_color, preserve_mask, GSVectorNi::zero());
         }
 
         xvec = xvec.add32(PIXELS_PER_VEC_VEC);
         wvec = wvec.sub32(PIXELS_PER_VEC_VEC);
 
         if constexpr (texture_enable)
-          row_texcoord_x = row_texcoord_x.add32(PIXELS_PER_VEC_VEC) & GSVectorNi::cxpr(0xFF);
+          row_texcoord_x = row_texcoord_x.add32(x_step) & GSVectorNi::cxpr(0xFF);
       }
     }
 
     if constexpr (texture_enable)
-      texcoord_y = texcoord_y.add32(GSVectorNi::cxpr(1)) & GSVectorNi::cxpr(0xFF);
+      texcoord_y = texcoord_y.add32(y_step) & GSVectorNi::cxpr(0xFF);
   }
 
 #ifdef CHECK_VECTOR
@@ -926,8 +1041,8 @@ struct UVStepper
 
   ALWAYS_INLINE void StepX(const UVSteps& steps, s32 count)
   {
-    u = u + static_cast<u32>(static_cast<s32>(steps.dudx) * count);
-    v = v + static_cast<u32>(static_cast<s32>(steps.dvdx) * count);
+    u = u + (steps.dudx * static_cast<u32>(count));
+    v = v + (steps.dvdx * static_cast<u32>(count));
   }
 
   template<bool upside_down>
@@ -939,8 +1054,8 @@ struct UVStepper
 
   ALWAYS_INLINE void StepY(const UVSteps& steps, s32 count)
   {
-    u = u + static_cast<u32>(static_cast<s32>(steps.dudy) * count);
-    v = v + static_cast<u32>(static_cast<s32>(steps.dvdy) * count);
+    u = u + (steps.dudy * static_cast<u32>(count));
+    v = v + (steps.dvdy * static_cast<u32>(count));
   }
 };
 
@@ -981,9 +1096,9 @@ struct RGBStepper
 
   ALWAYS_INLINE void StepX(const RGBSteps& steps, s32 count)
   {
-    r = r + static_cast<u32>(static_cast<s32>(steps.drdx) * count);
-    g = g + static_cast<u32>(static_cast<s32>(steps.dgdx) * count);
-    b = b + static_cast<u32>(static_cast<s32>(steps.dbdx) * count);
+    r = r + (steps.drdx * static_cast<u32>(count));
+    g = g + (steps.dgdx * static_cast<u32>(count));
+    b = b + (steps.dbdx * static_cast<u32>(count));
   }
 
   template<bool upside_down>
@@ -996,9 +1111,9 @@ struct RGBStepper
 
   ALWAYS_INLINE void StepY(const RGBSteps& steps, s32 count)
   {
-    r = r + static_cast<u32>(static_cast<s32>(steps.drdy) * count);
-    g = g + static_cast<u32>(static_cast<s32>(steps.dgdy) * count);
-    b = b + static_cast<u32>(static_cast<s32>(steps.dbdy) * count);
+    r = r + (steps.drdy * static_cast<u32>(count));
+    g = g + (steps.dgdy * static_cast<u32>(count));
+    b = b + (steps.dbdy * static_cast<u32>(count));
   }
 };
 
@@ -1175,7 +1290,8 @@ struct TriangleVectors : PixelVectors<texture_enable>
   typename std::conditional_t<texture_enable, GSVectorNi, UnusedField> dudx_0123;
   typename std::conditional_t<texture_enable, GSVectorNi, UnusedField> dvdx_0123;
 
-  TriangleVectors(const GPUBackendDrawCommand* cmd, const UVSteps& uvstep, const RGBSteps& rgbstep)
+  ALWAYS_INLINE_RELEASE TriangleVectors(const GPUBackendDrawCommand* cmd, const UVSteps& uvstep,
+                                        const RGBSteps& rgbstep)
     : PixelVectors<texture_enable>(cmd)
   {
     if constexpr (shading_enable)
@@ -1259,7 +1375,6 @@ DrawSpan(const GPUBackendDrawCommand* RESTRICT cmd, s32 y, s32 x_start, s32 x_bo
                                 &VECTOR_DITHER_MATRIX[static_cast<u32>(y) & 3][(static_cast<u32>(current_x) & 3) * 2]) :
                               GSVectorNi::zero();
 
-  GSVectorNi xvec = GSVectorNi(current_x).add32(SPAN_OFFSET_VEC);
   GSVectorNi wvec = GSVectorNi(width).sub32(SPAN_WIDTH_VEC);
 
   const GPUTransparencyMode transparency_mode = cmd->draw_mode.transparency_mode;
@@ -1271,29 +1386,20 @@ DrawSpan(const GPUBackendDrawCommand* RESTRICT cmd, s32 y, s32 x_start, s32 x_bo
     // R0G0 | R0G0 | R0G0 | R0G0
     const GSVectorNi r = shading_enable ? dr.srl32<ATTRIB_SHIFT + ATTRIB_POST_SHIFT>() : dr;
     const GSVectorNi g =
-      shading_enable ? dg.srl32<ATTRIB_SHIFT + ATTRIB_POST_SHIFT>().sll32<16>() : dg; // get G into the correct position
+      shading_enable ? dg.srl32<ATTRIB_SHIFT + ATTRIB_POST_SHIFT - 16>() : dg; // get G into the high word for blend
     const GSVectorNi b = shading_enable ? db.srl32<ATTRIB_SHIFT + ATTRIB_POST_SHIFT>() : db;
     const GSVectorNi u = du.srl32<ATTRIB_SHIFT + ATTRIB_POST_SHIFT>();
     const GSVectorNi v = dv.srl32<ATTRIB_SHIFT + ATTRIB_POST_SHIFT>();
 
     const GSVectorNi rg = r.blend16<0xAA>(g);
 
-    // mask based on what's outside the span
-    GSVectorNi preserve_mask = wvec.lt32(GSVectorNi::zero());
-
-    // clip test, if all pixels are outside, skip
-    preserve_mask = preserve_mask | xvec.lt32(tv.clip_left);
-    preserve_mask = preserve_mask | xvec.gt32(tv.clip_right);
-    if (!preserve_mask.alltrue())
-    {
-      ShadePixel<modulation_mode, transparency_enable>(tv, cmd->draw_mode.texture_mode, transparency_mode,
-                                                       mask_bit_test, static_cast<u32>(current_x), static_cast<u32>(y),
-                                                       rg, b, u, v, preserve_mask, dither);
-    }
+    // mask based on what's outside the span, it was clipped to the drawing area above, and is never empty
+    const GSVectorNi preserve_mask = wvec.lt32(GSVectorNi::zero());
+    ShadePixel<modulation_mode, transparency_enable>(
+      tv, transparency_mode, mask_bit_test, static_cast<u32>(current_x), static_cast<u32>(y), rg, b,
+      SampleTexture(tv, cmd->draw_mode.texture_mode, u, v), preserve_mask, dither);
 
     current_x += PIXELS_PER_VEC;
-
-    xvec = xvec.add32(PIXELS_PER_VEC_VEC);
     wvec = wvec.sub32(PIXELS_PER_VEC_VEC);
 
     if constexpr (shading_enable)
@@ -1636,7 +1742,7 @@ constinit const DrawTriangleFunctionTable DrawTriangleFunctions = {
 };
 // clang-format on
 
-static void FillVRAMImpl(u32 x, u32 y, u32 width, u32 height, u32 color, bool interlaced, u8 active_line_lsb)
+void FillVRAMImpl(u32 x, u32 y, u32 width, u32 height, u32 color, bool interlaced, u8 active_line_lsb)
 {
 #ifdef USE_VECTOR
   const u16 color16 = VRAMRGBA8888ToRGBA5551(color);
@@ -1754,8 +1860,7 @@ static void FillVRAMImpl(u32 x, u32 y, u32 width, u32 height, u32 color, bool in
 #endif
 }
 
-static void WriteVRAMImpl(u32 x, u32 y, u32 width, u32 height, const void* RESTRICT data, bool set_mask,
-                          bool check_mask)
+void WriteVRAMImpl(u32 x, u32 y, u32 width, u32 height, const void* RESTRICT data, bool set_mask, bool check_mask)
 {
   // Fast path when the copy is not oversized.
   if ((x + width) <= VRAM_WIDTH && (y + height) <= VRAM_HEIGHT && !set_mask && !check_mask)
@@ -1822,16 +1927,17 @@ static void WriteVRAMImpl(u32 x, u32 y, u32 width, u32 height, const void* RESTR
       for (; col < width;)
       {
         // TODO: Handle unaligned reads...
+        // The source pixel is consumed regardless of whether the destination is masked.
         u16* RESTRICT pixel_ptr = &dst_row_ptr[(x + col++) % VRAM_WIDTH];
+        const u16 src_pixel = *(src_ptr++);
         if (((*pixel_ptr) & mask_and) == 0)
-          *pixel_ptr = *(src_ptr++) | mask_or;
+          *pixel_ptr = src_pixel | mask_or;
       }
     }
   }
 }
 
-static void CopyVRAMImpl(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height, bool set_mask,
-                         bool check_mask)
+void CopyVRAMImpl(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32 height, bool set_mask, bool check_mask)
 {
   // Break up oversized copies. This behavior has not been verified on console.
   if ((src_x + width) > VRAM_WIDTH || (dst_x + width) > VRAM_WIDTH)
@@ -1870,8 +1976,9 @@ static void CopyVRAMImpl(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, 
   const u16 mask_and = check_mask ? 0x8000u : 0x0000u;
   const u16 mask_or = set_mask ? 0x8000u : 0x0000u;
 
-  // Copy in reverse when src_x < dst_x, this is verified on console.
-  if (src_x < dst_x || ((src_x + width - 1) % VRAM_WIDTH) < ((dst_x + width - 1) % VRAM_WIDTH))
+  // Copy in reverse when src_x < dst_x, this is verified on console. Rows are always copied from top to bottom, so
+  // the direction only makes a difference when the source and destination overlap within the same row.
+  if ((src_y % VRAM_HEIGHT) == (dst_y % VRAM_HEIGHT) && src_x < dst_x && dst_x < (src_x + width))
   {
     for (u32 row = 0; row < height; row++)
     {

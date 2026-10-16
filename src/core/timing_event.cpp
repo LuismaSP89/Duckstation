@@ -313,6 +313,13 @@ bool TimingEvents::IsRunningEvents()
   return (s_state.current_event != nullptr);
 }
 
+bool TimingEvents::IsAnyEventDue()
+{
+  // Events are sorted, so the head is always the next to run.
+  return (s_state.active_events_head &&
+          s_state.active_events_head->m_next_run_time <= GetTimestampForNewEvent());
+}
+
 void TimingEvents::CancelRunningEvent()
 {
   TimingEvent* const event = s_state.current_event;
@@ -654,6 +661,30 @@ void TimingEvent::InvokeEarly(bool force /* = false */)
   if (s_state.active_events_head == this)
     UpdateCPUDowncount();
 
+  m_callback(m_callback_param, ticks_to_execute);
+}
+
+void TimingEvent::InvokeEarlyNoReschedule()
+{
+  using namespace TimingEvents;
+
+  if (!m_active)
+    return;
+
+  // Might happen due to other InvokeEarly()'s mid event loop.
+  const GlobalTicks ts = GetTimestampForNewEvent();
+  if (ts <= m_last_run_time)
+    return;
+
+  // Shouldn't be invoking early when we're the current event running.
+  DebugAssert(s_state.current_event != this);
+
+  const TickCount ticks_to_execute = static_cast<TickCount>(ts - m_last_run_time);
+  if (ticks_to_execute < m_period)
+    return;
+
+  // The callback sets the next run time, so the event stays where it is until then.
+  m_last_run_time = ts;
   m_callback(m_callback_param, ticks_to_execute);
 }
 

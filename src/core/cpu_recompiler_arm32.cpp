@@ -87,9 +87,17 @@ bool armIsPCDisplacementInImmediateRange(s32 displacement)
 
 void armEmitMov(vixl::aarch32::Assembler* armAsm, const vixl::aarch32::Register& rd, u32 imm)
 {
-  if (vixl::IsUintN(16, imm))
+  // Either a 16-bit immediate, or a rotated 8-bit immediate.
+  if (vixl::IsUintN(16, imm) || vixl::aarch32::ImmediateA32::IsImmediateA32(imm))
   {
-    armAsm->mov(vixl::aarch32::al, rd, imm & 0xffff);
+    armAsm->mov(vixl::aarch32::al, rd, imm);
+    return;
+  }
+
+  // Same, but inverted.
+  if (vixl::aarch32::ImmediateA32::IsImmediateA32(~imm))
+  {
+    armAsm->mvn(vixl::aarch32::al, rd, ~imm);
     return;
   }
 
@@ -210,7 +218,7 @@ u32 CPU::CodeCache::EmitJump(void* code, const void* dst, bool flush_icache)
     Assembler emit(static_cast<vixl::byte*>(code), kA32InstructionSizeInBytes, A32);
 #ifdef VIXL_DEBUG
     vixl::CodeBufferCheckScope asm_check(&emit, kA32InstructionSizeInBytes,
-                                        vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
+                                         vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
 #endif
     Label label(disp);
     emit.b(&label);
@@ -243,7 +251,7 @@ u8* armGetJumpTrampoline(const void* target)
   vixl::aarch32::Assembler armAsm(start, TRAMPOLINE_AREA_SIZE - offset);
 #ifdef VIXL_DEBUG
   vixl::CodeBufferCheckScope asm_check(&armAsm, TRAMPOLINE_AREA_SIZE - offset,
-                                      vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
+                                       vixl::CodeBufferCheckScope::kDontReserveBufferSpace);
 #endif
   armMoveAddressToReg(&armAsm, RSCRATCH, target);
   armAsm.bx(RSCRATCH);
@@ -1217,15 +1225,17 @@ void CPU::ARM32Recompiler::Compile_addi(CompileFlags cf, bool overflow)
 {
   const Register rs = CFGetRegS(cf);
   const Register rt = CFGetRegT(cf);
-  if (const u32 imm = inst->i.imm_sext32(); imm != 0)
+  if (const s32 imm = static_cast<s32>(inst->i.imm_sext32()); imm != 0)
   {
+    // Negative immediates can't be encoded, subtract the negated immediate instead.
     if (!overflow)
     {
-      armAsm->add(rt, rs, armCheckAddSubConstant(imm));
+      (imm < 0) ? armAsm->sub(rt, rs, armCheckAddSubConstant(-imm)) : armAsm->add(rt, rs, armCheckAddSubConstant(imm));
     }
     else
     {
-      armAsm->adds(rt, rs, armCheckAddSubConstant(imm));
+      (imm < 0) ? armAsm->subs(rt, rs, armCheckAddSubConstant(-imm)) :
+                  armAsm->adds(rt, rs, armCheckAddSubConstant(imm));
       TestOverflow(rt);
     }
   }
@@ -1267,10 +1277,12 @@ void CPU::ARM32Recompiler::Compile_slti(CompileFlags cf, bool sign)
 void CPU::ARM32Recompiler::Compile_andi(CompileFlags cf)
 {
   const Register rt = CFGetRegT(cf);
-  if (const u32 imm = inst->i.imm_zext32(); imm != 0)
-    armAsm->and_(rt, CFGetRegS(cf), armCheckLogicalConstant(imm));
-  else
+  if (const u32 imm = inst->i.imm_zext32(); imm == 0)
     EmitMov(rt, 0);
+  else if (!ImmediateA32::IsImmediateA32(imm) && (imm & (imm + 1)) == 0)
+    armAsm->ubfx(rt, CFGetRegS(cf), 0, CountTrailingZeros(imm + 1)); // low bit mask, e.g. 0xFFFF
+  else
+    armAsm->and_(rt, CFGetRegS(cf), armCheckLogicalConstant(imm));
 }
 
 void CPU::ARM32Recompiler::Compile_ori(CompileFlags cf)
@@ -1403,37 +1415,17 @@ void CPU::ARM32Recompiler::Compile_div(CompileFlags cf)
   const Register rlo = CFGetRegLO(cf);
   const Register rhi = CFGetRegHI(cf);
 
-  // TODO: This could be slightly more optimal
-  Label done;
-  Label not_divide_by_zero;
-  armAsm->cmp(rt, 0);
-  armAsm->b(ne, &not_divide_by_zero);
-  armAsm->mov(rhi, rs); // hi = num
-  EmitMov(rlo, 1);
-  EmitMov(RSCRATCH, static_cast<u32>(-1));
-  armAsm->cmp(rs, 0);
-  armAsm->mov(ge, rlo, RSCRATCH); // lo = s >= 0 ? -1 : 1
-  armAsm->b(&done);
-
-  armAsm->bind(&not_divide_by_zero);
-  Label not_unrepresentable;
-  armAsm->cmp(rs, armCheckCompareConstant(static_cast<s32>(0x80000000u)));
-  armAsm->b(ne, &not_unrepresentable);
-  armAsm->cmp(rt, armCheckCompareConstant(-1));
-  armAsm->b(ne, &not_unrepresentable);
-
-  EmitMov(rlo, 0x80000000u);
-  EmitMov(rhi, 0);
-  armAsm->b(&done);
-
-  armAsm->bind(&not_unrepresentable);
-
+  // sdiv never traps: 0x80000000 / -1 produces 0x80000000, and x / 0 produces 0. After the mls, that leaves
+  // lo = 0x80000000, hi = 0 for the former, and hi = num for the latter, same as MIPS.
   armAsm->sdiv(rlo, rs, rt);
 
   // TODO: skip when hi is dead
   armAsm->mls(rhi, rlo, rt, rs);
 
-  armAsm->bind(&done);
+  // Which only leaves lo for divide by zero.
+  armAsm->cmp(rt, 0);
+  armAsm->mvn(eq, rlo, Operand(rs, ASR, 31)); // lo = s >= 0 ? -1 : 0
+  armAsm->orr(eq, rlo, rlo, 1);               // lo = s >= 0 ? -1 : 1
 }
 
 void CPU::ARM32Recompiler::Compile_divu(CompileFlags cf)
@@ -1449,22 +1441,15 @@ void CPU::ARM32Recompiler::Compile_divu(CompileFlags cf)
   const Register rlo = CFGetRegLO(cf);
   const Register rhi = CFGetRegHI(cf);
 
-  Label done;
-  Label not_divide_by_zero;
-  armAsm->cmp(rt, 0);
-  armAsm->b(ne, &not_divide_by_zero);
-  EmitMov(rlo, static_cast<u32>(-1));
-  armAsm->mov(rhi, rs);
-  armAsm->b(&done);
-
-  armAsm->bind(&not_divide_by_zero);
-
+  // udiv produces 0 for x / 0 instead of trapping, which leaves hi = num after the mls, same as MIPS.
   armAsm->udiv(rlo, rs, rt);
 
   // TODO: skip when hi is dead
   armAsm->mls(rhi, rlo, rt, rs);
 
-  armAsm->bind(&done);
+  // Which only leaves lo = -1 for divide by zero.
+  armAsm->cmp(rt, 0);
+  armAsm->mvn(eq, rlo, 0);
 }
 
 void CPU::ARM32Recompiler::TestOverflow(const vixl::aarch32::Register& result)
@@ -1512,8 +1497,16 @@ void CPU::ARM32Recompiler::Compile_dst_op(CompileFlags cf,
   }
   else if (cf.const_s)
   {
-    EmitMov(RSCRATCH, GetConstantRegU32(cf.MipsS()));
-    (armAsm->*op)(rd, RSCRATCH, CFGetRegT(cf));
+    // const - rt, reverse subtract can encode the constant as an immediate (0 - rt being negu).
+    if (const u32 cv = GetConstantRegU32(cf.MipsS()); ImmediateA32::IsImmediateA32(cv))
+    {
+      overflow ? armAsm->rsbs(rd, CFGetRegT(cf), cv) : armAsm->rsb(rd, CFGetRegT(cf), cv);
+    }
+    else
+    {
+      EmitMov(RSCRATCH, cv);
+      (armAsm->*op)(rd, RSCRATCH, CFGetRegT(cf));
+    }
   }
   else if (cf.const_t)
   {
@@ -1640,11 +1633,14 @@ void CPU::ARM32Recompiler::Compile_slt(CompileFlags cf, bool sign)
   AssertRegOrConstS(cf);
   AssertRegOrConstT(cf);
 
-  // TODO: swap and reverse op for constants
+  // s < t is the same as t > s, so swap and reverse the condition when s is constant, as it can be an immediate.
+  const Register rd = CFGetRegD(cf);
   if (cf.const_s)
   {
-    EmitMov(RSCRATCH, GetConstantRegS32(cf.MipsS()));
-    armAsm->cmp(RSCRATCH, CFGetRegT(cf));
+    armAsm->cmp(CFGetRegT(cf), armCheckCompareConstant(GetConstantRegS32(cf.MipsS())));
+    armAsm->mov(sign ? le : ls, rd, 0);
+    armAsm->mov(sign ? gt : hi, rd, 1);
+    return;
   }
   else if (cf.const_t)
   {
@@ -1655,7 +1651,6 @@ void CPU::ARM32Recompiler::Compile_slt(CompileFlags cf, bool sign)
     armAsm->cmp(CFGetRegS(cf), CFGetRegT(cf));
   }
 
-  const Register rd = CFGetRegD(cf);
   armAsm->mov(sign ? ge : cs, rd, 0);
   armAsm->mov(sign ? lt : lo, rd, 1);
 }
@@ -1687,15 +1682,14 @@ CPU::ARM32Recompiler::ComputeLoadStoreAddressArg(CompileFlags cf, const std::opt
   }
   else
   {
-    if (cf.valid_host_s)
-    {
-      armAsm->add(dst, CFGetRegS(cf), armCheckAddSubConstant(static_cast<s32>(inst->i.imm_sext32())));
-    }
-    else
-    {
+    const Register src = cf.valid_host_s ? CFGetRegS(cf) : dst;
+    if (!cf.valid_host_s)
       armAsm->ldr(dst, MipsPtr(cf.MipsS()));
-      armAsm->add(dst, dst, armCheckAddSubConstant(static_cast<s32>(inst->i.imm_sext32())));
-    }
+
+    // Negative offsets can't be encoded, subtract the negated offset instead.
+    const s32 simm = static_cast<s32>(imm);
+    (simm < 0) ? armAsm->sub(dst, src, armCheckAddSubConstant(-simm)) :
+                 armAsm->add(dst, src, armCheckAddSubConstant(simm));
   }
 
   return dst;
@@ -1997,8 +1991,7 @@ void CPU::ARM32Recompiler::Compile_lwx(CompileFlags cf, MemoryAccessSize size, b
   DebugAssert(value.GetCode() != RARG2.GetCode() && value.GetCode() != RARG3.GetCode());
   armAsm->and_(RARG2, addr, 3);
   armAsm->lsl(RARG2, RARG2, 3); // *8
-  EmitMov(RARG3, 24);
-  armAsm->sub(RARG3, RARG3, RARG2);
+  armAsm->rsb(RARG3, RARG2, 24);
 
   if (inst->op == InstructionOp::lwl)
   {
@@ -2179,8 +2172,7 @@ void CPU::ARM32Recompiler::Compile_swx(CompileFlags cf, MemoryAccessSize size, b
     armAsm->lsl(RARG3, RARG3, RSCRATCH);
     armAsm->and_(RRET, RRET, RARG3);
 
-    EmitMov(RARG3, 24);
-    armAsm->sub(RARG3, RARG3, RSCRATCH);
+    armAsm->rsb(RARG3, RSCRATCH, 24);
     armAsm->lsr(RARG2, RARG2, RARG3);
     armAsm->orr(RARG2, RARG2, RRET);
   }
@@ -2190,8 +2182,7 @@ void CPU::ARM32Recompiler::Compile_swx(CompileFlags cf, MemoryAccessSize size, b
     // new_value = (RWRET & mem_mask) | (value << shift);
     armAsm->lsl(RARG2, RARG2, RSCRATCH);
 
-    EmitMov(RARG3, 24);
-    armAsm->sub(RARG3, RARG3, RSCRATCH);
+    armAsm->rsb(RARG3, RSCRATCH, 24);
     EmitMov(RSCRATCH, 0x00FFFFFFu);
     armAsm->lsr(RSCRATCH, RSCRATCH, RARG3);
     armAsm->and_(RRET, RRET, RSCRATCH);
