@@ -71,7 +71,15 @@ void SetPresentSkipMode(PresentSkipMode mode);
 void ThrottlePresentation();
 
 /// Main frame presenter - used both when a game is and is not running.
+/// Does not start the next ImGui frame, the caller must call ImGuiManager::NewFrame() afterwards.
 bool PresentFrame(GPUBackend* backend, u64 present_time);
+
+/// Returns the time of the last vblank observed through a blocking present, or zero. Safe to call from any thread.
+u64 GetLastVBlankTime();
+
+/// Returns the number of frames which were presented on time, but still missed their vblank. Safe to call from any
+/// thread.
+u32 GetMissedVBlankCount();
 
 /// Renders the display to the specified target. Use when you need to render it offscreen for another purpose.
 GPUPresentResult RenderDisplay(GPUTexture* target, const GSVector2i target_size, const GSVector2i final_target_size,

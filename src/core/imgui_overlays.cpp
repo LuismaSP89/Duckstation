@@ -376,7 +376,7 @@ void ImGuiManager::DrawPerformanceOverlay(const GPUBackend* gpu, float& position
   if (!(g_gpu_settings.display_show_fps || g_gpu_settings.display_show_speed || g_gpu_settings.display_show_gpu_stats ||
         g_gpu_settings.display_show_resolution || g_gpu_settings.display_show_latency_stats ||
         g_gpu_settings.display_show_cpu_usage || g_gpu_settings.display_show_gpu_usage ||
-        g_gpu_settings.display_show_frame_times ||
+        g_gpu_settings.display_show_frame_times || g_gpu_settings.display_show_frame_number ||
         (g_gpu_settings.display_show_status_indicators &&
          (VideoThread::IsSystemPaused() || System::IsFastForwardEnabled() || System::IsTurboEnabled()))))
   {
@@ -386,12 +386,13 @@ void ImGuiManager::DrawPerformanceOverlay(const GPUBackend* gpu, float& position
   const float status_size = std::ceil(50.0f * scale);
   ImFont* const fixed_font = ImGuiManager::GetFixedFont();
   const float fixed_font_size = ImGuiManager::GetFixedFontSize();
-  ImFont* ui_font = ImGuiManager::GetTextFont();
+  ImFont* const ui_font = ImGuiManager::GetTextFont();
   const float rbound = ImGui::GetIO().DisplaySize.x - margin;
-  ImDrawList* dl = ImGui::GetBackgroundDrawList();
+  ImDrawList* const dl = ImGui::GetBackgroundDrawList();
   SmallString text;
 
-  if (!VideoThread::IsSystemPaused())
+  const bool paused = VideoThread::IsSystemPaused();
+  if (!paused)
   {
     const float speed = PerformanceCounters::GetEmulationSpeed();
     if (g_gpu_settings.display_show_fps)
@@ -440,23 +441,26 @@ void ImGuiManager::DrawPerformanceOverlay(const GPUBackend* gpu, float& position
       DrawPerformanceStat(dl, position_y, fixed_font, fixed_font_size, FIXED_BOLD_WEIGHT, 0, rbound, text);
       position_y += spacing;
     }
+  }
 
-    if (g_gpu_settings.display_show_resolution)
-    {
-      const u32 resolution_scale = gpu->GetResolutionScale();
-      const bool pgxp = gpu->IsUsingHardwareBackend() && g_gpu_settings.gpu_pgxp_enable;
-      const auto [display_width, display_height] = GPU::GetFullDisplayResolution(); // NOTE: Racey read.
-      const bool interlaced = GPU::IsInterlacedDisplayEnabled();
-      const bool progressive_forced = GPU::IsProgressiveDisplayScanForced();
-      const bool pal = GPU::IsInPALMode();
-      text.format("{}x{} " BOLD("{} {}") DOT_SEP "{}x " BOLD("IR") "{}", display_width * resolution_scale,
-                  display_height * resolution_scale, pal ? "PAL" : "NTSC",
-                  interlaced ? "Interlaced" : (progressive_forced ? "Forced-Progressive" : "Progressive"),
-                  resolution_scale, pgxp ? DOT_SEP BOLD("PGXP") : "");
-      DrawPerformanceStat(dl, position_y, fixed_font, fixed_font_size, FIXED_BOLD_WEIGHT, 0, rbound, text);
-      position_y += spacing;
-    }
+  if (g_gpu_settings.display_show_resolution)
+  {
+    const u32 resolution_scale = gpu->GetResolutionScale();
+    const bool pgxp = gpu->IsUsingHardwareBackend() && g_gpu_settings.gpu_pgxp_enable;
+    const auto [display_width, display_height] = GPU::GetFullDisplayResolution(); // NOTE: Racey read.
+    const bool interlaced = GPU::IsInterlacedDisplayEnabled();
+    const bool progressive_forced = GPU::IsProgressiveDisplayScanForced();
+    const bool pal = GPU::IsInPALMode();
+    text.format("{}x{} " BOLD("{} {}") DOT_SEP "{}x " BOLD("IR") "{}", display_width * resolution_scale,
+                display_height * resolution_scale, pal ? "PAL" : "NTSC",
+                interlaced ? "Interlaced" : (progressive_forced ? "Forced-Progressive" : "Progressive"),
+                resolution_scale, pgxp ? DOT_SEP BOLD("PGXP") : "");
+    DrawPerformanceStat(dl, position_y, fixed_font, fixed_font_size, FIXED_BOLD_WEIGHT, 0, rbound, text);
+    position_y += spacing;
+  }
 
+  if (!paused)
+  {
     if (g_gpu_settings.display_show_latency_stats)
     {
       System::FormatLatencyStats(text);
@@ -539,17 +543,21 @@ void ImGuiManager::DrawPerformanceOverlay(const GPUBackend* gpu, float& position
       DrawPerformanceStat(dl, position_y, fixed_font, fixed_font_size, FIXED_BOLD_WEIGHT, 0, rbound, text);
       position_y += spacing;
     }
-
-    if (g_gpu_settings.display_show_frame_times)
-      DrawFrameTimeOverlay(position_y, scale, margin, spacing);
-
-    if (g_gpu_settings.display_show_status_indicators)
-      DrawStatusIndicators(dl, position_y, ui_font, status_size, rbound, text, false);
   }
-  else if (g_gpu_settings.display_show_status_indicators)
+
+  if (g_gpu_settings.display_show_frame_number)
   {
-    DrawStatusIndicators(dl, position_y, ui_font, status_size, rbound, text, true);
+    gpu->GetFrameNumberString(text);
+    DrawPerformanceStat(dl, position_y, fixed_font, fixed_font_size, FIXED_BOLD_WEIGHT, 0, rbound, text);
+    position_y += spacing;
+    text.clear();
   }
+
+  if (!paused && g_gpu_settings.display_show_frame_times)
+    DrawFrameTimeOverlay(position_y, scale, margin, spacing);
+
+  if (g_gpu_settings.display_show_status_indicators)
+    DrawStatusIndicators(dl, position_y, ui_font, status_size, rbound, text, paused);
 
 #undef DOT_SEP
 #undef COLOR

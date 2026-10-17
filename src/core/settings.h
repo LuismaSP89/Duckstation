@@ -91,9 +91,6 @@ struct GPUSettings
   bool gpu_modulation_crop : 1 = false;
   bool gpu_texture_cache : 1 = false;
   bool gpu_show_vram : 1 = false;
-  bool gpu_dump_cpu_to_vram_copies : 1 = false;
-  bool gpu_dump_vram_to_cpu_copies : 1 = false;
-  bool gpu_dump_fast_replay_mode : 1 = false;
 
   bool gpu_pgxp_enable : 1 = false;
   bool gpu_pgxp_culling : 1 = true;
@@ -124,6 +121,7 @@ struct GPUSettings
   bool display_show_cpu_usage : 1 = false;
   bool display_show_gpu_usage : 1 = false;
   bool display_show_frame_times : 1 = false;
+  bool display_show_frame_number : 1 = false;
   bool display_show_status_indicators : 1 = true;
   bool display_show_inputs : 1 = false;
   bool display_show_enhancements : 1 = false;
@@ -299,6 +297,9 @@ struct Settings : public GPUSettings
   bool cpu_recompiler_icache : 1 = false;
   bool cpu_enable_8mb_ram : 1 = false;
 
+  bool gpu_dump_cpu_to_vram_copies : 1 = false;
+  bool gpu_dump_vram_to_cpu_copies : 1 = false;
+
   bool mdec_use_old_routines : 1 = false;
   bool mdec_disable_cdrom_speedup : 1 = false;
 
@@ -365,6 +366,7 @@ struct Settings : public GPUSettings
   bool disable_all_enhancements : 1 = false;
   bool enable_discord_presence : 1 = false;
   bool export_shared_memory : 1 = false;
+  bool gpu_dump_fast_replay_mode : 1 = false;
 
   // achievements
   bool achievements_enabled : 1 = false;
