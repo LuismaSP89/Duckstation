@@ -1723,7 +1723,11 @@ void Bus::HWHandlers::MemCtrlWrite(PhysicalMemoryAddress address, u32 value)
 
   value = FIXUP_WORD_WRITE_VALUE(size, offset, value);
 
-  const u32 write_mask = (index < 2) ? 0xFFFFFFFFu : ((index == 8) ? COMDELAY::WRITE_MASK : MEMDELAY::WRITE_MASK);
+  // Bits 24-31 of the base addresses are fixed at 1Fh, and only the DEV0 delay register has a writable wait bit.
+  const u32 write_mask =
+    (index < 2) ?
+      0x00FFFFFFu :
+      ((index == 8) ? COMDELAY::WRITE_MASK : (MEMDELAY::WRITE_MASK & ((index == 2) ? 0xFFFFFFFFu : 0x7FFFFFFFu)));
   const u32 new_value = (s_locals.MEMCTRL.regs[index] & ~write_mask) | (value & write_mask);
   if (s_locals.MEMCTRL.regs[index] != new_value)
   {
@@ -1782,6 +1786,14 @@ u32 Bus::HWHandlers::PADRead(PhysicalMemoryAddress address)
 
   u32 value = Pad::ReadRegister(FIXUP_HALFWORD_OFFSET(size, offset));
   value = FIXUP_HALFWORD_READ_VALUE(size, offset, value);
+
+  // 32-bit reads of the 16-bit registers return both halves.
+  if constexpr (size == MemoryAccessSize::Word)
+  {
+    if (offset & 8u)
+      value = (value & 0xFFFFu) | (Pad::ReadRegister(offset + 2) << 16);
+  }
+
   BUS_CYCLES(2);
   return value;
 }
@@ -1799,6 +1811,14 @@ u32 Bus::HWHandlers::SIORead(PhysicalMemoryAddress address)
   const u32 offset = address & SIO_MASK;
   u32 value = SIO::ReadRegister(FIXUP_HALFWORD_OFFSET(size, offset));
   value = FIXUP_HALFWORD_READ_VALUE(size, offset, value);
+
+  // 32-bit reads of the 16-bit registers return both halves.
+  if constexpr (size == MemoryAccessSize::Word)
+  {
+    if (offset & 8u)
+      value = (value & 0xFFFFu) | (SIO::ReadRegister(offset + 2) << 16);
+  }
+
   BUS_CYCLES(2);
   return value;
 }
@@ -2028,7 +2048,19 @@ template<MemoryAccessSize size>
 void Bus::HWHandlers::DMAWrite(PhysicalMemoryAddress address, u32 value)
 {
   const u32 offset = address & DMA_MASK;
-  DMA::WriteRegister(FIXUP_WORD_OFFSET(size, offset), FIXUP_WORD_WRITE_VALUE(size, offset, value));
+  value = FIXUP_WORD_WRITE_VALUE(size, offset, value);
+
+  // Block control is the only register that honours the byte enables of 8-bit and 16-bit writes.
+  if constexpr (size != MemoryAccessSize::Word)
+  {
+    if ((offset & 0x0Cu) == 0x04u && offset < 0x70u)
+    {
+      const u32 mask = ((size == MemoryAccessSize::Byte) ? 0xFFu : 0xFFFFu) << ((offset & 3u) * 8u);
+      value = (DMA::ReadRegister(FIXUP_WORD_OFFSET(size, offset)) & ~mask) | (value & mask);
+    }
+  }
+
+  DMA::WriteRegister(FIXUP_WORD_OFFSET(size, offset), value);
 }
 
 #undef BUS_CYCLES

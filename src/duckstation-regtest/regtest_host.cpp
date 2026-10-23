@@ -225,37 +225,6 @@ void Host::CommitBaseSettingChanges()
   // noop, in memory
 }
 
-bool Host::ResourceFileExists(std::string_view filename, bool allow_override)
-{
-  const std::string path(Path::Combine(EmuFolders::Resources, filename));
-  return FileSystem::FileExists(path.c_str());
-}
-
-std::optional<DynamicHeapArray<u8>> Host::ReadResourceFile(std::string_view filename, bool allow_override, Error* error)
-{
-  const std::string path(Path::Combine(EmuFolders::Resources, filename));
-  return FileSystem::ReadBinaryFile(path.c_str(), error);
-}
-
-std::optional<std::string> Host::ReadResourceFileToString(std::string_view filename, bool allow_override, Error* error)
-{
-  const std::string path(Path::Combine(EmuFolders::Resources, filename));
-  return FileSystem::ReadFileToString(path.c_str(), error);
-}
-
-std::optional<std::time_t> Host::GetResourceFileTimestamp(std::string_view filename, bool allow_override)
-{
-  const std::string path(Path::Combine(EmuFolders::Resources, filename));
-  FILESYSTEM_STAT_DATA sd;
-  if (!FileSystem::StatFile(path.c_str(), &sd))
-  {
-    ERROR_LOG("Failed to stat resource file '{}'", filename);
-    return std::nullopt;
-  }
-
-  return sd.ModificationTime;
-}
-
 void Host::OnSystemStarting()
 {
   //
@@ -735,12 +704,14 @@ void RegTestHost::PrintCommandLineHelp(const char* progname)
   std::fprintf(stderr, "  -dumpdir: Set frame dump base directory (will be dumped to basedir/gametitle).\n");
   std::fprintf(stderr, "  -dumpinterval: Dumps every N frames.\n");
   std::fprintf(stderr, "  -frames: Sets the number of frames to execute.\n");
+  std::fprintf(stderr, "  -state <path>: Loads the specified save state after booting.\n");
   std::fprintf(stderr, "  -log <level>: Sets the log level. Defaults to verbose.\n");
   std::fprintf(stderr, "  -console: Enables console logging output.\n");
   std::fprintf(stderr, "  -pgxp: Enables PGXP.\n");
   std::fprintf(stderr, "  -pgxp-cpu: Forces PGXP CPU mode.\n");
   std::fprintf(stderr, "  -renderer <renderer>: Sets the graphics renderer. Default to software.\n");
   std::fprintf(stderr, "  -upscale <multiplier>: Enables upscaled rendering at the specified multiplier.\n");
+  std::fprintf(stderr, "  -setting <section>/<key>:<value>: Sets a setting, e.g. GPU/ResolutionScale:2.\n");
   std::fprintf(stderr, "  --: Signals that no more arguments will follow and the remaining\n"
                        "    parameters make up the filename. Use when the filename contains\n"
                        "    spaces or starts with a dash.\n");
@@ -795,6 +766,11 @@ bool RegTestHost::ParseCommandLineParameters(int argc, char* argv[], std::option
           return false;
         }
 
+        continue;
+      }
+      else if (CHECK_ARG_PARAM("-state"))
+      {
+        AutoBoot(autoboot)->save_state = argv[++i];
         continue;
       }
       else if (CHECK_ARG_PARAM("-frames"))
@@ -878,7 +854,26 @@ bool RegTestHost::ParseCommandLineParameters(int argc, char* argv[], std::option
       {
         INFO_LOG("Enabling PGXP CPU mode.");
         Core::SetBaseBoolSettingValue(Settings::GPU_SECTION_NAME, "PGXPEnable", true);
-        Core::SetBaseBoolSettingValue(Settings::GPU_SECTION_NAME, "PGXPCPU", true);
+        Core::SetBaseStringSettingValue(Settings::GPU_SECTION_NAME, "PGXPCPU",
+                                        Settings::GetSettingOverrideModeName(SettingOverrideMode::Enabled));
+        continue;
+      }
+      else if (CHECK_ARG_PARAM("-setting"))
+      {
+        const std::string_view setting = argv[++i];
+        const std::string_view::size_type key_pos = setting.find('/');
+        const std::string_view::size_type value_pos = setting.find('=', key_pos);
+        if (key_pos == 0 || value_pos == std::string_view::npos || value_pos == (key_pos + 1))
+        {
+          ERROR_LOG("Invalid setting '{}', expected <section>/<key>=<value>.", setting);
+          return false;
+        }
+
+        const std::string section(setting.substr(0, key_pos));
+        const std::string key(setting.substr(key_pos + 1, value_pos - key_pos - 1));
+        const std::string value(setting.substr(value_pos + 1));
+        INFO_LOG("Setting {}/{} to '{}'.", section, key, value);
+        Core::SetBaseStringSettingValue(section.c_str(), key.c_str(), value.c_str());
         continue;
       }
       else if (CHECK_ARG("--"))

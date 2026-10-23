@@ -189,8 +189,6 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsWindow* dialog, QWidget* 
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.gpuThread, Settings::GPU_SECTION_NAME, "UseThread", true);
   SettingWidgetBinder::BindWidgetToIntSetting(sif, m_ui.maxQueuedFrames, Settings::GPU_SECTION_NAME, "MaxQueuedFrames",
                                               Settings::DEFAULT_GPU_MAX_QUEUED_FRAMES);
-  SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.modulationCrop, Settings::GPU_SECTION_NAME,
-                                               "EnableModulationCrop", false);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.scaledInterlacing, Settings::GPU_SECTION_NAME,
                                                "ScaledInterlacing", true);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.disableUpscaledDirectTextures, Settings::GPU_SECTION_NAME,
@@ -205,6 +203,8 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsWindow* dialog, QWidget* 
           &GraphicsSettingsWidget::updateResolutionDependentOptions);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.useSoftwareRendererForReadbacks, Settings::GPU_SECTION_NAME,
                                                "UseSoftwareRendererForReadbacks", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.midFrameScanout, Settings::GPU_SECTION_NAME, "MidFrameScanout",
+                                               false);
 
   connect(m_ui.displayFineCropMode, &QComboBox::currentIndexChanged, this,
           &GraphicsSettingsWidget::onFineCropModeChanged);
@@ -221,6 +221,8 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsWindow* dialog, QWidget* 
                                        m_dialog->hasGameTrait(GameDatabase::Trait::DisableUpscaledDirectTextures));
   SettingWidgetBinder::SetForceEnabled(m_ui.filterFramebufferUploads,
                                        m_dialog->hasGameTrait(GameDatabase::Trait::FilterFramebufferUploads));
+  SettingWidgetBinder::SetForceEnabled(m_ui.midFrameScanout,
+                                       m_dialog->hasGameTrait(GameDatabase::Trait::ForceMidFrameScanout));
 
   // PGXP Tab
 
@@ -235,9 +237,14 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsWindow* dialog, QWidget* 
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.pgxpCulling, Settings::GPU_SECTION_NAME, "PGXPCulling", true);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.pgxpPreserveProjPrecision, Settings::GPU_SECTION_NAME,
                                                "PGXPPreserveProjFP", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.pgxpCPU, Settings::GPU_SECTION_NAME, "PGXPCPU", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.pgxpVertexCache, Settings::GPU_SECTION_NAME, "PGXPVertexCache",
-                                               false);
+  SettingWidgetBinder::BindWidgetToEnumSetting(
+    sif, m_ui.pgxpCPU, Settings::GPU_SECTION_NAME, "PGXPCPU", &Settings::ParseSettingOverrideModeName,
+    &Settings::GetSettingOverrideModeName, &Settings::GetSettingOverrideModeDisplayName, SettingOverrideMode::Automatic,
+    SettingOverrideMode::Count);
+  SettingWidgetBinder::BindWidgetToEnumSetting(
+    sif, m_ui.pgxpVertexCache, Settings::GPU_SECTION_NAME, "PGXPVertexCache", &Settings::ParseSettingOverrideModeName,
+    &Settings::GetSettingOverrideModeName, &Settings::GetSettingOverrideModeDisplayName, SettingOverrideMode::Automatic,
+    SettingOverrideMode::Count);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.pgxpDisableOn2DPolygons, Settings::GPU_SECTION_NAME,
                                                "PGXPDisableOn2DPolygons", false);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.pgxpTransparentDepthTest, Settings::GPU_SECTION_NAME,
@@ -258,9 +265,6 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsWindow* dialog, QWidget* 
                                        !m_dialog->hasGameTrait(GameDatabase::Trait::DisablePGXPColorCorrection));
   SettingWidgetBinder::SetAvailability(m_ui.pgxpCulling,
                                        !m_dialog->hasGameTrait(GameDatabase::Trait::DisablePGXPCulling));
-  SettingWidgetBinder::SetForceEnabled(m_ui.pgxpCPU, m_dialog->hasGameTrait(GameDatabase::Trait::ForcePGXPCPUMode));
-  SettingWidgetBinder::SetForceEnabled(m_ui.pgxpVertexCache,
-                                       m_dialog->hasGameTrait(GameDatabase::Trait::ForcePGXPVertexCache));
   SettingWidgetBinder::SetForceEnabled(m_ui.pgxpDisableOn2DPolygons,
                                        m_dialog->hasGameTrait(GameDatabase::Trait::DisablePGXPOn2DPolygons));
   if (const GameDatabase::Entry* dbentry = m_dialog->getDatabaseEntry();
@@ -337,6 +341,8 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsWindow* dialog, QWidget* 
                                                "DisableTextures", false);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.gpuDisableVertexLighting, Settings::GPU_SECTION_NAME,
                                                "DisableVertexLighting", false);
+  SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.modulationCrop, Settings::GPU_SECTION_NAME,
+                                               "EnableModulationCrop", false);
 
   SettingWidgetBinder::BindWidgetToEnumSetting(
     sif, m_ui.gpuDumpCompressionMode, Settings::GPU_SECTION_NAME, "DumpCompressionMode",
@@ -513,6 +519,11 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsWindow* dialog, QWidget* 
     tr("Samples 16-bit direct-color textures at native resolution when upscaling. This can fix filtering of "
        "FMVs/backgrounds in some games, but may reduce the quality of render-to-texture effects."));
   dialog->registerWidgetHelp(
+    m_ui.midFrameScanout, tr("Mid-Frame Scanout"), tr("Unchecked"),
+    tr("Applies changes to the displayed framebuffer partway through a frame, instead of at the start of the next "
+       "frame. Some games rely on this for split-screen effects, but it causes tearing in games that switch "
+       "framebuffers mid-frame, so only enable it for games that need it."));
+  dialog->registerWidgetHelp(
     m_ui.filterFramebufferUploads, tr("Filter Framebuffer Uploads"), tr("Unchecked"),
     tr("Applies the selected sprite texture filter to framebuffer uploads. This can smooth backgrounds in some "
        "games while preserving texture data. Also upscale-filters 24-bit video and images, and keeps the sprite "
@@ -551,13 +562,15 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsWindow* dialog, QWidget* 
   dialog->registerWidgetHelp(
     m_ui.pgxpPreserveProjPrecision, tr("Preserve Projection Precision"), tr("Unchecked"),
     tr("Adds additional precision to PGXP data post-projection. May improve visuals in some games."));
-  dialog->registerWidgetHelp(m_ui.pgxpCPU, tr("CPU Mode"), tr("Unchecked"),
+  dialog->registerWidgetHelp(m_ui.pgxpCPU, tr("CPU Mode"), tr("Automatic"),
                              tr("Uses PGXP for all instructions, not just memory operations. Required for PGXP to "
-                                "correct wobble in some games, but has a high performance cost."));
+                                "correct wobble in some games, but has a high performance cost. Automatic enables it "
+                                "only for games that require it according to the game database."));
   dialog->registerWidgetHelp(
-    m_ui.pgxpVertexCache, tr("Vertex Cache"), tr("Unchecked"),
+    m_ui.pgxpVertexCache, tr("Vertex Cache"), tr("Automatic"),
     tr("Uses screen-space vertex positions to obtain precise positions, instead of tracking memory accesses. Can "
-       "provide PGXP compatibility for some games, but <strong>generally provides no benefit.</strong>"));
+       "provide PGXP compatibility for some games, but <strong>generally provides no benefit.</strong> Automatic "
+       "enables it only for games that require it according to the game database."));
   dialog->registerWidgetHelp(m_ui.pgxpDisableOn2DPolygons, tr("Disable on 2D Polygons"), tr("Unchecked"),
                              tr("Uses native resolution coordinates for 2D polygons, instead of precise coordinates. "
                                 "Can fix misaligned UI in some games, but otherwise should be left disabled. The game "
@@ -861,8 +874,8 @@ void GraphicsSettingsWidget::populateGPUAdaptersAndResolutions(RenderAPI render_
         GetMSAAModeValue(static_cast<uint>(Core::GetBaseIntSettingValue(Settings::GPU_SECTION_NAME, "Multisamples", 1)),
                          Core::GetBaseBoolSettingValue(Settings::GPU_SECTION_NAME, "PerSampleShading", false)));
       const QString global_msaa_string = m_ui.msaaMode->itemText(m_ui.msaaMode->findData(global_msaa_mode));
-      m_ui.msaaMode->insertItem(0, QCoreApplication::translate("SettingWidgetBinder", "Use Global Setting [%1]")
-                                     .arg(global_msaa_string));
+      m_ui.msaaMode->insertItem(
+        0, QCoreApplication::translate("SettingWidgetBinder", "Use Global Setting [%1]").arg(global_msaa_string));
     }
 
     if (!m_dialog->isPerGameSettings() ||
@@ -1074,8 +1087,10 @@ void GraphicsSettingsWidget::updatePGXPSettingsEnabled()
   m_ui.pgxpDepthBuffer->setEnabled(enabled && !m_dialog->hasGameTrait(GameDatabase::Trait::DisablePGXPDepthBuffer));
   m_ui.pgxpPreserveProjPrecision->setEnabled(
     enabled && (!m_dialog->hasDatabaseEntry() || !m_dialog->getDatabaseEntry()->gpu_pgxp_preserve_proj_fp.has_value()));
-  m_ui.pgxpCPU->setEnabled(enabled && !m_dialog->hasGameTrait(GameDatabase::Trait::ForcePGXPCPUMode));
-  m_ui.pgxpVertexCache->setEnabled(enabled && !m_dialog->hasGameTrait(GameDatabase::Trait::ForcePGXPVertexCache));
+  m_ui.pgxpCPU->setEnabled(enabled);
+  m_ui.pgxpCPULabel->setEnabled(enabled);
+  m_ui.pgxpVertexCache->setEnabled(enabled);
+  m_ui.pgxpVertexCacheLabel->setEnabled(enabled);
   m_ui.pgxpGeometryTolerance->setEnabled(enabled);
   m_ui.pgxpGeometryToleranceLabel->setEnabled(enabled);
   m_ui.resetPGXPGeometryTolerance->setEnabled(enabled);

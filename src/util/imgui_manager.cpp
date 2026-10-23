@@ -23,6 +23,7 @@
 #include "common/error.h"
 #include "common/file_system.h"
 #include "common/log.h"
+#include "common/path.h"
 #include "common/string_util.h"
 #include "common/thirdparty/usb_key_code_data.h"
 #include "common/threading.h"
@@ -516,6 +517,9 @@ void ImGuiManager::WindowResized(GPUTextureFormat format, float width, float hei
 
   ImGui::GetMainViewport()->Size = ImGui::GetIO().DisplaySize = ImVec2(width, height);
 
+  // Rotating with prerotation keeps the framebuffer size the same, so the blur texture won't be reallocated.
+  FullscreenUI::InvalidateBlurBackground();
+
   // Scale might have changed as a result of window resize.
   RequestScaleUpdate();
 }
@@ -693,7 +697,7 @@ void ImGuiManager::RenderDrawLists(const ImDrawData* draw_data, u32 window_width
 
   UpdateTextures(draw_data);
 
-  if (draw_data->CmdListsCount == 0)
+  if (draw_data->CmdLists.empty())
     return;
 
   const GSVector2i window_size = GSVector2i(static_cast<s32>(window_width), static_cast<s32>(window_height));
@@ -728,7 +732,7 @@ void ImGuiManager::RenderDrawLists(const ImDrawData* draw_data, u32 window_width
 
   // Render command lists
   const bool flip = g_gpu_device->UsesLowerLeftOrigin();
-  for (int n = 0; n < draw_data->CmdListsCount; n++)
+  for (int n = 0; n < draw_data->CmdLists.Size; n++)
   {
     const ImDrawList* cmd_list = draw_data->CmdLists[n];
     static_assert(sizeof(ImDrawIdx) == sizeof(GPUDevice::DrawIndex));
@@ -851,7 +855,7 @@ void ImGuiManager::DestroyTextures(bool recycle)
     if (tex->Status == ImTextureStatus_Destroyed)
       continue;
 
-    std::unique_ptr<GPUTexture> gtex(tex->GetTexID());
+    std::unique_ptr<GPUTexture> gtex(std::exchange(tex->TexID, nullptr));
     if (gtex)
     {
       DEV_LOG("Destroy {}x{} ImGui texture", gtex->GetWidth(), gtex->GetHeight());
@@ -930,8 +934,9 @@ bool ImGuiManager::LoadFontData(Error* error)
 {
   Timer load_timer;
 
-  static constexpr auto font_resource_name = [](const std::string_view font_name) {
-    return TinyString::from_format("fonts/{}", font_name);
+  static constexpr auto read_font = [](const std::string_view font_name, Error* error) {
+    return FileSystem::ReadBinaryFile(
+      Path::Combine(EmuFolders::Resources, TinyString::from_format("fonts/{}", font_name)).c_str(), error);
   };
 
   // only load used text fonts, that way we don't waste memory on mini
@@ -941,10 +946,10 @@ bool ImGuiManager::LoadFontData(Error* error)
     if (!s_state.text_fonts_data[index].empty())
       continue;
 
-    std::optional<DynamicHeapArray<u8>> font_data = Host::ReadResourceFile(
-      font_resource_name((language_font != LanguageFont::Default) ? LANGUAGE_FONT_NAMES[index] :
-                                                                    TEXT_FONT_FILENAMES[s_state.text_font_index]),
-      true, error);
+    std::optional<DynamicHeapArray<u8>> font_data =
+      read_font((language_font != LanguageFont::Default) ? LANGUAGE_FONT_NAMES[index] :
+                                                           TEXT_FONT_FILENAMES[s_state.text_font_index],
+                error);
     if (!font_data.has_value())
       return false;
 
@@ -953,8 +958,7 @@ bool ImGuiManager::LoadFontData(Error* error)
 
   if (s_state.fixed_font_data.empty())
   {
-    std::optional<DynamicHeapArray<u8>> font_data =
-      Host::ReadResourceFile(font_resource_name(FIXED_FONT_FILENAMES[s_state.fixed_font_index]), true, error);
+    std::optional<DynamicHeapArray<u8>> font_data = read_font(FIXED_FONT_FILENAMES[s_state.fixed_font_index], error);
     if (!font_data.has_value())
       return false;
 
@@ -963,8 +967,7 @@ bool ImGuiManager::LoadFontData(Error* error)
 
   if (s_state.icon_fa_font_data.empty())
   {
-    std::optional<DynamicHeapArray<u8>> font_data =
-      Host::ReadResourceFile(font_resource_name(FA_FONT_NAME), true, error);
+    std::optional<DynamicHeapArray<u8>> font_data = read_font(FA_FONT_NAME, error);
     if (!font_data.has_value())
       return false;
 
@@ -973,8 +976,7 @@ bool ImGuiManager::LoadFontData(Error* error)
 
   if (s_state.icon_pf_font_data.empty())
   {
-    std::optional<DynamicHeapArray<u8>> font_data =
-      Host::ReadResourceFile(font_resource_name(PF_FONT_NAME), true, error);
+    std::optional<DynamicHeapArray<u8>> font_data = read_font(PF_FONT_NAME, error);
     if (!font_data.has_value())
       return false;
 
@@ -983,8 +985,7 @@ bool ImGuiManager::LoadFontData(Error* error)
 
   if (s_state.emoji_font_data.empty())
   {
-    std::optional<DynamicHeapArray<u8>> font_data =
-      Host::ReadResourceFile(font_resource_name(EMOJI_FONT_NAME), true, error);
+    std::optional<DynamicHeapArray<u8>> font_data = read_font(EMOJI_FONT_NAME, error);
     if (!font_data.has_value())
       return false;
 
@@ -1014,6 +1015,8 @@ bool ImGuiManager::CreateFontAtlas(Error* error)
   // Remaining fonts are added after the icon font, otherwise the wrong glyphs will be used in the UI.
   const LanguageFont first_font = s_state.text_font_order.front();
   StringUtil::Strlcpy(text_cfg.Name, "TextFont", std::size(text_cfg.Name));
+  if (std::ranges::find(s_state.text_font_order, LanguageFont::Hebrew) != s_state.text_font_order.end())
+    text_cfg.Flags |= ImFontFlags_Bidi;
   auto& first_font_data = s_state.text_fonts_data[static_cast<size_t>(first_font)];
   Assert(!first_font_data.empty());
   s_state.text_font =

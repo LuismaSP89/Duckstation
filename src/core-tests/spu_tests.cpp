@@ -5,6 +5,13 @@
 #include "common/gsvector.h"
 #include "common/types.h"
 
+#include "core/cpu_core.h"
+#include "core/interrupt_controller.h"
+#include "core/settings.h"
+#include "core/spu.h"
+#include "core/system.h"
+#include "core/timing_event.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -12,6 +19,7 @@
 #include <cstring>
 #include <limits>
 #include <random>
+#include <vector>
 
 namespace {
 
@@ -126,18 +134,18 @@ TEST(SPU, ShiftedVoiceFlagsMatchIndexedFlags)
 
 static s32 GaussianScalar(const std::array<s16, 4>& samples, const std::array<s16, 4>& coefficients)
 {
-  s32 result = static_cast<s32>(samples[0]) * static_cast<s32>(coefficients[0]);
-  result += static_cast<s32>(samples[1]) * static_cast<s32>(coefficients[1]);
-  result += static_cast<s32>(samples[2]) * static_cast<s32>(coefficients[2]);
-  result += static_cast<s32>(samples[3]) * static_cast<s32>(coefficients[3]);
-  return result >> 15;
+  s32 result = 0;
+  for (u32 i = 0; i < samples.size(); i++)
+    result += (static_cast<s32>(samples[i]) * static_cast<s32>(coefficients[i])) >> 14;
+  return result >> 1;
 }
 
 static s32 GaussianSIMD(const std::array<s16, 4>& samples, const std::array<s16, 4>& coefficients)
 {
   const GSVector4i sample_vector = GSVector4i::loadl<false>(samples.data());
   const GSVector4i coefficient_vector = GSVector4i::loadl<false>(coefficients.data());
-  return sample_vector.madd_s16(coefficient_vector).xy().addv_s32() >> 15;
+  // Matches the zero-extended coefficient table layout used by SPU::Voice::Interpolate().
+  return sample_vector.upl16().madd_s16(coefficient_vector.upl16()).sra32<14>().addv_s32() >> 1;
 }
 
 TEST(SPU, GaussianPhaseMajorCoefficientsMatchIndexedTable)
@@ -387,6 +395,266 @@ TEST(SPU, PairedADPCMDecodeMatchesNibbleDecode)
       }
     }
   }
+}
+
+class SPUHardwareTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    m_old_settings = g_settings;
+    g_settings.audio_backend = AudioBackend::Null;
+    g_settings.cpu_overclock_enable = false;
+    g_settings.SetCPUOverclockPercent(100);
+    g_settings.UpdateOverclockActive();
+    CPU::g_state.cop0_regs.sr.bits = 0;
+    CPU::g_state.pending_ticks = 0;
+    TimingEvents::Initialize();
+    System::UpdateOverclock();
+    DeactivateAllEvents();
+    TimingEvents::Reset();
+    InterruptController::Reset();
+    SPU::Initialize();
+    SPU::SetAudioOutputMuted(true);
+
+    // Keep reverb away from the sample data and enable voice processing.
+    SPU::WriteRegister(0x1A2, 0xFFFF);
+    SPU::WriteRegister(0x1AA, 0xC000);
+    auto& ram = SPU::GetWritableRAM();
+    ram[0x1001] = 7; // Loop a silent block unless a test installs a waveform.
+  }
+
+  void TearDown() override
+  {
+    SPU::Shutdown();
+    SPU::SetAudioOutputMuted(false);
+    DeactivateAllEvents();
+    g_settings = m_old_settings;
+  }
+
+  static void DeactivateAllEvents()
+  {
+    while (TimingEvent* event = *TimingEvents::GetHeadEventPtr())
+      event->Deactivate();
+  }
+
+  static void RunSamples(u32 samples)
+  {
+    for (u32 i = 0; i < samples; i++)
+    {
+      CPU::AddPendingTicks(768);
+      if (CPU::GetPendingTicks() >= CPU::g_state.downcount)
+        TimingEvents::RunEvents();
+    }
+    SPU::GeneratePendingSamples();
+  }
+
+  static void KeyOn(u16 adsr_low, u16 adsr_high, u16 pitch = 0x1000)
+  {
+    SPU::WriteRegister(0x14, pitch);
+    SPU::WriteRegister(0x16, 0x200);
+    SPU::WriteRegister(0x1E, 0x200);
+    SPU::WriteRegister(0x18, adsr_low);
+    SPU::WriteRegister(0x1A, adsr_high);
+    SPU::WriteRegister(0x188, 2);
+  }
+
+  static u16 Envelope() { return SPU::ReadRegister(0x1C); }
+
+  // Keys on voices 1 and 2 on the silent looping block, which has a loop start flag, then writes their repeat
+  // addresses on the last sample that hardware overwrites and the first sample that latches.
+  static void CheckRepeatAddressLatch(u32 samples_before_cutoff)
+  {
+    for (u32 voice = 1; voice <= 2; voice++)
+    {
+      SPU::WriteRegister(voice * 0x10 + 0x04, 0x1000);
+      SPU::WriteRegister(voice * 0x10 + 0x06, 0x200);
+      SPU::WriteRegister(voice * 0x10 + 0x0E, 0x200);
+    }
+    SPU::WriteRegister(0x188, 6);
+    RunSamples(samples_before_cutoff);
+    SPU::WriteRegister(0x1E, 0x300);
+    RunSamples(1);
+    SPU::WriteRegister(0x2E, 0x300);
+    RunSamples(8);
+    EXPECT_EQ(SPU::ReadRegister(0x1E), 0x200u);
+    EXPECT_EQ(SPU::ReadRegister(0x2E), 0x300u);
+  }
+
+  template<size_t N>
+  static void CheckCapture(const std::array<u8, 14>& adpcm, u16 pitch, const std::array<s16, N>& golden)
+  {
+    auto& ram = SPU::GetWritableRAM();
+    std::copy(adpcm.begin(), adpcm.end(), ram.begin() + 0x1002);
+    KeyOn(0x000F, 0x1FC0, pitch);
+    RunSamples(1024); // Capture a complete, steady lap with no onset samples.
+
+    std::array<s16, 512> capture;
+    std::memcpy(capture.data(), &ram[0x800], sizeof(capture));
+    u32 best_mismatches = static_cast<u32>(capture.size());
+    for (u32 phase = 0; phase < N; phase++)
+    {
+      u32 mismatches = 0;
+      for (u32 i = 0; i < capture.size(); i++)
+        mismatches += (capture[i] != golden[(phase + i) % N]);
+      best_mismatches = std::min(best_mismatches, mismatches);
+    }
+    EXPECT_EQ(best_mismatches, 0u);
+  }
+
+  Settings m_old_settings;
+};
+
+TEST_F(SPUHardwareTest, DecayCrossesSustainThreshold)
+{
+  // nugget-tests/spu: decay at the lowest sustain level settles at 07FFh,
+  // and even the maximum sustain level must perform a decay step (7FF7h).
+  KeyOn(0x04A0, 0x5FC0);
+  RunSamples(8192);
+  EXPECT_EQ(Envelope(), 0x07FFu);
+  KeyOn(0x04FF, 0x1FCC);
+  RunSamples(512);
+  EXPECT_EQ(Envelope(), 0x7FF7u);
+  SPU::WriteRegister(0x18C, 2);
+  RunSamples(8192);
+  EXPECT_EQ(Envelope(), 0u);
+}
+
+TEST_F(SPUHardwareTest, KeyOnEnvelopeLatency)
+{
+  // Hardware only processes KON on every second sample, so ENVX first changes
+  // six or seven samples after the write, depending on which sample it lands on.
+  KeyOn(0x000F, 0x1FC0);
+  for (u32 sample = 1; sample <= 6; sample++)
+  {
+    RunSamples(1);
+    EXPECT_EQ(Envelope(), 0u) << sample;
+  }
+  RunSamples(1);
+  EXPECT_EQ(Envelope(), 0x3800u);
+}
+
+TEST_F(SPUHardwareTest, KeyOnLatencyOnOddSample)
+{
+  RunSamples(1);
+  KeyOn(0x000F, 0x1FC0);
+  RunSamples(5);
+  EXPECT_EQ(Envelope(), 0u);
+  RunSamples(1);
+  EXPECT_EQ(Envelope(), 0x3800u);
+}
+
+TEST_F(SPUHardwareTest, KeyOffDuringKeyOnDelay)
+{
+  // Key off during the delay must not let the voice read its first block early.
+  SPU::WriteRegister(0x1A4, 0x200);  // IRQ address
+  SPU::WriteRegister(0x1AA, 0xC040); // SPU enable, IRQ9 enable
+  KeyOn(0x000F, 0x1FC0);
+  RunSamples(2);
+  SPU::WriteRegister(0x18C, 2); // KOF voice 1
+  RunSamples(3);
+  EXPECT_EQ(SPU::ReadRegister(0x1AE) & 0x40, 0u);
+  RunSamples(2);
+  EXPECT_NE(SPU::ReadRegister(0x1AE) & 0x40, 0u);
+  EXPECT_EQ(Envelope(), 0u);
+}
+
+TEST_F(SPUHardwareTest, KeyOnClearsEndxWithFirstFetch)
+{
+  // Set ENDX by playing the looping block, then release the voice.
+  KeyOn(0x000F, 0x1FC0);
+  RunSamples(64);
+  SPU::WriteRegister(0x1A, 0);
+  SPU::WriteRegister(0x18C, 2);
+  RunSamples(8);
+  SPU::WriteRegister(0x18C, 0);
+  ASSERT_EQ(Envelope(), 0u);
+  ASSERT_NE(SPU::ReadRegister(0x19C) & 2u, 0u);
+
+  // Hardware clears ENDX four samples before the first attack tick, not when KON is serviced.
+  SPU::WriteRegister(0x1A, 0x1FC0);
+  SPU::WriteRegister(0x188, 2);
+  u32 endx_cleared = 0;
+  u32 attack = 0;
+  for (u32 sample = 1; sample <= 16 && attack == 0; sample++)
+  {
+    RunSamples(1);
+    if (endx_cleared == 0 && (SPU::ReadRegister(0x19C) & 2u) == 0)
+      endx_cleared = sample;
+    if (Envelope() != 0)
+      attack = sample;
+  }
+  ASSERT_NE(endx_cleared, 0u);
+  EXPECT_EQ(attack, endx_cleared + 4);
+}
+
+TEST_F(SPUHardwareTest, RepeatAddressLatchCutoff)
+{
+  // Hardware fetches the first header on the three samples after KON is serviced, so a write four samples after KON
+  // is still overwritten, while a write five samples after latches.
+  CheckRepeatAddressLatch(4);
+}
+
+TEST_F(SPUHardwareTest, RepeatAddressLatchCutoffOnOddSample)
+{
+  RunSamples(1);
+  CheckRepeatAddressLatch(3);
+}
+
+TEST_F(SPUHardwareTest, UnityPitchCaptureMatchesHardware)
+{
+  static constexpr std::array<u8, 14> adpcm = {0x10, 0x43, 0x76, 0x77, 0x77, 0x46, 0x13,
+                                               0xE0, 0xBC, 0x89, 0x88, 0x88, 0xB9, 0xEC};
+  // Periodic tail of nugget-tests/spu/sine.test.pcm, captured on hardware.
+  static constexpr std::array<s16, 28> golden = {
+    5822,  8467,   11942,  13978,  14278,  14278,  14278,  13974,  11930,  8455,   5811,  2335,  -309, -4088,
+    -7864, -10508, -13984, -16020, -16320, -16320, -16320, -16016, -13972, -10497, -7852, -4073, -297, 2347,
+  };
+  CheckCapture(adpcm, 0x1000, golden);
+}
+
+TEST_F(SPUHardwareTest, FractionalPitchCaptureMatchesHardware)
+{
+  static constexpr std::array<u8, 14> adpcm = {0x60, 0x37, 0x9D, 0x0A, 0x76, 0xD3, 0xA9,
+                                               0x60, 0x37, 0x9D, 0x0A, 0x76, 0xD3, 0xA9};
+  // Periodic tail of nugget-tests/spu/sine7_pitch_1300.test.pcm, captured on hardware.
+  static constexpr std::array<s16, 112> golden = {
+    -1507,  11165,  11669,  695,    -10926, -11872, 22,     11890,  10897,  -742,   -11693, -11142, 1552,   12452,
+    10000,  -2165,  -12313, -10246, 3070,   12856,  8998,   -3554,  -12775, -9191,  4564,   13108,  7908,   -4891,
+    -13073, -7990,  6011,   13210,  6737,   -6165,  -13205, -6666,  7382,   13154,  5494,   -7370,  -13177, -5251,
+    8644,   12933,  4186,   -8499,  -12994, -3776,  9769,   12548,  2821,   -9545,  -12662, -2268,  10740,  12000,
+    1410,   -10493, -12176, -742,   11549,  11300,  -23,    -11326, -11528, 788,    12191,  10463,  -1458,  -12022,
+    -10715, 2314,   12673,  9511,   -2866,  -12564, -9739,  3822,   13001,  8463,   -4230,  -12944, -8608,  5295,
+    13178,  7332,   -5536,  -13159, -7341,  6707,   13202,  6124,   -6777,  -13210, -5967,  8028,   13064,  4848,
+    -7945,  -13105, -4519,  9225,   12761,  3509,   -9033,  -12847, -3025,  10275,  12294,  2120,   -10032, -12438,
+  };
+  CheckCapture(adpcm, 0x1300, golden);
+}
+
+TEST_F(SPUHardwareTest, PrimedInterpolationAtDoublePitchMatchesHardware)
+{
+  static constexpr std::array<u8, 14> adpcm = {0x10, 0x43, 0x76, 0x77, 0x77, 0x46, 0x13,
+                                               0xE0, 0xBC, 0x89, 0x88, 0x88, 0xB9, 0xEC};
+  // Periodic tail of nugget tests/spu/sine_pitch_2000.test.pcm, captured on hardware.
+  static constexpr std::array<s16, 14> golden = {
+    8467, 13978, 14278, 13974, 8455, 2335, -4088, -10508, -16020, -16320, -16016, -10497, -4073, 2347,
+  };
+  CheckCapture(adpcm, 0x2000, golden);
+}
+
+TEST_F(SPUHardwareTest, PrimedInterpolationAtFractionalPitchMatchesHardware)
+{
+  static constexpr std::array<u8, 14> adpcm = {0x10, 0x43, 0x76, 0x77, 0x77, 0x46, 0x13,
+                                               0xE0, 0xBC, 0x89, 0x88, 0x88, 0xB9, 0xEC};
+  // Periodic tail of nugget tests/spu/sine_pitch_1500.test.pcm, captured on hardware.
+  static constexpr std::array<s16, 64> golden = {
+    -16320, -16303, -14672, -10310, -6566,  -1349,  2347,   6685,   10668,  13910,  14278,  14278,  14086,
+    11320,  7134,   2944,   -708,   -5857,  -9804,  -14171, -16263, -16319, -16320, -15593, -11771, -8039,
+    -3055,  1175,   5424,   9076,   13210,  14278,  14278,  14262,  12631,  8268,   4534,   556,    -4088,
+    -8726,  -12709, -15952, -16320, -16319, -16128, -13362, -9175,  -4837,  69,     3855,   7763,   12129,
+    14221,  14278,  14278,  13551,  9729,   5998,   1632,   -2320,  -7466,  -11118, -15251, -16319,
+  };
+  CheckCapture(adpcm, 0x1500, golden);
 }
 
 } // namespace

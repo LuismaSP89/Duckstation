@@ -755,68 +755,19 @@ GPUTexture* FullscreenUI::GetPlaceholderTexture()
 
 std::optional<Image> FullscreenUI::LoadTextureImage(std::string_view path, u32 svg_width, u32 svg_height)
 {
-  std::optional<Image> image;
+  // relative paths are resources
+  const std::string full_path =
+    Path::IsAbsolute(path) ? std::string(path) : EmuFolders::GetOverridableResourcePath(path);
+
   Error error;
-
-  if (StringUtil::EqualNoCase(Path::GetExtension(path), "svg"))
+  const std::optional<DynamicHeapArray<u8>> data = FileSystem::ReadBinaryFile(full_path.c_str(), &error);
+  if (!data.has_value())
   {
-    std::optional<DynamicHeapArray<u8>> svg_data;
-    if (Path::IsAbsolute(path))
-      svg_data = FileSystem::ReadBinaryFile(std::string(path).c_str(), &error);
-    else
-      svg_data = Host::ReadResourceFile(path, true, &error);
-
-    if (svg_data.has_value())
-    {
-      image = Image();
-      if (!image->RasterizeSVG(svg_data->cspan(), svg_width, svg_height, true, &error))
-      {
-        ERROR_LOG("Failed to rasterize SVG texture file '{}': {}", path, error.GetDescription());
-        image.reset();
-      }
-    }
-    else
-    {
-      ERROR_LOG("Failed to read SVG texture file '{}': {}", path, error.GetDescription());
-    }
-  }
-  else if (Path::IsAbsolute(path))
-  {
-    std::string path_str(path);
-    auto fp = FileSystem::OpenManagedCFile(path_str.c_str(), "rb", &error);
-    if (fp)
-    {
-      image = Image();
-      if (!image->LoadFromFile(path_str.c_str(), fp.get(), &error))
-      {
-        ERROR_LOG("Failed to read texture file '{}': {}", path, error.GetDescription());
-        image.reset();
-      }
-    }
-    else
-    {
-      ERROR_LOG("Failed to open texture file '{}': {}", path, error.GetDescription());
-    }
-  }
-  else
-  {
-    std::optional<DynamicHeapArray<u8>> data = Host::ReadResourceFile(path, true, &error);
-    if (data.has_value())
-    {
-      image = Image();
-      if (!image->LoadFromBuffer(path, data->cspan(), &error))
-      {
-        ERROR_LOG("Failed to read texture resource '{}': {}", path, error.GetDescription());
-        image.reset();
-      }
-    }
-    else
-    {
-      ERROR_LOG("Failed to open texture resource '{}: {}'", path, error.GetDescription());
-    }
+    ERROR_LOG("Failed to read texture file '{}': {}", path, error.GetDescription());
+    return std::nullopt;
   }
 
-  return image;
+  return LoadTextureImage(path, data->cspan(), svg_width, svg_height);
 }
 
 std::optional<Image> FullscreenUI::LoadTextureImage(std::string_view filename, std::span<const u8> buffer,
@@ -1397,7 +1348,17 @@ void FullscreenUI::RenderTransitionBlend(GPUSwapChain* swap_chain, GPUTexture* c
   const float transition_alpha = s_state.transition_remaining_time / s_state.transition_total_time;
   GPUTexture* textures[2];
   GPUPipeline* pipeline;
-  float uniforms[3];
+  float uniforms[4];
+
+  // The textures are in framebuffer orientation, so the slide direction needs to follow the prerotation.
+  const auto set_slide_offset = [&uniforms, swap_chain](float offset) {
+    static constexpr const float slide_axis[8][2] = {{1.0f, 0.0f},  {0.0f, 1.0f},  {-1.0f, 0.0f}, {0.0f, -1.0f},
+                                                     {-1.0f, 0.0f}, {0.0f, -1.0f}, {1.0f, 0.0f},  {0.0f, 1.0f}};
+    const float* const axis = slide_axis[static_cast<size_t>(swap_chain->GetPreRotation())];
+    uniforms[2] = offset * axis[0];
+    uniforms[3] = offset * axis[1];
+  };
+
   switch (s_state.transition_effect)
   {
     case TransitionEffect::Fade:
@@ -1405,6 +1366,7 @@ void FullscreenUI::RenderTransitionBlend(GPUSwapChain* swap_chain, GPUTexture* c
       uniforms[0] = 1.0f - transition_alpha;
       uniforms[1] = transition_alpha;
       uniforms[2] = 0.0f;
+      uniforms[3] = 0.0f;
       textures[0] = transition_texture;
       textures[1] = s_state.transition_prev_texture.get();
       pipeline = s_state.transition_blend_pipeline.get();
@@ -1417,6 +1379,7 @@ void FullscreenUI::RenderTransitionBlend(GPUSwapChain* swap_chain, GPUTexture* c
       uniforms[1] = Easing::InCubic(transition_alpha);
       uniforms[0] = 1.0f - uniforms[1];
       uniforms[2] = START_SCALE + ((1.0f - START_SCALE) * uniforms[0]);
+      uniforms[3] = uniforms[2];
       textures[0] = transition_texture;
       textures[1] = s_state.transition_prev_texture.get();
       pipeline = s_state.transition_zoom_pipeline.get();
@@ -1429,6 +1392,7 @@ void FullscreenUI::RenderTransitionBlend(GPUSwapChain* swap_chain, GPUTexture* c
       uniforms[0] = Easing::InCubic(transition_alpha);
       uniforms[1] = 1.0f - uniforms[0];
       uniforms[2] = 1.0f + ((END_SCALE - 1.0f) * uniforms[1]);
+      uniforms[3] = uniforms[2];
       textures[0] = s_state.transition_prev_texture.get();
       textures[1] = transition_texture;
       pipeline = s_state.transition_zoom_pipeline.get();
@@ -1440,7 +1404,7 @@ void FullscreenUI::RenderTransitionBlend(GPUSwapChain* swap_chain, GPUTexture* c
       static constexpr float START_POSITION = 0.95f;
       uniforms[1] = Easing::InCubic(transition_alpha);
       uniforms[0] = 1.0f - uniforms[1];
-      uniforms[2] = (1.0f - START_POSITION) * (1.0f - uniforms[0]);
+      set_slide_offset((1.0f - START_POSITION) * (1.0f - uniforms[0]));
       textures[0] = transition_texture;
       textures[1] = s_state.transition_prev_texture.get();
       pipeline = s_state.transition_blend_pipeline.get();
@@ -1452,7 +1416,7 @@ void FullscreenUI::RenderTransitionBlend(GPUSwapChain* swap_chain, GPUTexture* c
       static constexpr float START_POSITION = 0.95f;
       uniforms[1] = Easing::InCubic(transition_alpha);
       uniforms[0] = 1.0f - uniforms[1];
-      uniforms[2] = -((1.0f - START_POSITION) * (1.0f - uniforms[0]));
+      set_slide_offset(-((1.0f - START_POSITION) * (1.0f - uniforms[0])));
       textures[0] = transition_texture;
       textures[1] = s_state.transition_prev_texture.get();
       pipeline = s_state.transition_blend_pipeline.get();
@@ -1467,7 +1431,7 @@ void FullscreenUI::RenderTransitionBlend(GPUSwapChain* swap_chain, GPUTexture* c
   g_gpu_device->SetTextureSampler(1, textures[1], g_gpu_device->GetNearestSampler());
   g_gpu_device->SetViewportAndScissor(0, 0, swap_chain->GetPostRotatedWidth(), swap_chain->GetPostRotatedHeight());
 
-  const GSVector2i size = swap_chain->GetSizeVec();
+  const GSVector2i size = swap_chain->GetPostRotatedSizeVec();
   const GSVector4 uv_rect = g_gpu_device->UsesLowerLeftOrigin() ? GSVector4::cxpr(0.0f, 1.0f, 1.0f, 0.0f) :
                                                                   GSVector4::cxpr(0.0f, 0.0f, 1.0f, 1.0f);
   VideoPresenter::DrawScreenQuad(GSVector4i::loadh(size), uv_rect, size, size, DisplayRotation::Normal,
@@ -1777,6 +1741,9 @@ bool FullscreenUI::BeginBlurBackground(ImDrawList* const dl, const ImVec2& bb_mi
   // mark it so we can check in EndPopBackgroundTexture
   DebugAssert(curr_cmd->ElemCount == 0);
   curr_cmd->UserCallback = &DrawWithBlurTexture;
+
+  // use vertex rounding because we don't have the imgui texture..
+  dl->PushDrawFlag(ImDrawFlags_UseTexForRoundCorners, false);
   return true;
 }
 
@@ -1796,6 +1763,8 @@ void FullscreenUI::EndBlurBackground(ImDrawList* const dl)
     // flush the blurred draw
     dl->AddDrawCmd();
   }
+
+  dl->PopDrawFlag();
 }
 
 void FullscreenUI::DrawWithBlurTexture(const ImDrawList* parent_list, const ImDrawCmd* cmd, u32 base_vertex,
@@ -2268,11 +2237,10 @@ void FullscreenUI::PopPrimaryColor()
 void FullscreenUI::DrawRoundedGradientRect(ImDrawList* const dl, const ImVec2& pos_min, const ImVec2& pos_max,
                                            ImU32 col_left, ImU32 col_right, float rounding)
 {
-  dl->AddRectFilled(pos_min, ImVec2(pos_min.x + rounding, pos_max.y), col_left, rounding, ImDrawFlags_RoundCornersLeft);
+  dl->AddRectFilled(pos_min, ImVec2(pos_min.x + rounding, pos_max.y), col_left, rounding, ImDrawFlags_RoundLeft);
   dl->AddRectFilledMultiColor(ImVec2(pos_min.x + rounding, pos_min.y), ImVec2(pos_max.x - rounding, pos_max.y),
                               col_left, col_right, col_right, col_left);
-  dl->AddRectFilled(ImVec2(pos_max.x - rounding, pos_min.y), pos_max, col_right, rounding,
-                    ImDrawFlags_RoundCornersRight);
+  dl->AddRectFilled(ImVec2(pos_max.x - rounding, pos_min.y), pos_max, col_right, rounding, ImDrawFlags_RoundRight);
 }
 
 void FullscreenUI::DrawSpinner(ImDrawList* const dl, const ImVec2& pos, ImU32 color, float size, float thickness)
@@ -2290,7 +2258,7 @@ void FullscreenUI::DrawSpinner(ImDrawList* const dl, const ImVec2& pos, ImU32 co
     dl->PathLineTo(ImVec2(center.x + ImCos(static_cast<float>(a + GImGui->Time * 8.0f)) * radius,
                           center.y + ImSin(static_cast<float>(a + GImGui->Time * 8.0f)) * radius));
   }
-  dl->PathStroke(color, false, thickness);
+  dl->PathStroke(color, thickness, 0);
 }
 
 bool FullscreenUI::BeginFullscreenColumns(const char* title, float pos_y, bool expand_to_screen_width, bool footer)
@@ -3223,15 +3191,43 @@ begin:
   (*idx_write++) = (ImDrawIdx)(vtx_index + 3);                                                                         \
   vtx_index += 4;
 
+  // Right-to-left lines are drawn at their reordered positions, x still advances in logical order.
+  ImVector<ImFontBidiChar> bidi_chars;
+  ImVector<int> bidi_order;
+  const char* bidi_line_end = nullptr;
+  int bidi_index = 0;
+  const auto update_bidi_line = [&](const char* line_start) {
+    bidi_line_end = nullptr;
+    if (!(font->Flags & ImFontFlags_Bidi))
+      return;
+    const char* line_end = static_cast<const char*>(std::memchr(line_start, '\n', text_end - line_start));
+    line_end = line_end ? line_end : text_end;
+    if (ImFontBuildBidiLine(baked, scale, text.data(), line_start, line_end, bidi_chars, bidi_order))
+    {
+      bidi_line_end = line_end;
+      bidi_index = 0;
+    }
+  };
+  const auto get_bidi_glyph_x = [&](const char* char_start, unsigned int& c) {
+    if (!bidi_line_end || char_start >= bidi_line_end)
+      return x;
+    const ImFontBidiChar& bc = bidi_chars[bidi_index++];
+    c = bc.c;
+    return origin_x + bc.x;
+  };
+
   // outline pass
+  update_bidi_line(s);
   while (s < text_end)
   {
     // Decode and advance source
+    const char* char_start = s;
     unsigned int c = (unsigned int)*s;
     if (c < 0x80)
       s += 1;
     else
       s += ImTextCharFromUtf8(&c, s, text_end);
+    const float glyph_x = get_bidi_glyph_x(char_start, c);
 
     if (c < 32)
     {
@@ -3239,6 +3235,7 @@ begin:
       {
         x = origin_x;
         y += line_height;
+        update_bidi_line(s);
         continue;
       }
       if (c == '\r')
@@ -3249,8 +3246,8 @@ begin:
     const float char_width = glyph->AdvanceX * scale;
     if (glyph->Visible)
     {
-      const float x1 = x + glyph->X0 * scale;
-      const float x2 = x + glyph->X1 * scale;
+      const float x1 = glyph_x + glyph->X0 * scale;
+      const float x2 = glyph_x + glyph->X1 * scale;
       const float y1 = y + glyph->Y0 * scale;
       const float y2 = y + glyph->Y1 * scale;
       constexpr ImU32 outline_col = IM_COL32(0, 0, 0, 35);
@@ -3281,14 +3278,17 @@ begin:
   y = IM_TRUNC(pos.y);
   s = text.data();
 
+  update_bidi_line(s);
   while (s < text_end)
   {
     // Decode and advance source
+    const char* char_start = s;
     unsigned int c = (unsigned int)*s;
     if (c < 0x80)
       s += 1;
     else
       s += ImTextCharFromUtf8(&c, s, text_end);
+    const float glyph_x = get_bidi_glyph_x(char_start, c);
 
     if (c < 32)
     {
@@ -3296,6 +3296,7 @@ begin:
       {
         x = origin_x;
         y += line_height;
+        update_bidi_line(s);
         continue;
       }
       if (c == '\r')
@@ -3306,8 +3307,8 @@ begin:
     const float char_width = glyph->AdvanceX * scale;
     if (glyph->Visible)
     {
-      const float x1 = x + glyph->X0 * scale;
-      const float x2 = x + glyph->X1 * scale;
+      const float x1 = glyph_x + glyph->X0 * scale;
+      const float x2 = glyph_x + glyph->X1 * scale;
       const float y1 = y + glyph->Y0 * scale;
       const float y2 = y + glyph->Y1 * scale;
       const float u1 = glyph->U0;
@@ -6760,7 +6761,7 @@ void FullscreenUI::RenderLoadingScreen(std::string_view image, std::string_view 
     GPUTexture* const blur_target = GetBlurRenderTexture(swap_chain);
     if (blur_target)
     {
-      VideoPresenter::RenderDisplay(blur_target, blur_target->GetSizeVec(), swap_chain->GetPostRotatedSizeVec(),
+      VideoPresenter::RenderDisplay(blur_target, swap_chain->GetSizeVec(), swap_chain->GetPostRotatedSizeVec(),
                                     swap_chain->GetPreRotation(), false, true);
       RenderBlur(swap_chain, blur_target);
     }
@@ -8091,7 +8092,7 @@ void FullscreenUI::DrawOnScreenKeyboard()
   ImDrawList* const dl = window->DrawList;
   dl->AddRectFilled(window->Pos, window->Pos + window->Size,
                     ImGui::GetColorU32(MulAlpha(ModAlpha(UIStyle.PopupBackgroundColor, 0.98f), alpha)),
-                    window_padding.y, ImDrawFlags_RoundCornersTop);
+                    window_padding.y, ImDrawFlags_RoundTop);
 
   ImVec2 content_pos = ImGui::GetCursorScreenPos();
   ImVec2 content_size = ImGui::GetContentRegionAvail();

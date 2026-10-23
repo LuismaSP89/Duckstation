@@ -4181,7 +4181,7 @@ void FullscreenUI::DrawControllerSettingsPage()
       for (const SettingInfo& si : ci->settings)
       {
         TinyString title;
-        title.format(ICON_FA_GEAR "{}", Host::TranslateToStringView(ci->name, si.display_name));
+        title.format(ICON_FA_GEAR "  {}", Host::TranslateToStringView(ci->name, si.display_name));
         std::string_view description = Host::TranslateToStringView(ci->name, si.description);
         switch (si.type)
         {
@@ -4893,6 +4893,11 @@ void FullscreenUI::DrawGraphicsSettingsPage()
                               "particularly with the software renderer, and is safe to use."),
                     Settings::GPU_SECTION_NAME, "UseThread", true);
 
+  DrawToggleSetting(bsi, FSUI_ICONVSTR(ICON_FA_GRIP_LINES, "Mid-Frame Scanout"),
+                    FSUI_VSTR("Applies changes to the displayed framebuffer partway through a frame. Needed for "
+                              "split-screen effects in some games, but causes tearing in others."),
+                    Settings::GPU_SECTION_NAME, "MidFrameScanout", false);
+
   if (is_hardware)
   {
     DrawEnumSetting(bsi, FSUI_ICONVSTR(ICON_FA_GRIP_LINES_VERTICAL, "Line Detection"),
@@ -4943,11 +4948,6 @@ void FullscreenUI::DrawGraphicsSettingsPage()
         filter_framebuffer_upload_sizes_enabled);
     }
 
-    DrawToggleSetting(bsi, FSUI_ICONVSTR(ICON_FA_SWATCHBOOK, "Texture Modulation Cropping (\"Old/v0\" GPU)"),
-                      FSUI_VSTR("Crops vertex colours to 5:5:5 before modulating with the texture colour, which "
-                                "typically results in more visible banding."),
-                      Settings::GPU_SECTION_NAME, "EnableModulationCrop", false);
-
     DrawToggleSetting(
       bsi, FSUI_ICONVSTR(ICON_FA_DOWNLOAD, "Use Software Renderer For Readbacks"),
       FSUI_VSTR("Runs the software renderer in parallel for VRAM readbacks. On some systems, this may result in "
@@ -4975,25 +4975,29 @@ void FullscreenUI::DrawGraphicsSettingsPage()
       bsi, FSUI_ICONVSTR(ICON_FA_DRAW_POLYGON, "Preserve Projection Precision"),
       FSUI_VSTR("Adds additional precision to PGXP data post-projection. May improve visuals in some games."),
       Settings::GPU_SECTION_NAME, "PGXPPreserveProjFP", false, pgxp_enabled);
-
-    DrawToggleSetting(bsi, FSUI_ICONVSTR(ICON_FA_MICROCHIP, "CPU Mode"),
-                      FSUI_VSTR("Uses PGXP for all instructions, not just memory operations."),
-                      Settings::GPU_SECTION_NAME, "PGXPCPU", false, pgxp_enabled);
-
-    DrawToggleSetting(bsi, FSUI_ICONVSTR(ICON_FA_CIRCLE_NODES, "Vertex Cache"),
-                      FSUI_VSTR("Uses screen positions to resolve PGXP data. May improve visuals in some games."),
-                      Settings::GPU_SECTION_NAME, "PGXPVertexCache", false, pgxp_enabled);
-
     DrawToggleSetting(
       bsi, FSUI_ICONVSTR(ICON_FA_SQUARE_MINUS, "Disable on 2D Polygons"),
       FSUI_VSTR("Uses native resolution coordinates for 2D polygons, instead of precise coordinates. Can "
                 "fix misaligned UI in some games, but otherwise should be left disabled."),
       Settings::GPU_SECTION_NAME, "PGXPDisableOn2DPolygons", false, pgxp_enabled);
-
     DrawToggleSetting(bsi, FSUI_ICONVSTR(ICON_FA_RULER, "Depth Test Transparent Polygons"),
                       FSUI_VSTR("Enables depth testing for semi-transparent polygons. Usually these include shadows, "
                                 "and tend to clip through the ground when depth testing is enabled."),
                       Settings::GPU_SECTION_NAME, "PGXPTransparentDepthTest", false, pgxp_enabled);
+
+    DrawEnumSetting(bsi, FSUI_ICONVSTR(ICON_FA_MICROCHIP, "CPU Mode"),
+                    FSUI_VSTR("Uses PGXP for all instructions, not just memory operations. Automatic uses the game "
+                              "database setting."),
+                    Settings::GPU_SECTION_NAME, "PGXPCPU", SettingOverrideMode::Automatic,
+                    &Settings::ParseSettingOverrideModeName, &Settings::GetSettingOverrideModeName,
+                    &Settings::GetSettingOverrideModeDisplayName, SettingOverrideMode::Count, pgxp_enabled);
+
+    DrawEnumSetting(bsi, FSUI_ICONVSTR(ICON_FA_CIRCLE_NODES, "Vertex Cache"),
+                    FSUI_VSTR("Uses screen positions to resolve PGXP data. May improve visuals in some games. "
+                              "Automatic uses the game database setting."),
+                    Settings::GPU_SECTION_NAME, "PGXPVertexCache", SettingOverrideMode::Automatic,
+                    &Settings::ParseSettingOverrideModeName, &Settings::GetSettingOverrideModeName,
+                    &Settings::GetSettingOverrideModeDisplayName, SettingOverrideMode::Count, pgxp_enabled);
 
     DrawFloatRangeSetting(
       bsi, FSUI_ICONVSTR(ICON_FA_PENTAGON, "Geometry Tolerance"),
@@ -5644,37 +5648,36 @@ void FullscreenUI::DrawAchievementsSettingsHeader(SettingsInterface* bsi,
   SmallString sstr;
 
   const ImVec2 pos_backup = ImGui::GetCursorPos();
-  const bool logged_in = (bsi->ContainsValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Token"));
+  const SettingsInterface* const base_si = Core::GetBaseSettingsLayer();
+  const bool logged_in = (base_si->ContainsValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Token"));
   {
+    std::string_view badge_path = base_si->GetStringViewValue(Settings::ACHIEVEMENTS_SECTION_NAME, "AvatarURL");
+    if (badge_path.empty())
+      badge_path = "images/ra-generic-user.png";
+
+    if (GPUTexture* badge_tex = GetCachedTextureAsync(badge_path))
+    {
+      const ImRect badge_rect = CenterImage(ImRect(pos, pos + ImVec2(badge_size, badge_size)), badge_tex);
+      dl->AddImage(reinterpret_cast<ImTextureID>(GetCachedTextureAsync(badge_path)), badge_rect.Min, badge_rect.Max);
+    }
+
+    pos.x += badge_size + LayoutScale(15.0f);
+
+    if (logged_in)
+      tstr = base_si->GetStringViewValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Username");
+    else
+      tstr = FSUI_VSTR("Not Logged In");
+
     // avoid locking order issues
     settings_lock.unlock();
     {
       const auto lock = Achievements::GetLock();
-      std::string_view badge_path = Achievements::GetLoggedInUserIconURL();
-      if (badge_path.empty())
-        badge_path = "images/ra-generic-user.png";
 
-      if (Achievements::IsLoggedIn())
-      {
-        std::string_view username_sv = Achievements::GetLoggedInUserName();
-        if (!username_sv.empty())
-          tstr = username_sv;
-      }
-      else if (Achievements::IsLoggedInOrLoggingIn())
-      {
+      if (!Achievements::IsLoggedIn() && Achievements::IsLoggedInOrLoggingIn())
         tstr = FSUI_VSTR("Logging In...");
-      }
-      else if (!logged_in)
-      {
-        tstr = FSUI_VSTR("Not Logged In");
-      }
-      else
-      {
-        // client not active
-        tstr = bsi->GetTinyStringValue(Settings::ACHIEVEMENTS_SECTION_NAME, "Username");
-      }
 
-      sstr = Achievements::GetLoggedInUserPointsSummary();
+      const auto [points, casual_points] = Achievements::GetLoggedInUserPoints();
+      sstr.format(TRANSLATE_FS("Achievements", "Score: {} ({} casual)"), points, casual_points);
       if (sstr.empty())
       {
         if (logged_in)
@@ -5682,14 +5685,6 @@ void FullscreenUI::DrawAchievementsSettingsHeader(SettingsInterface* bsi,
         else
           sstr = FSUI_VSTR("To use achievements, please log in with your retroachievements.org account.");
       }
-
-      if (GPUTexture* badge_tex = GetCachedTextureAsync(badge_path))
-      {
-        const ImRect badge_rect = CenterImage(ImRect(pos, pos + ImVec2(badge_size, badge_size)), badge_tex);
-        dl->AddImage(reinterpret_cast<ImTextureID>(GetCachedTextureAsync(badge_path)), badge_rect.Min, badge_rect.Max);
-      }
-
-      pos.x += badge_size + LayoutScale(15.0f);
 
       RenderShadowedTextClipped(dl, UIStyle.Font, UIStyle.LargeFontSize, UIStyle.BoldFontWeight, pos,
                                 pos + ImVec2(max_content_width - pos.x, UIStyle.LargeFontSize),
@@ -6215,6 +6210,10 @@ void FullscreenUI::DrawAdvancedSettingsPage()
     bsi, FSUI_VSTR("Disable Vertex Lighting"),
     FSUI_VSTR("Disables vertex lighting in the GPU, forcing all primitives to only show raw texture colours."),
     Settings::GPU_SECTION_NAME, "DisableVertexLighting", false);
+  DrawToggleSetting(bsi, FSUI_VSTR("Texture Modulation Cropping (\"Old/v0\" GPU)"),
+                    FSUI_VSTR("Crops vertex colours to 5:5:5 before modulating with the texture colour, which "
+                              "typically results in more visible banding."),
+                    Settings::GPU_SECTION_NAME, "EnableModulationCrop", false);
 
   MenuHeading(FSUI_VSTR("CPU Emulation"));
 

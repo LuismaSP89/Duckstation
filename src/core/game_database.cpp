@@ -46,7 +46,7 @@ namespace {
 enum : u32
 {
   GAME_DATABASE_CACHE_SIGNATURE = 0x45434C48,
-  GAME_DATABASE_CACHE_VERSION = 35,
+  GAME_DATABASE_CACHE_VERSION = 36,
 };
 
 /// Map of track hashes for image verification
@@ -155,6 +155,7 @@ static constexpr const std::array s_trait_names = {
   "IsLibCryptProtected",
   "DisableUpscaledDirectTextures",
   "FilterFramebufferUploads",
+  "ForceMidFrameScanout",
 };
 static_assert(s_trait_names.size() == static_cast<size_t>(Trait::MaxCount));
 
@@ -195,6 +196,7 @@ static constexpr const std::array s_trait_display_names = {
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Is LibCrypt Protected", "GameDatabase::Trait"),
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Disable Upscaled Direct Textures", "GameDatabase::Trait"),
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Filter Framebuffer Uploads", "GameDatabase::Trait"),
+  TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Force Mid-Frame Scanout", "GameDatabase::Trait"),
 };
 static_assert(s_trait_display_names.size() == static_cast<size_t>(Trait::MaxCount));
 
@@ -722,6 +724,11 @@ void GameDatabase::Entry::ApplySettings(Settings& settings, bool display_osd_mes
     }
   }
 
+  if (HasTrait(Trait::ForceMidFrameScanout))
+  {
+    settings.gpu_mid_frame_scanout = true;
+  }
+
   if (HasTrait(Trait::ForceDeinterlacing))
   {
     const DisplayDeinterlacingMode new_mode = display_deinterlacing_mode.value_or(
@@ -894,12 +901,23 @@ void GameDatabase::Entry::ApplySettings(Settings& settings, bool display_osd_mes
 
   if (HasTrait(Trait::ForcePGXPVertexCache))
   {
-    if (display_osd_messages && settings.gpu_pgxp_enable && !settings.gpu_pgxp_vertex_cache)
-      append_message(TRANSLATE_SV("GameDatabase", "PGXP vertex cache enabled."));
+    if (settings.gpu_pgxp_vertex_cache_mode == SettingOverrideMode::Automatic)
+    {
+      if (display_osd_messages && settings.gpu_pgxp_enable && !settings.gpu_pgxp_vertex_cache)
+        append_message(TRANSLATE_SV("GameDatabase", "PGXP vertex cache enabled."));
 
-    settings.gpu_pgxp_vertex_cache = settings.gpu_pgxp_enable;
+      settings.gpu_pgxp_vertex_cache = settings.gpu_pgxp_enable;
+    }
+    else if (!settings.gpu_pgxp_vertex_cache)
+    {
+      Host::AddIconOSDMessage(
+        OSDMessageType::Warning, "gamedb_force_pgxp_vertex_cache", ICON_EMOJI_WARNING,
+        TRANSLATE_STR(
+          "GameDatabase",
+          "PGXP Vertex Cache is required for this game, but it is disabled. This may cause rendering errors."));
+    }
   }
-  else if (settings.gpu_pgxp_enable && settings.gpu_pgxp_vertex_cache)
+  else if (!HasTrait(Trait::ForcePGXPVertexCache) && settings.gpu_pgxp_enable && settings.gpu_pgxp_vertex_cache)
   {
     Host::AddIconOSDMessage(
       OSDMessageType::Warning, "gamedb_force_pgxp_vertex_cache", ICON_EMOJI_WARNING,
@@ -910,12 +928,22 @@ void GameDatabase::Entry::ApplySettings(Settings& settings, bool display_osd_mes
 
   if (HasTrait(Trait::ForcePGXPCPUMode))
   {
-    if (display_osd_messages && settings.gpu_pgxp_enable && !settings.gpu_pgxp_cpu)
-      append_message(TRANSLATE_SV("GameDatabase", "PGXP CPU mode enabled."));
+    if (settings.gpu_pgxp_cpu_mode == SettingOverrideMode::Automatic)
+    {
+      if (display_osd_messages && settings.gpu_pgxp_enable && !settings.gpu_pgxp_cpu)
+        append_message(TRANSLATE_SV("GameDatabase", "PGXP CPU mode enabled."));
 
-    settings.gpu_pgxp_cpu = settings.gpu_pgxp_enable;
+      settings.gpu_pgxp_cpu = settings.gpu_pgxp_enable;
+    }
+    else if (!settings.gpu_pgxp_cpu)
+    {
+      Host::AddIconOSDMessage(
+        OSDMessageType::Warning, "gamedb_force_pgxp_cpu", ICON_EMOJI_WARNING,
+        TRANSLATE_STR("GameDatabase",
+                      "PGXP CPU mode is required for this game, but it is disabled. This may cause rendering errors."));
+    }
   }
-  else if (settings.UsingPGXPCPUMode())
+  else if (!HasTrait(Trait::ForcePGXPCPUMode) && settings.UsingPGXPCPUMode())
   {
     Host::AddIconOSDMessage(
       OSDMessageType::Warning, "gamedb_force_pgxp_cpu", ICON_EMOJI_WARNING,
@@ -1187,6 +1215,18 @@ static std::string GetCacheFile()
   return Path::Combine(EmuFolders::Cache, "gamedb.cache");
 }
 
+static u64 GetResourceTimestamp(const char* name)
+{
+  FILESYSTEM_STAT_DATA sd;
+  if (!FileSystem::StatFile(Path::Combine(EmuFolders::Resources, name).c_str(), &sd))
+  {
+    ERROR_LOG("Failed to stat resource file '{}'", name);
+    return 0;
+  }
+
+  return static_cast<u64>(sd.ModificationTime);
+}
+
 bool GameDatabase::LoadFromCache()
 {
   Error error;
@@ -1198,8 +1238,8 @@ bool GameDatabase::LoadFromCache()
   }
 
   BinarySpanReader reader(db_data->cspan());
-  const u64 gamedb_ts = static_cast<u64>(Host::GetResourceFileTimestamp(GAMEDB_YAML_FILENAME, false).value_or(0));
-  const u64 discsets_ts = static_cast<u64>(Host::GetResourceFileTimestamp(DISCSETS_YAML_FILENAME, false).value_or(0));
+  const u64 gamedb_ts = GetResourceTimestamp(GAMEDB_YAML_FILENAME);
+  const u64 discsets_ts = GetResourceTimestamp(DISCSETS_YAML_FILENAME);
 
   u32 signature, version, num_disc_set_entries, num_entries, num_codes;
   u64 file_gamedb_ts, file_discsets_ts;
@@ -1322,8 +1362,8 @@ bool GameDatabase::LoadFromCache()
 
 bool GameDatabase::SaveToCache()
 {
-  const u64 gamedb_ts = static_cast<u64>(Host::GetResourceFileTimestamp(GAMEDB_YAML_FILENAME, false).value_or(0));
-  const u64 discsets_ts = static_cast<u64>(Host::GetResourceFileTimestamp(DISCSETS_YAML_FILENAME, false).value_or(0));
+  const u64 gamedb_ts = GetResourceTimestamp(GAMEDB_YAML_FILENAME);
+  const u64 discsets_ts = GetResourceTimestamp(DISCSETS_YAML_FILENAME);
 
   Error error;
   FileSystem::AtomicRenamedFile file = FileSystem::CreateAtomicRenamedFile(GetCacheFile(), &error);
@@ -1434,14 +1474,16 @@ bool GameDatabase::SaveToCache()
 bool GameDatabase::LoadGameDBYaml()
 {
   Error error;
-  std::optional<DynamicHeapArray<u8>> gamedb_data = Host::ReadResourceFile(GAMEDB_YAML_FILENAME, false, &error);
+  std::optional<DynamicHeapArray<u8>> gamedb_data =
+    FileSystem::ReadBinaryFile(Path::Combine(EmuFolders::Resources, GAMEDB_YAML_FILENAME).c_str(), &error);
   if (!gamedb_data.has_value())
   {
     ERROR_LOG("Failed to read game database: {}", error.GetDescription());
     return false;
   }
 
-  std::optional<DynamicHeapArray<u8>> disc_set_data = Host::ReadResourceFile(DISCSETS_YAML_FILENAME, false, &error);
+  std::optional<DynamicHeapArray<u8>> disc_set_data =
+    FileSystem::ReadBinaryFile(Path::Combine(EmuFolders::Resources, DISCSETS_YAML_FILENAME).c_str(), &error);
   if (!disc_set_data.has_value())
   {
     ERROR_LOG("Failed to read disc set database: {}", error.GetDescription());
@@ -1885,7 +1927,8 @@ bool GameDatabase::LoadTrackHashes(Error* error)
 {
   Timer load_timer;
 
-  std::optional<std::string> gamedb_data(Host::ReadResourceFileToString(DISCDB_YAML_FILENAME, false, error));
+  std::optional<std::string> gamedb_data(
+    FileSystem::ReadFileToString(Path::Combine(EmuFolders::Resources, DISCDB_YAML_FILENAME).c_str(), error));
   if (!gamedb_data.has_value())
   {
     Error::AddPrefix(error, "Failed to read disc database: ");

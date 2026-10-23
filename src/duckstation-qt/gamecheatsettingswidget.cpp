@@ -10,8 +10,10 @@
 
 #include "core/cheats.h"
 #include "core/core.h"
+#include "core/settings.h"
 
 #include "common/error.h"
+#include "common/file_system.h"
 #include "common/log.h"
 #include "common/string_util.h"
 
@@ -241,32 +243,54 @@ void GameCheatSettingsWidget::setCodeOption(const std::string_view name, u32 val
   m_dialog->saveGameSettings();
 }
 
-std::string GameCheatSettingsWidget::getPathForSavingCheats() const
+std::string GameCheatSettingsWidget::getPathForSavingCodes(const SettingsWindow* dialog, bool cheats,
+                                                           std::string_view existing_name)
 {
+  if (!existing_name.empty())
+  {
+    std::string path =
+      Cheats::FindChtFileContainingCode(dialog->getGameSerial(), dialog->getGameHash(), cheats, existing_name);
+    if (!path.empty())
+      return path;
+  }
+
   // Check for the path without the hash first. If we have one of those, keep using it.
-  std::string path = Cheats::GetChtFilename(m_dialog->getGameSerial(), std::nullopt, true);
-  if (!FileSystem::FileExists(path.c_str()) && m_dialog->isGameHashStable())
-    path = Cheats::GetChtFilename(m_dialog->getGameSerial(), m_dialog->getGameHash(), true);
+  std::string path = Cheats::GetChtFilename(dialog->getGameSerial(), std::nullopt, cheats);
+  if (!FileSystem::FileExists(path.c_str()) && dialog->isGameHashStable())
+    path = Cheats::GetChtFilename(dialog->getGameSerial(), dialog->getGameHash(), cheats);
   return path;
 }
 
-QStringList GameCheatSettingsWidget::getGroupNames() const
+bool GameCheatSettingsWidget::removeCodeFromFile(QWidget* parent, SettingsWindow* dialog, bool cheats,
+                                                 const std::string& name)
 {
-  std::vector<std::string_view> unique_prefixes = Cheats::GetCodeListUniquePrefixes(m_codes, false);
-
-  QStringList ret;
-  if (!unique_prefixes.empty())
+  if (QtUtils::MessageBoxQuestion(parent, tr("Confirm Removal"),
+                                  tr("You are removing the code named '%1'. You cannot undo this action, are you sure "
+                                     "you wish to delete this code?")
+                                    .arg(QString::fromStdString(name))) != QMessageBox::Yes)
   {
-    ret.reserve(unique_prefixes.size());
-    for (const std::string_view& prefix : unique_prefixes)
-      ret.push_back(QtUtils::StringViewToQString(prefix));
+    return false;
   }
-  return ret;
-}
 
-bool GameCheatSettingsWidget::hasCodeWithName(const std::string_view name) const
-{
-  return (Cheats::FindCodeInInfoList(m_codes, name) != nullptr);
+  Error error;
+  if (!Cheats::UpdateCodeInFile(getPathForSavingCodes(dialog, cheats, name).c_str(), name, nullptr, &error))
+  {
+    QtUtils::AsyncMessageBox(parent, QMessageBox::Critical, tr("Error"),
+                             tr("Failed to save file:\n%1").arg(QString::fromStdString(error.GetDescription())));
+    return false;
+  }
+
+  // disable if it was enabled, and drop the option value
+  const char* section = cheats ? Cheats::CHEATS_CONFIG_SECTION : Cheats::PATCHES_CONFIG_SECTION;
+  SettingsInterface* si = dialog->getSettingsInterface();
+  const bool was_enabled = si->RemoveFromStringList(section, Cheats::PATCH_ENABLE_CONFIG_KEY, name.c_str());
+  if (was_enabled || si->ContainsValue(section, name.c_str()))
+  {
+    si->DeleteValue(section, name.c_str());
+    dialog->saveGameSettings();
+  }
+
+  return true;
 }
 
 void GameCheatSettingsWidget::onEnableCheatsChanged(Qt::CheckState state)
@@ -615,7 +639,7 @@ void GameCheatSettingsWidget::importCodes(const std::string& file_contents)
     return;
   }
 
-  if (!Cheats::SaveCodesToFile(getPathForSavingCheats().c_str(), new_codes, &error))
+  if (!Cheats::SaveCodesToFile(getPathForSavingCodes(m_dialog, true).c_str(), new_codes, &error))
   {
     QtUtils::AsyncMessageBox(
       this, QMessageBox::Critical, u"Error"_s,
@@ -628,7 +652,7 @@ void GameCheatSettingsWidget::importCodes(const std::string& file_contents)
 
 void GameCheatSettingsWidget::newCode()
 {
-  CheatCodeEditorDialog* const dlg = new CheatCodeEditorDialog(this, Cheats::CodeInfo(), getGroupNames());
+  CheatCodeEditorDialog* const dlg = new CheatCodeEditorDialog(this, m_dialog, true, m_codes, Cheats::CodeInfo());
   dlg->setAttribute(Qt::WA_DeleteOnClose);
 
   connect(dlg, &QDialog::accepted, this, [this] {
@@ -646,7 +670,7 @@ void GameCheatSettingsWidget::editCode(const std::string_view code_name)
   if (!code)
     return;
 
-  CheatCodeEditorDialog* const dlg = new CheatCodeEditorDialog(this, *code, getGroupNames());
+  CheatCodeEditorDialog* const dlg = new CheatCodeEditorDialog(this, m_dialog, true, m_codes, *code);
   dlg->setAttribute(Qt::WA_DeleteOnClose);
 
   connect(dlg, &QDialog::accepted, this, [this] {
@@ -672,26 +696,8 @@ void GameCheatSettingsWidget::removeCode(const std::string_view code_name, bool 
     return;
   }
 
-  if (QtUtils::MessageBoxQuestion(
-        this, tr("Confirm Removal"),
-        tr("You are removing the code named '%1'. You cannot undo this action, are you sure you "
-           "wish to delete this code?")
-          .arg(QtUtils::StringViewToQString(code_name))) != QMessageBox::Yes)
-  {
+  if (!removeCodeFromFile(this, m_dialog, true, code->name))
     return;
-  }
-
-  // disable if it was enabled
-  if (std::ranges::find(m_enabled_codes, code->name) != m_enabled_codes.end())
-    setCheatEnabled(code->name, false, true);
-
-  Error error;
-  if (!Cheats::UpdateCodeInFile(getPathForSavingCheats().c_str(), code->name, nullptr, &error))
-  {
-    QtUtils::AsyncMessageBox(this, QMessageBox::Critical, tr("Error"),
-                             tr("Failed to save file:\n%1").arg(QString::fromStdString(error.GetDescription())));
-    return;
-  }
 
   reloadList();
   QtHost::ReloadCheatFiles(m_dialog->getGameSerial(), false, true);
@@ -807,13 +813,20 @@ void GameCheatSettingsWidget::populateTreeWidgetItem(QStandardItem* parent, cons
   }
 }
 
-CheatCodeEditorDialog::CheatCodeEditorDialog(GameCheatSettingsWidget* parent, Cheats::CodeInfo code,
-                                             const QStringList& group_names)
-  : QDialog(parent), m_parent(parent), m_code(std::move(code))
+CheatCodeEditorDialog::CheatCodeEditorDialog(QWidget* parent, SettingsWindow* dialog, bool cheats,
+                                             const Cheats::CodeInfoList& existing_codes, Cheats::CodeInfo code)
+  : QDialog(parent), m_dialog(dialog), m_existing_codes(existing_codes), m_cheats(cheats), m_code(std::move(code))
 {
   m_ui.setupUi(this);
   QtUtils::FixSpinBoxTextMargins(this);
-  setupAdditionalUi(group_names);
+  if (!cheats)
+  {
+    // wider, to fit the setting overrides
+    setWindowTitle(tr("Patch Editor"));
+    resize(640, 520);
+  }
+  m_ui.overrides->setVisible(!cheats);
+  setupAdditionalUi();
   fillUi();
 
   connect(m_ui.group, &QComboBox::currentIndexChanged, this, &CheatCodeEditorDialog::onGroupSelectedIndexChanged);
@@ -827,6 +840,32 @@ CheatCodeEditorDialog::CheatCodeEditorDialog(GameCheatSettingsWidget* parent, Ch
 }
 
 CheatCodeEditorDialog::~CheatCodeEditorDialog() = default;
+
+void CheatCodeEditorDialog::renameCodeInSettings(const std::string& old_name)
+{
+  if (old_name.empty() || old_name == m_code.name)
+    return;
+
+  // move the enable state and option value over to the new name
+  const char* section = m_cheats ? Cheats::CHEATS_CONFIG_SECTION : Cheats::PATCHES_CONFIG_SECTION;
+  SettingsInterface* si = m_dialog->getSettingsInterface();
+  bool changed = false;
+  if (si->RemoveFromStringList(section, Cheats::PATCH_ENABLE_CONFIG_KEY, old_name.c_str()))
+  {
+    si->AddToStringList(section, Cheats::PATCH_ENABLE_CONFIG_KEY, m_code.name.c_str());
+    changed = true;
+  }
+
+  if (u32 value; si->FindUIntValue(section, old_name.c_str(), &value))
+  {
+    si->DeleteValue(section, old_name.c_str());
+    si->SetUIntValue(section, m_code.name.c_str(), value);
+    changed = true;
+  }
+
+  if (changed)
+    m_dialog->saveGameSettings();
+}
 
 void CheatCodeEditorDialog::onGroupSelectedIndexChanged(int index)
 {
@@ -900,7 +939,7 @@ void CheatCodeEditorDialog::saveClicked()
   }
 
   // if the name has changed, then we need to make sure it hasn't already been used
-  if (new_name != m_code.name && m_parent->hasCodeWithName(new_name))
+  if (new_name != m_code.name && Cheats::FindCodeInInfoList(m_existing_codes, new_name) != nullptr)
   {
     QtUtils::AsyncMessageBox(this, QMessageBox::Critical, tr("Error"),
                              tr("A code with the name '%1' already exists.").arg(QString::fromStdString(new_name)));
@@ -908,6 +947,7 @@ void CheatCodeEditorDialog::saveClicked()
   }
 
   std::string old_name = std::move(m_code.name);
+  const std::string original_name = old_name;
 
   // cheats coming from the database need to be copied into the user's file
   if (m_code.from_database)
@@ -940,13 +980,29 @@ void CheatCodeEditorDialog::saveClicked()
     m_code.option_range_end = static_cast<u16>(m_ui.rangeMax->value());
   }
 
-  std::string path = m_parent->getPathForSavingCheats();
-  if (!Cheats::UpdateCodeInFile(path.c_str(), old_name, &m_code, &error))
+  // setting overrides only apply to patches
+  if (!m_cheats)
+  {
+    const QVariant ar = m_ui.overrideAspectRatio->currentData();
+    m_code.override_aspect_ratio =
+      ar.isNull() ? std::nullopt : Settings::ParseDisplayAspectRatio(ar.toString().toStdString());
+    m_code.override_cpu_overclock = (m_ui.overrideCPUOverclock->value() != 0) ?
+                                      std::optional<u32>(static_cast<u32>(m_ui.overrideCPUOverclock->value())) :
+                                      std::nullopt;
+    m_code.disable_widescreen_rendering = m_ui.disableWidescreenRendering->isChecked();
+    m_code.enable_8mb_ram = m_ui.enable8MBRAM->isChecked();
+    m_code.disallow_for_achievements = m_ui.disallowForAchievements->isChecked();
+  }
+
+  if (!Cheats::UpdateCodeInFile(GameCheatSettingsWidget::getPathForSavingCodes(m_dialog, m_cheats, old_name).c_str(),
+                                old_name, &m_code, &error))
   {
     QtUtils::AsyncMessageBox(this, QMessageBox::Critical, tr("Error"),
-                             tr("Failed to save cheat code:\n%1").arg(QString::fromStdString(error.GetDescription())));
+                             tr("Failed to save code:\n%1").arg(QString::fromStdString(error.GetDescription())));
     return;
   }
+
+  renameCodeInSettings(original_name);
 
   accept();
 }
@@ -984,7 +1040,7 @@ void CheatCodeEditorDialog::onEditChoiceClicked()
   dlg->open();
 }
 
-void CheatCodeEditorDialog::setupAdditionalUi(const QStringList& group_names)
+void CheatCodeEditorDialog::setupAdditionalUi()
 {
   for (u32 i = 0; i < static_cast<u32>(Cheats::CodeType::Count); i++)
     m_ui.type->addItem(Cheats::GetTypeDisplayName(static_cast<Cheats::CodeType>(i)));
@@ -994,12 +1050,23 @@ void CheatCodeEditorDialog::setupAdditionalUi(const QStringList& group_names)
 
   m_ui.group->addItem(tr("Ungrouped"));
 
-  if (!group_names.isEmpty())
-    m_ui.group->addItems(group_names);
+  for (const std::string_view& prefix : Cheats::GetCodeListUniquePrefixes(m_existing_codes, false))
+    m_ui.group->addItem(QtUtils::StringViewToQString(prefix));
 
   m_ui.group->addItem(tr("New..."));
 
   m_ui.instructions->setFont(QtHost::GetFixedFont());
+
+  m_ui.overrideAspectRatio->addItem(tr("None"));
+  for (const DisplayAspectRatio& ar : Settings::GetPredefinedDisplayAspectRatios())
+  {
+    // auto would be a no-op
+    if (ar != DisplayAspectRatio::Auto())
+    {
+      m_ui.overrideAspectRatio->addItem(QtUtils::StringViewToQString(Settings::GetDisplayAspectRatioDisplayName(ar)),
+                                        QtUtils::StringViewToQString(Settings::GetDisplayAspectRatioName(ar)));
+    }
+  }
 }
 
 void CheatCodeEditorDialog::fillUi()
@@ -1037,6 +1104,24 @@ void CheatCodeEditorDialog::fillUi()
   m_new_options = m_code.options;
 
   m_ui.optionsType->setCurrentIndex(m_code.HasOptionRange() ? 2 : (m_code.HasOptionChoices() ? 1 : 0));
+
+  if (m_code.override_aspect_ratio.has_value())
+  {
+    const QString ar_name =
+      QtUtils::StringViewToQString(Settings::GetDisplayAspectRatioName(m_code.override_aspect_ratio.value()));
+    int index = m_ui.overrideAspectRatio->findData(ar_name);
+    if (index < 0)
+    {
+      // custom ratio not in the predefined list
+      m_ui.overrideAspectRatio->addItem(ar_name, ar_name);
+      index = m_ui.overrideAspectRatio->count() - 1;
+    }
+    m_ui.overrideAspectRatio->setCurrentIndex(index);
+  }
+  m_ui.overrideCPUOverclock->setValue(static_cast<int>(m_code.override_cpu_overclock.value_or(0)));
+  m_ui.disableWidescreenRendering->setChecked(m_code.disable_widescreen_rendering);
+  m_ui.enable8MBRAM->setChecked(m_code.enable_8mb_ram);
+  m_ui.disallowForAchievements->setChecked(m_code.disallow_for_achievements);
   onCodeTypeChanged(m_ui.type->currentIndex());
   onOptionTypeChanged(m_ui.optionsType->currentIndex());
 }

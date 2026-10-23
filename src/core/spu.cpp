@@ -258,23 +258,24 @@ enum class ADSRPhase : u8
 
 struct Voice
 {
-  u16 current_address;
+  ADSRPhase adsr_phase;
+  bool has_samples;
+  bool ignore_loop_address;
+  u8 key_on_delay;
+
   VoiceRegisters regs;
   VoiceCounter counter;
-  ADPCMFlags current_block_flags;
-  bool is_first_block;
-  std::array<s16, NUM_SAMPLES_FROM_LAST_ADPCM_BLOCK + NUM_SAMPLES_PER_ADPCM_BLOCK> current_block_samples;
-  std::array<s16, 2> adpcm_last_samples;
-  s32 last_volume;
 
   VolumeSweep left_volume;
   VolumeSweep right_volume;
 
   VolumeEnvelope adsr_envelope;
-  ADSRPhase adsr_phase;
   s16 adsr_target;
-  bool has_samples;
-  bool ignore_loop_address;
+  u16 current_address;
+  ADPCMFlags current_block_flags;
+
+  std::array<s16, NUM_SAMPLES_FROM_LAST_ADPCM_BLOCK + NUM_SAMPLES_PER_ADPCM_BLOCK> current_block_samples;
+  std::array<s16, 2> adpcm_last_samples;
 
   bool IsOn() const { return adsr_phase != ADSRPhase::Off; }
 
@@ -351,9 +352,9 @@ static void CheckForLateRAMIRQs();
 static void WriteToCaptureBuffers(s16 cd_left, s16 cd_right, s16 voice_1, s16 voice_3);
 
 static void ReadADPCMBlock(u16 address, ADPCMBlock* block);
-static std::tuple<s32, s32> SampleVoice(Voice& voice, u32 voice_index, bool noise_enabled,
-                                        bool pitch_modulation_enabled, bool irq9_enabled,
-                                        s32 previous_voice_last_volume);
+static std::tuple<s32, s32, s32> SampleVoice(Voice& voice, u32 voice_index, bool noise_enabled,
+                                             bool pitch_modulation_enabled, bool irq9_enabled,
+                                             s32 previous_voice_last_volume);
 
 static void UpdateNoise();
 
@@ -429,6 +430,10 @@ struct SPUState
   ALIGN_TO_CACHE_LINE std::array<Voice, NUM_VOICES> voices{};
 
   InlineFIFOQueue<u16, FIFO_SIZE_IN_HALFWORDS> transfer_fifo;
+
+  // Unused registers at 1F801DBCh and 1F801E60h, these read back what was written.
+  std::array<u16, 2> unused_registers_dbc = {};
+  std::array<u16, 16> unused_registers_e60 = {};
 
   CoreAudioStream audio_stream;
 
@@ -574,6 +579,8 @@ void SPU::Reset()
   s_state.cd_audio_volume_right = 0;
   s_state.external_volume_left = 0;
   s_state.external_volume_right = 0;
+  s_state.unused_registers_dbc = {};
+  s_state.unused_registers_e60 = {};
   s_state.key_on_register = 0;
   s_state.key_off_register = 0;
   s_state.endx_register = 0;
@@ -598,7 +605,6 @@ void SPU::Reset()
     std::fill_n(v.regs.index, NUM_VOICE_REGISTERS, u16(0));
     v.counter.bits = 0;
     v.current_block_flags.bits = 0;
-    v.is_first_block = 0;
     v.current_block_samples.fill(s16(0));
     v.adpcm_last_samples.fill(s32(0));
     v.adsr_envelope.Reset(0, 0, false, false, false);
@@ -606,6 +612,7 @@ void SPU::Reset()
     v.adsr_target = 0;
     v.has_samples = false;
     v.ignore_loop_address = false;
+    v.key_on_delay = 0;
   }
 
   s_state.tick_event.Deactivate();
@@ -710,13 +717,18 @@ bool SPU::DoCompatibleState(StateWrapper& sw)
     sw.Do(&v.counter.bits);
     sw.Do(&v.current_block_flags.bits);
     if constexpr (COMPATIBILITY)
-      sw.DoEx(&v.is_first_block, 47, false);
-    else
-      sw.Do(&v.is_first_block);
+    {
+      if (sw.GetVersion() >= 47 && sw.GetVersion() < 90)
+        sw.SkipBytes(sizeof(bool)); // is_first_block, removed in version 90
+    }
     sw.DoArray(&v.current_block_samples[NUM_SAMPLES_FROM_LAST_ADPCM_BLOCK], NUM_SAMPLES_PER_ADPCM_BLOCK);
     sw.DoArray(&v.current_block_samples[0], NUM_SAMPLES_FROM_LAST_ADPCM_BLOCK);
     sw.Do(&v.adpcm_last_samples);
-    sw.Do(&v.last_volume);
+    if constexpr (COMPATIBILITY)
+    {
+      if (sw.GetVersion() < 91)
+        sw.SkipBytes(sizeof(s32)); // last_volume, removed in version 91
+    }
     do_compatible_volume_sweep(sw, &v.left_volume);
     do_compatible_volume_sweep(sw, &v.right_volume);
     do_compatible_volume_envelope(sw, &v.adsr_envelope);
@@ -724,9 +736,25 @@ bool SPU::DoCompatibleState(StateWrapper& sw)
     sw.Do(&v.adsr_target);
     sw.Do(&v.has_samples);
     sw.Do(&v.ignore_loop_address);
+    if constexpr (COMPATIBILITY)
+      sw.DoEx(&v.key_on_delay, 89, static_cast<u8>(0));
+    else
+      sw.Do(&v.key_on_delay);
   }
 
   sw.Do(&s_state.transfer_fifo);
+
+  if (!COMPATIBILITY || sw.GetVersion() >= 92)
+  {
+    sw.Do(&s_state.unused_registers_dbc);
+    sw.Do(&s_state.unused_registers_e60);
+  }
+  else
+  {
+    s_state.unused_registers_dbc = {};
+    s_state.unused_registers_e60 = {};
+  }
+
   sw.DoBytes(s_ram.data(), RAM_SIZE);
 
   if (sw.IsReading())
@@ -740,7 +768,7 @@ bool SPU::DoCompatibleState(StateWrapper& sw)
 
 bool SPU::DoState(StateWrapper& sw)
 {
-  if (sw.GetVersion() < 70) [[unlikely]]
+  if (sw.GetVersion() < 92) [[unlikely]]
     return DoCompatibleState<true>(sw);
   else
     return DoCompatibleState<false>(sw);
@@ -848,6 +876,10 @@ u16 SPU::ReadRegister(u32 offset)
       GeneratePendingSamples();
       return s_state.main_volume_right.current_level;
 
+    case 0x1F801DBC - SPU_BASE:
+    case 0x1F801DBE - SPU_BASE:
+      return s_state.unused_registers_dbc[(offset - (0x1F801DBC - SPU_BASE)) / 2];
+
     default:
     {
       if (offset < (0x1F801D80 - SPU_BASE))
@@ -865,6 +897,9 @@ u16 SPU::ReadRegister(u32 offset)
         else
           return s_state.voices[voice_index].left_volume.current_level;
       }
+
+      if (offset >= (0x1F801E60 - SPU_BASE) && offset < (0x1F801E80 - SPU_BASE))
+        return s_state.unused_registers_e60[(offset - (0x1F801E60 - SPU_BASE)) / 2];
 
       DEV_LOG("Unknown SPU register read: offset 0x{:X} (address 0x{:08X})", offset, offset | SPU_BASE);
       return UINT16_C(0xFFFF);
@@ -1154,6 +1189,13 @@ void SPU::WriteRegister(u32 offset, u16 value)
     }
     break;
 
+    case 0x1F801DBC - SPU_BASE:
+    case 0x1F801DBE - SPU_BASE:
+    {
+      s_state.unused_registers_dbc[(offset - (0x1F801DBC - SPU_BASE)) / 2] = value;
+      return;
+    }
+
       // read-only registers
     case 0x1F801DAE - SPU_BASE:
     {
@@ -1174,6 +1216,12 @@ void SPU::WriteRegister(u32 offset, u16 value)
         DEBUG_LOG("SPU reverb register {} <- 0x{:04X}", reg, value);
         GeneratePendingSamples();
         s_state.reverb_registers.rev[reg] = value;
+        return;
+      }
+
+      if (offset >= (0x1F801E60 - SPU_BASE) && offset < (0x1F801E80 - SPU_BASE))
+      {
+        s_state.unused_registers_e60[(offset - (0x1F801E60 - SPU_BASE)) / 2] = value;
         return;
       }
 
@@ -1271,18 +1319,17 @@ void SPU::WriteVoiceRegister(u32 offset, u16 value)
 
     case 0x0E: // repeat address
     {
-      // There is a short window of time here between the voice being keyed on and the first block finishing decoding
-      // where setting the repeat address will *NOT* ignore the block/loop start flag.
-      //
-      // We always set this flag if the voice is off, because IRQs will keep the voice reading regardless, and we don't
-      // want the address that we just set to get wiped out by the IRQ looping.
+      // Writing the repeat address stops loop start flags from overwriting it until the next key on. The exception is
+      // the start of the key on delay, where the voice fetches the first block's header on each of three samples to
+      // prime interpolation. A write before the last fetch is overwritten by its loop start flag and does not latch.
+      // Voices that are off have no delay, so writes to them always latch.
       //
       // Games sensitive to this are:
       //  - The Misadventures of Tron Bonne
       //  - Re-Loaded - The Hardcore Sequel (repeated sound effects)
       //  - Valkyrie Profile
 
-      const bool ignore_loop_address = !voice.IsOn() || !voice.is_first_block;
+      const bool ignore_loop_address = (voice.key_on_delay <= 1);
       DEBUG_LOG("SPU voice {} ADPCM repeat address <- 0x{:04X}", voice_index, value);
       voice.regs.adpcm_repeat_address = value;
       voice.ignore_loop_address |= ignore_loop_address;
@@ -1706,7 +1753,8 @@ CoreAudioStream& SPU::GetOutputStream()
 void SPU::Voice::KeyOn()
 {
   current_address = regs.adpcm_start_address & ~u16(1);
-  counter.bits = 0;
+  // The decoder primes the four-sample interpolation window before output begins.
+  counter.bits = 3u << 12; // interpolation_index = 0, sample_index = 3
   regs.adsr_volume = 0;
   adpcm_last_samples.fill(0);
 
@@ -1715,8 +1763,9 @@ void SPU::Voice::KeyOn()
               static_cast<s16>(0));
 
   has_samples = false;
-  is_first_block = true;
   ignore_loop_address = false;
+  // The voice is silent for four samples before the first attack tick.
+  key_on_delay = 4;
   adsr_phase = ADSRPhase::Attack;
   UpdateADSREnvelope();
 }
@@ -1732,6 +1781,7 @@ void SPU::Voice::KeyOff()
 
 void SPU::Voice::ForceOff()
 {
+  key_on_delay = 0;
   if (adsr_phase == ADSRPhase::Off)
     return;
 
@@ -1924,8 +1974,11 @@ void SPU::Voice::TickADSR()
 
   if (adsr_phase != ADSRPhase::Sustain)
   {
-    const bool reached_target =
-      adsr_envelope.decreasing ? (regs.adsr_volume <= adsr_target) : (regs.adsr_volume >= adsr_target);
+    // Decay continues through the sustain threshold, including at the maximum
+    // sustain level. Release still ends as soon as the envelope reaches zero.
+    const bool reached_target = (adsr_phase == ADSRPhase::Decay) ? (regs.adsr_volume < adsr_target) :
+                                adsr_envelope.decreasing         ? (regs.adsr_volume <= adsr_target) :
+                                                                   (regs.adsr_volume >= adsr_target);
     if (reached_target)
     {
       adsr_phase = GetNextADSRPhase(adsr_phase);
@@ -1996,7 +2049,9 @@ void SPU::Voice::DecodeBlock(const ADPCMBlock& block)
   current_block_flags.bits = block.flags.bits;
 }
 
-static constexpr std::array<std::array<s16, 4>, 0x100> GenerateInterpolationCoefficients()
+// Coefficients are stored zero-extended to 32 bits, so a single 16-bit multiply-add produces each product
+// without summing adjacent pairs.
+static constexpr std::array<std::array<u32, 4>, 0x100> GenerateInterpolationCoefficients()
 {
   static constexpr std::array<s16, 0x200> gauss = {{
     -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, //
@@ -2065,23 +2120,28 @@ static constexpr std::array<std::array<s16, 4>, 0x100> GenerateInterpolationCoef
     0x5997, 0x599E, 0x59A4, 0x59A9, 0x59AD, 0x59B0, 0x59B2, 0x59B3  //
   }};
 
-  std::array<std::array<s16, 4>, 0x100> ret = {};
+  std::array<std::array<u32, 4>, 0x100> ret = {};
   for (u32 phase = 0; phase < ret.size(); phase++)
-    ret[phase] = {gauss[0x0FF - phase], gauss[0x1FF - phase], gauss[0x100 + phase], gauss[phase]};
+  {
+    ret[phase] = {static_cast<u16>(gauss[0x0FF - phase]), static_cast<u16>(gauss[0x1FF - phase]),
+                  static_cast<u16>(gauss[0x100 + phase]), static_cast<u16>(gauss[phase])};
+  }
   return ret;
 }
 
 s32 SPU::Voice::Interpolate() const
 {
-  static constexpr std::array<std::array<s16, 4>, 0x100> coefficients = GenerateInterpolationCoefficients();
+  alignas(VECTOR_ALIGNMENT) static constexpr std::array<std::array<u32, 4>, 0x100> coefficients =
+    GenerateInterpolationCoefficients();
 
   const u8 i = counter.interpolation_index;
   const u32 s = NUM_SAMPLES_FROM_LAST_ADPCM_BLOCK + ZeroExtend32(counter.sample_index.GetValue());
   const GSVector4i samples = GSVector4i::loadl<false>(&current_block_samples[s - 3]);
-  const GSVector4i weights = GSVector4i::loadl<false>(coefficients[i].data());
+  const GSVector4i weights = GSVector4i::load<true>(coefficients[i].data());
 
-  // Only the lower half is used, so we can do a 64-bit reduction instead of 128-bit.
-  return (samples.madd_s16(weights).xy().addv_s32() >> 15);
+  // Products retain one fractional bit before accumulation. Rounding only the
+  // final sum (or each product to 16 bits) differs from hardware captures.
+  return (samples.upl16().madd_s16(weights).sra32<14>().addv_s32() >> 1);
 }
 
 void SPU::ReadADPCMBlock(u16 address, ADPCMBlock* block)
@@ -2111,27 +2171,27 @@ void SPU::ReadADPCMBlock(u16 address, ADPCMBlock* block)
   }
 }
 
-ALWAYS_INLINE_RELEASE std::tuple<s32, s32> SPU::SampleVoice(Voice& voice, u32 voice_index, bool noise_enabled,
-                                                            bool pitch_modulation_enabled, bool irq9_enabled,
-                                                            s32 previous_voice_last_volume)
+ALWAYS_INLINE_RELEASE std::tuple<s32, s32, s32> SPU::SampleVoice(Voice& voice, u32 voice_index, bool noise_enabled,
+                                                                 bool pitch_modulation_enabled, bool irq9_enabled,
+                                                                 s32 previous_voice_last_volume)
 {
   if (!voice.IsOn() && !irq9_enabled)
-  {
-    voice.last_volume = 0;
-
-#ifdef SPU_DUMP_ALL_VOICES
-    if (s_state.s_voice_dump_writers[voice_index])
-    {
-      const s16 dump_samples[2] = {0, 0};
-      s_state.s_voice_dump_writers[voice_index]->WriteFrames(dump_samples, 1);
-    }
-#endif
-
     return {};
-  }
 
   if (!voice.has_samples)
   {
+    // Key on clears has_samples, and the first block isn't read until the delay elapses, so the delay only needs to
+    // be checked here.
+    if (voice.key_on_delay > 0)
+    {
+      // ENDX clears on the first sample of the delay, along with the first header fetch.
+      if (voice.key_on_delay == 4)
+        s_state.endx_register &= ~(u32(1) << voice_index);
+
+      voice.key_on_delay--;
+      return {};
+    }
+
     ADPCMBlock block;
     ReadADPCMBlock(voice.current_address, &block);
     voice.DecodeBlock(block);
@@ -2162,8 +2222,6 @@ ALWAYS_INLINE_RELEASE std::tuple<s32, s32> SPU::SampleVoice(Voice& voice, u32 vo
     volume = 0;
   }
 
-  voice.last_volume = volume;
-
   if (voice.adsr_phase != ADSRPhase::Off)
     voice.TickADSR();
 
@@ -2187,7 +2245,6 @@ ALWAYS_INLINE_RELEASE std::tuple<s32, s32> SPU::SampleVoice(Voice& voice, u32 vo
     // next block
     voice.counter.sample_index -= NUM_SAMPLES_PER_ADPCM_BLOCK;
     voice.has_samples = false;
-    voice.is_first_block = false;
     voice.current_address += 2;
 
     // handle flags
@@ -2227,15 +2284,7 @@ ALWAYS_INLINE_RELEASE std::tuple<s32, s32> SPU::SampleVoice(Voice& voice, u32 vo
     UpdateDebugPeaks(s_state.voice_peaks[voice_index], left, right);
 #endif
 
-#ifdef SPU_DUMP_ALL_VOICES
-  if (s_state.s_voice_dump_writers[voice_index])
-  {
-    const s16 dump_samples[2] = {static_cast<s16>(Clamp16(left)), static_cast<s16>(Clamp16(right))};
-    s_state.s_voice_dump_writers[voice_index]->WriteFrames(dump_samples, 1);
-  }
-#endif
-
-  return std::make_tuple(left, right);
+  return std::make_tuple(left, right, volume);
 }
 
 void SPU::UpdateNoise()
@@ -2549,23 +2598,35 @@ void SPU::Execute(void* param, TickCount ticks)
       u32 pitch_modulation_enable = s_state.pitch_modulation_enable_register & ~1u;
       u32 reverb_on_register = s_state.reverb_on_register;
       s32 previous_voice_last_volume = 0;
+      s32 capture_voice1_volume = 0;
+      s32 capture_voice3_volume = 0;
       const bool irq9_enabled = s_state.SPUCNT.irq9_enable;
 
       u32 voice_index = 0;
       for (Voice& voice : s_state.voices)
       {
-        const auto [left, right] =
+        const auto [left, right, volume] =
           SampleVoice(voice, voice_index, ConvertToBoolUnchecked(noise_mode & 1u),
                       ConvertToBoolUnchecked(pitch_modulation_enable & 1u), irq9_enabled, previous_voice_last_volume);
         left_sum += left;
         right_sum += right;
+
+#ifdef SPU_DUMP_ALL_VOICES
+        if (s_state.s_voice_dump_writers[voice_index])
+        {
+          const s16 dump_samples[2] = {static_cast<s16>(Clamp16(left)), static_cast<s16>(Clamp16(right))};
+          s_state.s_voice_dump_writers[voice_index]->WriteFrames(dump_samples, 1);
+        }
+#endif
 
         if (reverb_on_register & 1u)
         {
           reverb_in_left += left;
           reverb_in_right += right;
         }
-        previous_voice_last_volume = voice.last_volume;
+        capture_voice1_volume = (voice_index == 1) ? volume : capture_voice1_volume;
+        capture_voice3_volume = (voice_index == 3) ? volume : capture_voice3_volume;
+        previous_voice_last_volume = volume;
         noise_mode >>= 1;
         pitch_modulation_enable >>= 1;
         reverb_on_register >>= 1;
@@ -2632,8 +2693,8 @@ void SPU::Execute(void* param, TickCount ticks)
       s_state.main_volume_right.Tick();
 
       // Write to capture buffers.
-      WriteToCaptureBuffers(cd_audio_left, cd_audio_right, static_cast<s16>(Clamp16(s_state.voices[1].last_volume)),
-                            static_cast<s16>(Clamp16(s_state.voices[3].last_volume)));
+      WriteToCaptureBuffers(cd_audio_left, cd_audio_right, static_cast<s16>(Clamp16(capture_voice1_volume)),
+                            static_cast<s16>(Clamp16(capture_voice3_volume)));
 
 #ifdef SPU_VERIFY_IRQ_PREDICTION
       if (verify_irq && !IsRAMIRQTriggerable() && s_state.verify_executed_frames < s_state.verify_predicted_frames)
@@ -2643,8 +2704,9 @@ void SPU::Execute(void* param, TickCount ticks)
       }
 #endif
 
-      // Key off/on voices after the first frame.
-      if (i == 0 && (s_state.key_off_register != 0 || s_state.key_on_register != 0))
+      // Key off/on is only processed on every second sample.
+      if ((s_state.capture_buffer_position & 2u) == 0 &&
+          (s_state.key_off_register != 0 || s_state.key_on_register != 0))
       {
         u32 key_off_register = s_state.key_off_register;
         s_state.key_off_register = 0;
@@ -2659,10 +2721,7 @@ void SPU::Execute(void* param, TickCount ticks)
           key_off_register >>= 1;
 
           if (key_on_register & 1u)
-          {
-            s_state.endx_register &= ~(1u << voice);
             s_state.voices[voice].KeyOn();
-          }
           key_on_register >>= 1;
         }
       }
@@ -2703,7 +2762,7 @@ void SPU::UpdateEventInterval()
         interval, (((irq_address - s_state.capture_buffer_position) & (CAPTURE_BUFFER_SIZE_PER_CHANNEL - 1)) / 2) + 1);
     }
 
-    // Key on is applied after the first frame, and the voice reads its first block in the second.
+    // A pending key on can replace a voice's current address within two frames.
     if (s_state.key_on_register != 0)
       interval = std::min(interval, 2u);
 
@@ -2722,7 +2781,8 @@ void SPU::UpdateEventInterval()
       u16 address;
       if (!voice.has_samples)
       {
-        frames = 1;
+        // Voices don't read their first block until the key on delay has elapsed.
+        frames = static_cast<u32>(voice.key_on_delay) + 1;
         counter = voice.counter.bits;
         address = voice.current_address;
       }

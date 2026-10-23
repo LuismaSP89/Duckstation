@@ -116,7 +116,7 @@ Do you want to enable tracking now?</source>
 However, hardcore mode also prevents the usage of save states, cheats and slowdown functionality.
 
 Do you want to enable hardcore mode?</source>
-        <translation>ハードコアモードは現在有効になっていません。ハードコアモードを有効にすると、タイムやスコアを設定したり、ゲーム固有のリーダーボードに参加したりできるようになります。
+        <translation>ハードコアモードは現在有効になっていません。ハードコアモードを有効にすると、タイムやスコアを記録したり、ゲーム固有のリーダーボードに参加したりできるようになります。
 
 ただし、ハードコアモードでは、セーブステート、チート、スローダウン機能が使用できなくなります。
 
@@ -734,7 +734,7 @@ Error: {}</source>
     </message>
     <message>
         <source>Unlocked {}</source>
-        <translation>{} を解除</translation>
+        <translation>{} に解除</translation>
     </message>
     <message>
         <source>Loading...</source>
@@ -886,7 +886,6 @@ Unread messages: {}</source>
     </message>
     <message>
         <source>Score: {} ({} casual)</source>
-        <extracomment>Score summary, shown in Big Picture mode.</extracomment>
         <translation>スコア: {}（{} カジュアル）</translation>
     </message>
     <message>
@@ -1041,6 +1040,10 @@ This session will start in offline mode.</source>
         <translation>インターフェース設定</translation>
     </message>
     <message>
+        <source>Show Frame Number</source>
+        <translation>フレーム番号を表示</translation>
+    </message>
+    <message>
         <source>Rich Presence Monitor</source>
         <translation>リッチプレゼンスモニター</translation>
     </message>
@@ -1147,6 +1150,10 @@ This session will start in offline mode.</source>
     <message>
         <source>Always displays the current RetroAchievements rich presence string in the indicator area.</source>
         <translation>現在のRetroAchievementsリッチプレゼンス文字列を常にインジケーター領域に表示します。</translation>
+    </message>
+    <message>
+        <source>Shows the number of the current frame in the top-right corner of the display.</source>
+        <translation>現在のフレーム番号を画面右上に表示します。</translation>
     </message>
     <message>
         <source>Default</source>
@@ -1790,6 +1797,16 @@ This session will start in offline mode.</source>
         <translation>終了時にステートを保存</translation>
     </message>
     <message>
+        <source>Confirm Close Game</source>
+        <comment>settings_confirm_power_off</comment>
+        <translation>ゲーム終了時に確認</translation>
+    </message>
+    <message>
+        <source>Asks for confirmation before closing a game from the pause menu.</source>
+        <comment>settings_summary_confirm_power_off</comment>
+        <translation>一時停止メニューからゲームを終了する前に確認を求めます。</translation>
+    </message>
+    <message>
         <source>Pause On Controller Disconnection</source>
         <comment>settings_pause_on_controller_disconnection</comment>
         <translation>コントローラ切断時に一時停止する</translation>
@@ -1940,6 +1957,16 @@ This session will start in offline mode.</source>
         <source>Shutting Down…</source>
         <comment>emulation_activity_shutting_down</comment>
         <translation>終了しています…</translation>
+    </message>
+    <message>
+        <source>Mid-Frame Scanout</source>
+        <comment>settings_mid_frame_scanout</comment>
+        <translation>フレーム途中のスキャンアウト</translation>
+    </message>
+    <message>
+        <source>Applies changes to the displayed framebuffer partway through a frame. Needed for split-screen effects in some games, but causes tearing in others.</source>
+        <comment>settings_summary_mid_frame_scanout</comment>
+        <translation>フレームの途中で、表示中のフレームバッファへの変更を反映します。一部のゲームの画面分割効果に必要ですが、別のゲームではティアリングが発生します。</translation>
     </message>
     <message>
         <source>Maximum Queued Frames</source>
@@ -2096,6 +2123,16 @@ Current Binding: %s</source>
         <translation>動作</translation>
     </message>
     <message>
+        <source>List Icons</source>
+        <comment>settings_content_list_icons</comment>
+        <translation>リストのアイコン</translation>
+    </message>
+    <message>
+        <source>Selects the image shown next to each game in the game list.</source>
+        <comment>settings_summary_content_list_icons</comment>
+        <translation>ゲームリストの各ゲームの横に表示する画像を選択します。</translation>
+    </message>
+    <message>
         <source>Video Settings</source>
         <comment>settings_category_video_settings</comment>
         <translation>映像設定</translation>
@@ -2139,6 +2176,21 @@ Current Binding: %s</source>
         <source>Selected file could not be opened.</source>
         <comment>emulation_menu_change_media_invalid_file</comment>
         <translation>選択されたファイルを開けませんでした。</translation>
+    </message>
+    <message>
+        <source>Confirm Close</source>
+        <comment>emulation_menu_confirm_close_title</comment>
+        <translation>ゲーム終了の確認</translation>
+    </message>
+    <message>
+        <source>Are you sure you want to close the current game?</source>
+        <comment>emulation_menu_confirm_close_message</comment>
+        <translation>現在のゲームを終了してもよろしいですか？</translation>
+    </message>
+    <message>
+        <source>Resume from here next time</source>
+        <comment>emulation_menu_confirm_close_save_state</comment>
+        <translation>次回はここから再開する</translation>
     </message>
     <message>
         <source>Safety Check Failed</source>
@@ -2477,6 +2529,11 @@ Do you want to %1$s anyway?</source>
         <source>Touchscreen</source>
         <comment>controller_settings_tab_touchscreen</comment>
         <translation>タッチスクリーン</translation>
+    </message>
+    <message>
+        <source>Port %1$s</source>
+        <comment>controller_port_format</comment>
+        <translation>ポート %1$s</translation>
     </message>
     <message>
         <source>Bindings</source>
@@ -2940,6 +2997,84 @@ Do you want to %1$s anyway?</source>
         <translation>ステートセーブの管理</translation>
     </message>
     <message>
+        <source>Memory Cards</source>
+        <comment>settings_tab_memory_cards</comment>
+        <translation>メモリーカード</translation>
+    </message>
+    <message>
+        <source>Create New Card</source>
+        <comment>memory_card_create_new_card</comment>
+        <translation>新しいカードを作成</translation>
+    </message>
+    <message>
+        <source>Creates a new, formatted memory card.</source>
+        <comment>memory_card_summary_create_new_card</comment>
+        <translation>フォーマット済みの新しいメモリーカードを作成します。</translation>
+    </message>
+    <message>
+        <source>Import Memory Card</source>
+        <comment>memory_card_import</comment>
+        <translation>メモリーカードをインポート</translation>
+    </message>
+    <message>
+        <source>Imports a memory card from storage, converting it if necessary.</source>
+        <comment>memory_card_summary_import</comment>
+        <translation>ストレージからメモリーカードをインポートし、必要に応じて変換します。</translation>
+    </message>
+    <message>
+        <source>Memory card &apos;%s&apos; imported.</source>
+        <comment>memory_card_imported</comment>
+        <translation>メモリーカード &apos;%s&apos; をインポートしました。</translation>
+    </message>
+    <message>
+        <source>A memory card named &apos;%s&apos; already exists. Do you want to overwrite it? Any existing data will be lost.</source>
+        <comment>memory_card_import_already_exists</comment>
+        <translation>&apos;%s&apos; という名前のメモリーカードは既に存在します。上書きしますか？既存のデータはすべて失われます。</translation>
+    </message>
+    <message>
+        <source>Use Single Card For Multi-Disc Games</source>
+        <comment>settings_memory_card_use_playlist_title</comment>
+        <translation>マルチディスクゲームに対して一つのカードを使用する</translation>
+    </message>
+    <message>
+        <source>When playing a multi-disc game with per-game (title) memory cards, uses a single card for all discs. If disabled, each disc uses a separate card.</source>
+        <comment>settings_summary_memory_card_use_playlist_title</comment>
+        <translation>ゲームごと (タイトル別) のメモリーカードでマルチディスクゲームをプレイする場合、すべてのディスクで一つのカードを使用します。無効にすると、ディスクごとに別のカードを使用します。</translation>
+    </message>
+    <message>
+        <source>The number of memory cards that can be used depends on multitap and game support.</source>
+        <comment>settings_memory_card_multitap_message</comment>
+        <translation>使用できるメモリーカードの数は、マルチタップとゲームの対応状況によって異なります。</translation>
+    </message>
+    <message numerus="yes">
+        <source>Current Multitap Mode: %1$s (%2$d Cards)</source>
+        <comment>settings_memory_card_multitap_mode</comment>
+        <extracomment>Android plural quantities: one=&quot;Current Multitap Mode: %1$s (%2$d Card)&quot;; other=&quot;Current Multitap Mode: %1$s (%2$d Cards)&quot;</extracomment>
+        <translation>
+            <numerusform>現在のマルチタップモード: %1$s (カード %2$d 枚)</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Memory Card Type</source>
+        <comment>settings_memory_card_type</comment>
+        <translation>メモリーカードの種類</translation>
+    </message>
+    <message>
+        <source>Selects which memory card image is inserted in this slot.</source>
+        <comment>settings_summary_memory_card_type</comment>
+        <translation>このスロットに挿入するメモリーカードイメージを選択します。</translation>
+    </message>
+    <message>
+        <source>Shared Card Name</source>
+        <comment>settings_memory_card_name</comment>
+        <translation>共有カード名</translation>
+    </message>
+    <message>
+        <source>Selects the card used when the type is shared between all games.</source>
+        <comment>settings_summary_memory_card_name</comment>
+        <translation>種類が「全ゲームで共有」の場合に使用するカードを選択します。</translation>
+    </message>
+    <message>
         <source>Confirm Deletion</source>
         <comment>confirm_deletion</comment>
         <translation>削除の確認</translation>
@@ -3114,11 +3249,6 @@ Do you want to %1$s anyway?</source>
         <translation>テーマと言語を選択し、「次へ」をタップして開始してください。</translation>
     </message>
     <message>
-        <source>Content Folders</source>
-        <comment>setup_wizard_content_folders_title</comment>
-        <translation>コンテンツフォルダ</translation>
-    </message>
-    <message>
         <source>Connect a controller and use automatic mapping for either player. Detailed bindings can be changed later in Input Settings.</source>
         <comment>setup_wizard_input_setup_message</comment>
         <translation>コントローラを接続し、いずれかのプレイヤーに自動割り当てを行ってください。詳細な割り当ては後で入力設定から変更できます。</translation>
@@ -3245,6 +3375,76 @@ Do you want to %1$s anyway?</source>
         <source>Remove All</source>
         <comment>cheat_codes_remove_all</comment>
         <translation>すべて削除</translation>
+    </message>
+    <message>
+        <source>Rewind</source>
+        <comment>touchscreen_controller_rewind</comment>
+        <translation>巻き戻し</translation>
+    </message>
+    <message>
+        <source>Left Button</source>
+        <comment>touchscreen_controller_mouse_left</comment>
+        <translation>左ボタン</translation>
+    </message>
+    <message>
+        <source>Right Button</source>
+        <comment>touchscreen_controller_mouse_right</comment>
+        <translation>右ボタン</translation>
+    </message>
+    <message>
+        <source>Scaling</source>
+        <comment>content_background_mode</comment>
+        <translation>スケーリング</translation>
+    </message>
+    <message>
+        <source>Fit</source>
+        <comment>content_background_mode_fit</comment>
+        <translation>全体を表示</translation>
+    </message>
+    <message>
+        <source>Fill</source>
+        <comment>content_background_mode_fill</comment>
+        <translation>画面を埋める</translation>
+    </message>
+    <message>
+        <source>Stretch</source>
+        <comment>content_background_mode_stretch</comment>
+        <translation>引き伸ばす</translation>
+    </message>
+    <message>
+        <source>Mouse</source>
+        <comment>touchscreen_layout_mouse</comment>
+        <translation>マウス</translation>
+    </message>
+    <message>
+        <source>Reset to Default</source>
+        <comment>preference_reset_to_default</comment>
+        <translation>デフォルトに戻す</translation>
+    </message>
+    <message>
+        <source>Current Value</source>
+        <comment>preference_reset_current_value</comment>
+        <translation>現在の値</translation>
+    </message>
+    <message>
+        <source>Default Value</source>
+        <comment>preference_reset_default_value</comment>
+        <translation>デフォルト値</translation>
+    </message>
+    <message>
+        <source>Global Setting</source>
+        <comment>preference_reset_global_value</comment>
+        <translation>グローバル設定</translation>
+    </message>
+    <message>
+        <source>Uses PGXP for all instructions, not just memory operations. Automatic uses the game database setting.</source>
+        <comment>settings_summary_pgxp_cpu</comment>
+        <translation>メモリ操作だけでなく、すべての命令で PGXP を使用します。「自動」ではゲームデータベースの設定を使用します。</translation>
+    </message>
+    <message>
+        <source>Uses screen positions to resolve PGXP data. May improve visuals in some games. Automatic uses the game database setting.</source>
+        <comment>settings_summary_pgxp_vertex_cache</comment>
+        <translation>画面上の座標を使用して PGXP データを特定します。一部のゲームで映像が改善される場合があります。「自動」ではゲームデータベースの設定を使用します。</translation>
     </message>
     <message>
         <source>Auto (Game Native)</source>
@@ -3425,6 +3625,21 @@ Do you want to %1$s anyway?</source>
         <source>Start BIOS</source>
         <comment>content_list_start_bios</comment>
         <translation>BIOSを起動</translation>
+    </message>
+    <message>
+        <source>Start Big Picture Mode</source>
+        <comment>content_list_start_fullscreen_ui</comment>
+        <translation>ビッグピクチャーモードを開始</translation>
+    </message>
+    <message>
+        <source>Start in Big Picture Mode</source>
+        <comment>settings_start_fullscreen_ui</comment>
+        <translation>ビッグピクチャーモードで起動</translation>
+    </message>
+    <message>
+        <source>Opens the controller-friendly fullscreen interface when the app starts.</source>
+        <comment>settings_summary_start_fullscreen_ui</comment>
+        <translation>アプリの起動時に、コントローラーで操作しやすい全画面インターフェースを開きます。</translation>
     </message>
     <message>
         <source>DuckStation</source>
@@ -3767,6 +3982,16 @@ Do you want to %1$s anyway?</source>
         <translation>ディスプレイの左上にフレーム時間の履歴を視覚的に表示します。</translation>
     </message>
     <message>
+        <source>Show Frame Number</source>
+        <comment>settings_show_frame_number</comment>
+        <translation>フレーム番号を表示</translation>
+    </message>
+    <message>
+        <source>Shows the number of the current frame in the top-right corner of the display.</source>
+        <comment>settings_summary_show_frame_number</comment>
+        <translation>現在のフレーム番号を画面右上に表示します。</translation>
+    </message>
+    <message>
         <source>Threaded Rendering</source>
         <comment>settings_use_thread</comment>
         <translation>スレッド化レンダリング</translation>
@@ -3845,6 +4070,36 @@ Do you want to %1$s anyway?</source>
         <source>Game Display</source>
         <comment>settings_category_game_display</comment>
         <translation>ゲーム表示</translation>
+    </message>
+    <message>
+        <source>Appearance</source>
+        <comment>settings_category_appearance</comment>
+        <translation>外観</translation>
+    </message>
+    <message>
+        <source>Game List</source>
+        <comment>settings_category_content_list</comment>
+        <translation>ゲームリスト</translation>
+    </message>
+    <message>
+        <source>Show Grid Captions</source>
+        <comment>settings_show_grid_captions</comment>
+        <translation>グリッドのキャプションを表示</translation>
+    </message>
+    <message>
+        <source>Shows the title of each game below its cover in the grid view.</source>
+        <comment>settings_summary_show_grid_captions</comment>
+        <translation>グリッド表示で各ゲームのカバーの下にタイトルを表示します。</translation>
+    </message>
+    <message>
+        <source>Show Localized Titles</source>
+        <comment>settings_show_localized_titles</comment>
+        <translation>ローカライズされたタイトルを表示</translation>
+    </message>
+    <message>
+        <source>Uses localized game titles from the database instead of the English titles, when available.</source>
+        <comment>settings_summary_show_localized_titles</comment>
+        <translation>データベースにローカライズされたゲームタイトルがある場合、英語のタイトルの代わりに使用します。</translation>
     </message>
     <message>
         <source>Basic Rendering</source>
@@ -4100,11 +4355,6 @@ Do you want to %1$s anyway?</source>
         <translation>DuckStation は実績データベースと進捗の追跡に RetroAchievements (retroachievements.org) を使用します。DuckStation の利用に RetroAchievements アカウントは必要ありません。</translation>
     </message>
     <message>
-        <source>Port %1$d</source>
-        <comment>controller_port_format</comment>
-        <translation>ポート %1$d</translation>
-    </message>
-    <message>
         <source>Controller Type</source>
         <comment>controller_type</comment>
         <translation>コントローラータイプ</translation>
@@ -4243,6 +4493,26 @@ Do you want to %1$s anyway?</source>
         <source>Forwards vibration from the game to your device&apos;s vibration motor, if present.</source>
         <comment>settings_summary_touchscreen_enable_vibration</comment>
         <translation>端末に振動モーターがある場合、ゲームの振動をそのモーターに伝えます。</translation>
+    </message>
+    <message>
+        <source>Button Style</source>
+        <comment>settings_touchscreen_controller_theme</comment>
+        <translation>ボタンのスタイル</translation>
+    </message>
+    <message>
+        <source>Selects whether the touchscreen controller buttons are drawn as outlines or filled.</source>
+        <comment>settings_summary_touchscreen_controller_theme</comment>
+        <translation>タッチスクリーンコントローラーのボタンを輪郭のみで描画するか、塗りつぶして描画するかを選択します。</translation>
+    </message>
+    <message>
+        <source>Outline</source>
+        <comment>touchscreen_controller_theme_outline</comment>
+        <translation>輪郭のみ</translation>
+    </message>
+    <message>
+        <source>Filled</source>
+        <comment>touchscreen_controller_theme_filled</comment>
+        <translation>塗りつぶし</translation>
     </message>
     <message>
         <source>Global Save %d</source>
@@ -4540,6 +4810,11 @@ Do you want to %1$s anyway?</source>
         <translation>ゲームを実行する前に、いくつかの設定が必要です。</translation>
     </message>
     <message>
+        <source>Game Folders</source>
+        <comment>setup_wizard_content_folders_title</comment>
+        <translation>ゲームフォルダ</translation>
+    </message>
+    <message>
         <source>DuckStation will automatically detect games in the folders you specify here. You should add at least one folder to scan. Please do not add the top of your storage volume, otherwise scanning will take a very long time.</source>
         <comment>setup_wizard_content_folders_message</comment>
         <translation>DuckStation は、ここで指定したフォルダ内のゲームを自動的に検出します。スキャンするフォルダを少なくとも 1 つ追加してください。スキャンに非常に長い時間がかかるため、ストレージの最上位フォルダは追加しないでください。</translation>
@@ -4550,6 +4825,11 @@ Do you want to %1$s anyway?</source>
         <translation>コントローラーのセットアップ</translation>
     </message>
     <message>
+        <source>Supported formats: %s</source>
+        <comment>setup_wizard_content_folders_supported_formats</comment>
+        <translation>サポートされている形式: %s</translation>
+    </message>
+    <message>
         <source>No Game Folders Selected</source>
         <comment>setup_wizard_no_directories_title</comment>
         <translation>ゲームフォルダが選択されていません</translation>
@@ -4558,6 +4838,40 @@ Do you want to %1$s anyway?</source>
         <source>The game list will be empty until you add a folder. Continue anyway?</source>
         <comment>setup_wizard_no_directories_message</comment>
         <translation>フォルダを追加するまでゲーム一覧は空のままです。それでも続行しますか？</translation>
+    </message>
+    <message>
+        <source>Interface Selection</source>
+        <comment>setup_wizard_interface_title</comment>
+        <translation>インターフェイスの選択</translation>
+    </message>
+    <message>
+        <source>Choose the interface DuckStation should show when it starts. Standard Mode is designed for touchscreens, while Big Picture Mode is a fullscreen interface designed for navigation with a controller.
+
+You can change this later with the &quot;Start in Big Picture Mode&quot; option in Interface Settings.</source>
+        <comment>setup_wizard_interface_message</comment>
+        <translation>DuckStation の起動時に表示するインターフェイスを選択してください。標準モードはタッチスクリーンでの使用向けで、ビッグピクチャーモードはコントローラーでの操作向けの全画面インターフェイスです。
+
+後からインターフェイス設定の「ビッグピクチャーモードで起動」で変更できます。</translation>
+    </message>
+    <message>
+        <source>Standard Mode</source>
+        <comment>setup_wizard_standard_mode</comment>
+        <translation>標準モード</translation>
+    </message>
+    <message>
+        <source>Big Picture Mode</source>
+        <comment>setup_wizard_big_picture_mode</comment>
+        <translation>ビッグピクチャーモード</translation>
+    </message>
+    <message>
+        <source>Big Picture Mode is not recommended for phones</source>
+        <comment>setup_wizard_big_picture_warning_title</comment>
+        <translation>スマートフォンではビッグピクチャーモードは推奨されません</translation>
+    </message>
+    <message>
+        <source>It is intended for TVs and handheld gaming devices used with a controller. It currently uses more battery than Standard Mode.</source>
+        <comment>setup_wizard_big_picture_warning_message</comment>
+        <translation>コントローラーを接続して使用するテレビや携帯型ゲーム機向けです。現在は標準モードよりもバッテリーを多く消費します。</translation>
     </message>
     <message>
         <source>Choose how games should be displayed in the main list.</source>
@@ -4877,6 +5191,11 @@ Are you sure you want to continue?</source>
         <source>Disables every patch currently enabled for this game.</source>
         <comment>patch_codes_disable_all_patches_summary</comment>
         <translation>このゲームで現在有効なすべてのパッチを無効にします。</translation>
+    </message>
+    <message>
+        <source>Author: %1$s</source>
+        <comment>patch_codes_author</comment>
+        <translation>作者: %1$s</translation>
     </message>
     <message>
         <source>Unavailable while RetroAchievements hardcode mode is active.</source>
@@ -5264,14 +5583,59 @@ Are you sure you want to continue?</source>
         <translation>ゲームが見つかりませんでした。ゲームが含まれるディレクトリを追加してください。</translation>
     </message>
     <message>
+        <source>.cue (Cue Sheets)
+.iso (Single Track Image)
+.ecm (Error Code Modeling Image)
+.mds (Media Descriptor Sidecar)
+.ccd (CloneCD Image)
+.chd (Compressed Hunks of Data)
+.pbp (PlayStation Portable, Only Decrypted)</source>
+        <comment>content_list_supported_formats</comment>
+        <translation>.cue（キューシート）
+.iso（シングルトラックイメージ）
+.ecm（エラーコードモデリングイメージ）
+.mds（メディアディスクリプタサイドカー）
+.ccd（クローンCDイメージ）
+.chd（圧縮データ）
+.pbp（PlayStation Portable、復号化済みのみ）</translation>
+    </message>
+    <message>
+        <source>Supported formats are:
+
+%s
+
+Multi-track games in bin format require a cuesheet (.cue) to start.</source>
+        <comment>content_list_empty_supported_formats</comment>
+        <translation>サポートされている形式は以下の通りです:
+
+%s
+
+bin 形式のマルチトラックゲームを起動するには、キューシート (.cue) が必要です。</translation>
+    </message>
+    <message>
         <source>Add Game Directory</source>
         <comment>content_list_empty_add_directory</comment>
         <translation>ゲームディレクトリを追加</translation>
     </message>
     <message>
+        <source>Favorite</source>
+        <comment>content_list_favorite</comment>
+        <translation>お気に入り</translation>
+    </message>
+    <message>
         <source>Start Game</source>
         <comment>content_bottom_sheet_start</comment>
         <translation>ゲーム起動</translation>
+    </message>
+    <message>
+        <source>Favorite</source>
+        <comment>content_bottom_sheet_favorite</comment>
+        <translation>お気に入りに追加</translation>
+    </message>
+    <message>
+        <source>Unfavorite</source>
+        <comment>content_bottom_sheet_unfavorite</comment>
+        <translation>お気に入りから削除</translation>
     </message>
     <message>
         <source>Game Properties</source>
@@ -5282,6 +5646,16 @@ Are you sure you want to continue?</source>
         <source>Are you sure you want to delete the cover image for this game? It cannot be recovered.</source>
         <comment>content_bottom_sheet_delete_cover_message</comment>
         <translation>このゲームのカバー画像を削除してもよろしいですか？復元することはできません。</translation>
+    </message>
+    <message>
+        <source>Cover Already Exists</source>
+        <comment>content_replace_cover_title</comment>
+        <translation>カバーはすでに存在します</translation>
+    </message>
+    <message>
+        <source>A cover image for this game already exists, do you wish to replace it?</source>
+        <comment>content_replace_cover_message</comment>
+        <translation>このゲームのカバー画像はすでに存在しますが、置き換えますか？</translation>
     </message>
     <message>
         <source>DuckStation can automatically download covers for games which do not currently have a cover set. We do not host any cover images, the user must provide their own source for images.</source>
@@ -6331,11 +6705,6 @@ Would you like to import one now?</source>
         <translation>色に透視補正補間を使用し、一部のゲームで映像を改善します。</translation>
     </message>
     <message>
-        <source>Uses PGXP for all instructions, not just memory operations.</source>
-        <comment>settings_summary_pgxp_cpu</comment>
-        <translation>メモリ操作だけでなく、すべての命令に PGXP を使用します。</translation>
-    </message>
-    <message>
         <source>Increases the precision of polygon culling, reducing the number of holes in geometry.</source>
         <comment>settings_summary_pgxp_culling</comment>
         <translation>ポリゴンカリングの精度を高め、ジオメトリの穴を減らします。</translation>
@@ -6354,11 +6723,6 @@ Would you like to import one now?</source>
         <source>Uses perspective-correct interpolation for texture coordinates, straightening out warped textures.</source>
         <comment>settings_summary_pgxp_texture_correction</comment>
         <translation>テクスチャ座標に透視補正補間を使用し、歪んだテクスチャをまっすぐにします。</translation>
-    </message>
-    <message>
-        <source>Uses screen positions to resolve PGXP data. May improve visuals in some games.</source>
-        <comment>settings_summary_pgxp_vertex_cache</comment>
-        <translation>画面位置を使用して PGXP データを解決します。一部のゲームで映像が改善する場合があります。</translation>
     </message>
     <message>
         <source>Rounds texture coordinates instead of flooring when upscaling. Can fix misaligned textures in some games, but break others.</source>
@@ -8107,6 +8471,10 @@ Your dump may be corrupted, or the physical disc is scratched.</source>
 <context>
     <name>CheatCodeEditorDialog</name>
     <message>
+        <source>Patch Editor</source>
+        <translation>パッチエディタ</translation>
+    </message>
+    <message>
         <source>Enter Group Name</source>
         <translation>グループ名を入力</translation>
     </message>
@@ -8143,10 +8511,14 @@ Trying to use this cheat will not work as expected. Do you want to continue?</so
         <translation>「%1」という名前のコードはすでに存在します。</translation>
     </message>
     <message>
-        <source>Failed to save cheat code:
+        <source>Failed to save code:
 %1</source>
-        <translation>チートコードを保存できませんでした:
+        <translation>コードを保存できませんでした:
 %1</translation>
+    </message>
+    <message>
+        <source>None</source>
+        <translation>なし</translation>
     </message>
     <message>
         <source>Ungrouped</source>
@@ -9281,7 +9653,7 @@ This warning will only be shown once.</source>
     </message>
     <message>
         <source>Enable Mouse Mapping</source>
-        <translation>マウスへの割り当てを有効化</translation>
+        <translation>マウスの割り当てを有効化</translation>
     </message>
     <message>
         <source>Use Raw Input</source>
@@ -10049,11 +10421,11 @@ This file is approximately 206KB, do you want to download it now?</source>
     </message>
     <message>
         <source>Toggle Breakpoint</source>
-        <translation>ブレークポイント有効/無効の切り替え</translation>
+        <translation>ブレークポイントの設定/解除</translation>
     </message>
     <message>
         <source>Toggle &amp;Breakpoint</source>
-        <translation>ブレークポイント有効/無効の切り替え(&amp;B)</translation>
+        <translation>ブレークポイントの設定/解除(&amp;B)</translation>
     </message>
     <message>
         <source>F9</source>
@@ -11056,6 +11428,10 @@ Clicking Reset will restore the serial back to the value scanned from in the dis
     <message>
         <source>Allow Booting Without SBI File</source>
         <translation>SBI ファイルなしでの起動を許可する</translation>
+    </message>
+    <message>
+        <source>Applies changes to the displayed framebuffer partway through a frame. Needed for split-screen effects in some games, but causes tearing in others.</source>
+        <translation>フレームの途中で、表示中のフレームバッファへの変更を反映します。一部のゲームの画面分割効果に必要ですが、別のゲームではティアリングが発生します。</translation>
     </message>
     <message>
         <source>Applies the selected sprite texture filter to framebuffer uploads. This can smooth backgrounds in some games while preserving texture data and 24-bit video.</source>
@@ -12508,6 +12884,10 @@ You cannot undo this action.</source>
         <translation>マクロ {}</translation>
     </message>
     <message>
+        <source>Mid-Frame Scanout</source>
+        <translation>フレーム途中のスキャンアウト</translation>
+    </message>
+    <message>
         <source>No</source>
         <translation>いいえ</translation>
     </message>
@@ -12609,7 +12989,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>Runs the software renderer in parallel for VRAM readbacks. On some systems, this may result in greater performance when using graphical enhancements with the hardware renderer.</source>
-        <translation>VRAM リードバックのためにソフトウェアレンダラーを並行して実行します。一部のシステムでは、ハードウェアレンダラーでグラフィカルな拡張機能を使用すると、&lt;br&gt;パフォーマンスが向上する場合があります。</translation>
+        <translation>VRAM リードバックのためにソフトウェアレンダラーを並行して実行します。一部のシステムでは、ハードウェアレンダラーでグラフィカルな拡張機能を使用すると、パフォーマンスが向上する場合があります。</translation>
     </message>
     <message>
         <source>SDL DualSense Player LED</source>
@@ -12688,6 +13068,10 @@ You cannot undo this action.</source>
         <translation>設定をデフォルトに戻しました。</translation>
     </message>
     <message>
+        <source>Show Frame Number</source>
+        <translation>フレーム番号を表示</translation>
+    </message>
+    <message>
         <source>Show Localized Titles</source>
         <translation>ローカライズされたタイトルを表示</translation>
     </message>
@@ -12706,6 +13090,10 @@ You cannot undo this action.</source>
     <message>
         <source>Shows the host&apos;s CPU usage of each system thread in the top-right corner of the display.</source>
         <translation>各システムスレッドによるホスト CPU 使用率を画面右上に表示します。</translation>
+    </message>
+    <message>
+        <source>Shows the number of the current frame in the top-right corner of the display.</source>
+        <translation>現在のフレーム番号を画面右上に表示します。</translation>
     </message>
     <message>
         <source>Shows titles underneath the images in the game grid view.</source>
@@ -12816,6 +13204,10 @@ You cannot undo this action.</source>
         <translation>デスクトップ OpenGL がサポートされていても OpenGL ES を使用します。一部の SBC ドライバーでパフォーマンスが向上する場合があります。</translation>
     </message>
     <message>
+        <source>Uses PGXP for all instructions, not just memory operations. Automatic uses the game database setting.</source>
+        <translation>メモリ操作だけでなく、すべての命令で PGXP を使用します。「自動」ではゲームデータベースの設定を使用します。</translation>
+    </message>
+    <message>
         <source>Uses a second thread for drawing graphics. Provides a significant speed improvement particularly with the software renderer, and is safe to use.</source>
         <translation>グラフィック描画に 2 番目のスレッドを使用します。特にソフトウェアレンダラーで大幅に高速化し、安全に使用できます。</translation>
     </message>
@@ -12826,6 +13218,10 @@ You cannot undo this action.</source>
     <message>
         <source>Uses game-specific configuration for input sources. If disabled, the global configuration will be used.</source>
         <translation>このゲーム固有の入力ソース設定を使用します。無効にするとグローバル設定が使用されます。</translation>
+    </message>
+    <message>
+        <source>Uses screen positions to resolve PGXP data. May improve visuals in some games. Automatic uses the game database setting.</source>
+        <translation>画面上の座標を使用して PGXP データを特定します。一部のゲームで映像が改善される場合があります。「自動」ではゲームデータベースの設定を使用します。</translation>
     </message>
     <message>
         <source>Uses the software renderer when creating rewind states to prevent additional VRAM usage. Especially useful when upscaling.</source>
@@ -13946,7 +14342,7 @@ Do you want to {1} anyway?</source>
     </message>
     <message>
         <source>Scanning Subdirectories</source>
-        <translation>サブディレクトリをスキャン中</translation>
+        <translation>サブディレクトリをスキャンする</translation>
     </message>
     <message>
         <source>Screenshot Format</source>
@@ -14585,10 +14981,6 @@ Do you want to {1} anyway?</source>
         <translation>リードバックにソフトウェアレンダラーを使用</translation>
     </message>
     <message>
-        <source>Uses PGXP for all instructions, not just memory operations.</source>
-        <translation>メモリ操作だけでなく、すべての命令に PGXP を使用します。</translation>
-    </message>
-    <message>
         <source>Uses a blit presentation model instead of flipping. This may be needed on some systems.</source>
         <translation>フリップの代わりに blit 表示モデルを使用します。一部のシステムで必要になる場合があります。</translation>
     </message>
@@ -14611,10 +15003,6 @@ Do you want to {1} anyway?</source>
     <message>
         <source>Uses perspective-correct interpolation for texture coordinates, straightening out warped textures.</source>
         <translation>テクスチャ座標に透視補正補間を使用し、歪んだテクスチャをまっすぐにします。</translation>
-    </message>
-    <message>
-        <source>Uses screen positions to resolve PGXP data. May improve visuals in some games.</source>
-        <translation>画面位置を使用して PGXP データを解決します。一部のゲームで映像が改善する場合があります。</translation>
     </message>
     <message>
         <source>Uses separate game settings for each disc of multi-disc games. Can only be set on the first/main disc.</source>
@@ -14997,6 +15385,34 @@ Do you want to {0} anyway?</source>
         <source>Edit Choices...</source>
         <translation>選択肢を編集...</translation>
     </message>
+    <message>
+        <source>Setting Overrides</source>
+        <translation>設定の上書き</translation>
+    </message>
+    <message>
+        <source>Aspect Ratio:</source>
+        <translation>アスペクト比:</translation>
+    </message>
+    <message>
+        <source>CPU Overclock:</source>
+        <translation>CPU オーバークロック:</translation>
+    </message>
+    <message>
+        <source>%</source>
+        <translation>%</translation>
+    </message>
+    <message>
+        <source>Disable Widescreen Rendering</source>
+        <translation>ワイドスクリーンレンダリングを無効化</translation>
+    </message>
+    <message>
+        <source>Enable 8MB RAM</source>
+        <translation>8MB RAM を有効化</translation>
+    </message>
+    <message>
+        <source>Disallow in Hardcore Mode</source>
+        <translation>ハードコアモードでは使用を禁止</translation>
+    </message>
 </context>
 <context>
     <name>GameCheatSettingsWidget</name>
@@ -15248,7 +15664,7 @@ Are you sure you want to continue?</source>
     <message>
         <source>Disable Fast Forward Memory Card Access</source>
         <comment>GameDatabase::Trait</comment>
-        <translation>メモリーカードの高速アクセスを無効化</translation>
+        <translation>メモリーカードアクセスの早送りを無効化</translation>
     </message>
     <message>
         <source>Disable CD-ROM Read Speedup</source>
@@ -15376,6 +15792,11 @@ Are you sure you want to continue?</source>
         <translation>フレームバッファへのアップロードにフィルターを適用</translation>
     </message>
     <message>
+        <source>Force Mid-Frame Scanout</source>
+        <comment>GameDatabase::Trait</comment>
+        <translation>フレーム途中のスキャンアウトを強制</translation>
+    </message>
+    <message>
         <source>CPU recompiler disabled.</source>
         <translation>CPUリコンパイラーが無効になりました。</translation>
     </message>
@@ -15389,7 +15810,7 @@ Are you sure you want to continue?</source>
     </message>
     <message>
         <source>Fast forward memory card access disabled.</source>
-        <translation>メモリーカードの高速アクセスが無効になりました。</translation>
+        <translation>メモリーカードアクセスの早送りが無効になりました。</translation>
     </message>
     <message>
         <source>CD-ROM read speedup disabled.</source>
@@ -15468,12 +15889,20 @@ Are you sure you want to continue?</source>
         <translation>PGXP頂点キャッシュが有効になりました。</translation>
     </message>
     <message>
+        <source>PGXP Vertex Cache is required for this game, but it is disabled. This may cause rendering errors.</source>
+        <translation>このゲームには PGXP 頂点キャッシュが必要ですが、無効になっています。レンダリングエラーが発生する可能性があります。</translation>
+    </message>
+    <message>
         <source>PGXP Vertex Cache is enabled, but it is not required for this game. This may cause rendering errors.</source>
         <translation>PGXP頂点キャッシュが有効ですが、このゲームでは必要ありません。レンダリングエラーが発生する可能性があります。</translation>
     </message>
     <message>
         <source>PGXP CPU mode enabled.</source>
         <translation>PGXP CPUモードが有効になりました。</translation>
+    </message>
+    <message>
+        <source>PGXP CPU mode is required for this game, but it is disabled. This may cause rendering errors.</source>
+        <translation>このゲームには PGXP CPU モードが必要ですが、無効になっています。レンダリングエラーが発生する可能性があります。</translation>
     </message>
     <message>
         <source>PGXP CPU mode is enabled, but it is not required for this game. This may cause rendering errors.</source>
@@ -15940,6 +16369,14 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <translation>有効</translation>
     </message>
     <message>
+        <source>Edit Patch</source>
+        <translation>パッチを編集</translation>
+    </message>
+    <message>
+        <source>Remove Patch</source>
+        <translation>パッチを削除</translation>
+    </message>
+    <message>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:700;&quot;&gt;Author: &lt;/span&gt;Patch Author&lt;/p&gt;&lt;p&gt;Description would go here&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
         <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:700;&quot;&gt;作者: &lt;/span&gt;パッチの作者&lt;/p&gt;&lt;p&gt;ここに説明が表示されます&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
@@ -15963,9 +16400,17 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <source>No description provided.</source>
         <translation>説明はありません。</translation>
     </message>
+    <message>
+        <source>Option:</source>
+        <translation>オプション:</translation>
+    </message>
 </context>
 <context>
     <name>GamePatchSettingsWidget</name>
+    <message>
+        <source>Add Patch</source>
+        <translation>パッチを追加</translation>
+    </message>
     <message>
         <source>Disable All Patches</source>
         <translation>すべてのパッチを無効にする</translation>
@@ -16477,8 +16922,20 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <translation>最小サイズ:</translation>
     </message>
     <message>
+        <source>Mid-Frame Scanout</source>
+        <translation>フレーム途中のスキャンアウト</translation>
+    </message>
+    <message>
         <source>Disable Upscaled Direct Textures</source>
         <translation>ダイレクトカラーテクスチャのアップスケーリングを無効化</translation>
+    </message>
+    <message>
+        <source>CPU Mode:</source>
+        <translation>CPU モード:</translation>
+    </message>
+    <message>
+        <source>Vertex Cache:</source>
+        <translation>頂点キャッシュ:</translation>
     </message>
     <message>
         <source>Disable on 2D Polygons</source>
@@ -16869,6 +17326,10 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <translation>アップスケーリング時に、16 ビットのダイレクトカラーテクスチャを元の解像度でサンプリングします。一部のゲームで FMV や背景のフィルタリングを改善できますが、テクスチャへのレンダリングを使用したエフェクトの品質が低下する場合があります。</translation>
     </message>
     <message>
+        <source>Applies changes to the displayed framebuffer partway through a frame, instead of at the start of the next frame. Some games rely on this for split-screen effects, but it causes tearing in games that switch framebuffers mid-frame, so only enable it for games that need it.</source>
+        <translation>次のフレームの開始時ではなく、フレームの途中で、表示中のフレームバッファへの変更を反映します。一部のゲームは画面分割効果にこの機能を必要としますが、フレーム途中でフレームバッファを切り替えるゲームではティアリングが発生するため、必要なゲームでのみ有効にしてください。</translation>
+    </message>
+    <message>
         <source>Applies the selected sprite texture filter to framebuffer uploads. This can smooth backgrounds in some games while preserving texture data and 24-bit video.</source>
         <translation>選択したスプライトテクスチャフィルターを、フレームバッファへのアップロードに適用します。テクスチャデータと 24 ビット映像を維持しながら、一部のゲームの背景を滑らかにできます。</translation>
     </message>
@@ -16933,14 +17394,6 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <translation>投影後の PGXP データに精度を追加します。一部のゲームでビジュアルが向上する場合があります。</translation>
     </message>
     <message>
-        <source>Uses PGXP for all instructions, not just memory operations. Required for PGXP to correct wobble in some games, but has a high performance cost.</source>
-        <translation>メモリ操作だけでなく、すべての命令に PGXP を使用。PGXPは一部のゲームでウォブルを修正するために必要だが、コストが高いです。</translation>
-    </message>
-    <message>
-        <source>Uses screen-space vertex positions to obtain precise positions, instead of tracking memory accesses. Can provide PGXP compatibility for some games, but &lt;strong&gt;generally provides no benefit.&lt;/strong&gt;</source>
-        <translation>メモリアクセスを追跡する代わりに、スクリーン空間の頂点位置を使用して正確な位置を取得します。ゲームによっては PGXP との互換性を提供できますが、&lt;strong&gt;一般的には何のメリットもありません。&lt;/strong&gt;</translation>
-    </message>
-    <message>
         <source>Loads all replacement texture to RAM, reducing stuttering at runtime.</source>
         <translation>すべての置換テクスチャをRAMにロードし、実行時のスタッタリングを軽減します。</translation>
     </message>
@@ -16975,6 +17428,14 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     <message>
         <source>Writes backgrounds that can be replaced to the dump directory.</source>
         <translation>置換可能な背景をダンプ・ディレクトリに書き込みます。</translation>
+    </message>
+    <message>
+        <source>Uses PGXP for all instructions, not just memory operations. Required for PGXP to correct wobble in some games, but has a high performance cost. Automatic enables it only for games that require it according to the game database.</source>
+        <translation>メモリ操作だけでなく、すべての命令で PGXP を使用します。一部のゲームで PGXP による揺れの補正に必要ですが、パフォーマンスへの負荷が大きくなります。「自動」では、ゲームデータベースで必要とされているゲームでのみ有効にします。</translation>
+    </message>
+    <message>
+        <source>Uses screen-space vertex positions to obtain precise positions, instead of tracking memory accesses. Can provide PGXP compatibility for some games, but &lt;strong&gt;generally provides no benefit.&lt;/strong&gt; Automatic enables it only for games that require it according to the game database.</source>
+        <translation>メモリアクセスを追跡する代わりに、スクリーン空間の頂点位置を使用して精密な位置を取得します。一部のゲームで PGXP に対応できるようになりますが、&lt;strong&gt;通常は効果がありません。&lt;/strong&gt;「自動」では、ゲームデータベースで必要とされているゲームでのみ有効にします。</translation>
     </message>
     <message>
         <source>Wireframe Mode</source>
@@ -17805,11 +18266,11 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Extract (&amp;XA)</source>
-        <translation>展開 (&amp;X)</translation>
+        <translation>展開 (XA)(&amp;X)</translation>
     </message>
     <message>
         <source>Extract (&amp;Raw)</source>
-        <translation>展開 (&amp;R)</translation>
+        <translation>展開 (Raw)(&amp;R)</translation>
     </message>
     <message>
         <source>Extract File</source>
@@ -18121,7 +18582,7 @@ Shift+クリックで複数のバインドを設定します。</translation>
     </message>
     <message>
         <source>Prevents the screen saver from activating and the host from sleeping while emulation is running.</source>
-        <translation>エミュレーションの実行中にスクリーンセーバーが起動し、ホストがスリープしないようにします。</translation>
+        <translation>エミュレーションの実行中にスクリーンセーバーが起動したり、ホストがスリープしたりしないようにします。</translation>
     </message>
     <message>
         <source>Disable Window Rounded Corners</source>
@@ -18986,6 +19447,10 @@ Shift+クリックで複数のバインドを設定します。</translation>
     <message>
         <source>Show Labels &amp;Beside Icons</source>
         <translation>アイコンの横にラベルを表示(&amp;B)</translation>
+    </message>
+    <message>
+        <source>TTY Window</source>
+        <translation>TTY ウィンドウ</translation>
     </message>
     <message>
         <source>Show Grid Ca&amp;ptions</source>
@@ -20280,11 +20745,11 @@ Error: {1}</source>
     </message>
     <message>
         <source>PNG Images (*.png);;JPEG Images (*.jpg *.jpeg);;WebP Images (*.webp)</source>
-        <translation>PNG 画像（*.png）;;JPEG 画像（*.jpg *.jpeg）;;WebP 画像（*.webp）</translation>
+        <translation>PNG 画像 (*.png);;JPEG 画像 (*.jpg *.jpeg);;WebP 画像 (*.webp)</translation>
     </message>
     <message>
         <source>Animated PNG Images (*.png)</source>
-        <translation>アニメーション PNG 画像（*.png）</translation>
+        <translation>アニメーション PNG 画像 (*.png)</translation>
     </message>
     <message>
         <source>Extract Icon</source>
@@ -20654,18 +21119,6 @@ Error: {1}</source>
     <message>
         <source>Invalid search pattern. It should contain hex digits or question marks.</source>
         <translation>無効な検索パターン。16進数または疑問符を含める必要があります。</translation>
-    </message>
-    <message>
-        <source>Pattern not found in memory.</source>
-        <translation>メモリ内にパターンが見つかりません。</translation>
-    </message>
-    <message>
-        <source>Pattern found at 0x%1 (passed the end of memory).</source>
-        <translation>0x%1 でパターンが見つかりました (メモリ終端に到達したため先頭から再検索しました)。</translation>
-    </message>
-    <message>
-        <source>Pattern found at 0x%1.</source>
-        <translation>0x%1 でパターンが見つかりました。</translation>
     </message>
 </context>
 <context>
@@ -21960,7 +22413,7 @@ Error: {1}</source>
     </message>
     <message>
         <source>Internal</source>
-        <translation>内蔵</translation>
+        <translation>内部</translation>
     </message>
     <message>
         <source>Border Overlay</source>
@@ -22415,7 +22868,7 @@ Would you like to update the shortcut to point to the current location?</source>
     </message>
     <message>
         <source>Force Digital Hat Inputs</source>
-        <translation>方向ハット入力を強制</translation>
+        <translation>デジタルハット入力を強制</translation>
     </message>
     <message>
         <source>Forces joysticks to always treat &apos;hat&apos; axis inputs (ABS_HAT0X - ABS_HAT3Y) as 8-way digital hats without checking whether they may be analog.</source>
@@ -23153,6 +23606,21 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>Automatic</source>
+        <comment>SettingOverrideMode</comment>
+        <translation>自動</translation>
+    </message>
+    <message>
+        <source>Enabled</source>
+        <comment>SettingOverrideMode</comment>
+        <translation>有効</translation>
+    </message>
+    <message>
+        <source>Disabled</source>
+        <comment>SettingOverrideMode</comment>
+        <translation>無効</translation>
+    </message>
+    <message>
+        <source>Automatic</source>
         <comment>DisplayExclusiveFullscreenControl</comment>
         <translation>自動</translation>
     </message>
@@ -23502,7 +23970,7 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>&lt;strong&gt;Memory Card Settings&lt;/strong&gt;&lt;hr&gt;This page lets you control what mode the memory card emulation will function in, and where the images for these cards will be stored on disk.</source>
-        <translation>&lt;strong&gt;メモリーカード設定&lt;/strong&gt;&lt;hr&gt;このページでは、メモリーカードエミュレーションがどのようなモードで機能するか、また、これらのカードの画像がディスク上のどこに保存されるかを制御できます。</translation>
+        <translation>&lt;strong&gt;メモリーカード設定&lt;/strong&gt;&lt;hr&gt;このページでは、メモリーカードエミュレーションの動作モードと、メモリーカードイメージをディスク上のどこに保存するかを設定できます。</translation>
     </message>
     <message>
         <source>Interface</source>
@@ -23518,7 +23986,7 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>&lt;strong&gt;Emulation Settings&lt;/strong&gt;&lt;hr&gt;These options determine the speed and runahead behavior of the system.&lt;br&gt;&lt;br&gt;Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;エミュレーション設定&lt;/strong&gt;&lt;hr&gt;これらのオプションは、システムのスピードと先読み動作を制御します。&lt;br&gt;&lt;br&gt;オプションにマウスをあわせると追加情報が表示され、Shift+ホイールでパネルをスクロールできます。</translation>
+        <translation>&lt;strong&gt;エミュレーション設定&lt;/strong&gt;&lt;hr&gt;これらのオプションは、システムのスピードと先行実行の動作を制御します。&lt;br&gt;&lt;br&gt;オプションにマウスをあわせると追加情報が表示され、Shift+ホイールでパネルをスクロールできます。</translation>
     </message>
     <message>
         <source>Graphics</source>
@@ -24539,15 +25007,15 @@ You must save to a memory card and reset the game to clear any effects.</source>
     </message>
     <message>
         <source>capturing audio and video</source>
-        <translation>音声と映像をキャプチャ中</translation>
+        <translation>音声と映像のキャプチャ</translation>
     </message>
     <message>
         <source>capturing video</source>
-        <translation>映像をキャプチャ中</translation>
+        <translation>映像のキャプチャ</translation>
     </message>
     <message>
         <source>capturing audio</source>
-        <translation>音声をキャプチャ中</translation>
+        <translation>音声のキャプチャ</translation>
     </message>
     <message>
         <source>Failed to create media capture: {0}</source>
@@ -24630,6 +25098,29 @@ DuckStationを実行するには、PS1またはPS2のBIOSが必要です。
     <message>
         <source>Rewind and runahead cannot be used at the same time.</source>
         <translation>巻き戻しと先行実行は同時に使用できません。</translation>
+    </message>
+</context>
+<context>
+    <name>TTYWindow</name>
+    <message>
+        <source>TTY Window</source>
+        <translation>TTY ウィンドウ</translation>
+    </message>
+    <message>
+        <source>TTY Window - %1 [%2]</source>
+        <translation>TTY ウィンドウ - %1 [%2]</translation>
+    </message>
+    <message>
+        <source>&amp;Settings</source>
+        <translation>設定(&amp;S)</translation>
+    </message>
+    <message>
+        <source>Enable BIOS &amp;TTY Logging</source>
+        <translation>BIOS TTY ログを有効化(&amp;T)</translation>
+    </message>
+    <message>
+        <source>Show &amp;Timestamps</source>
+        <translation>タイムスタンプを表示(&amp;T)</translation>
     </message>
 </context>
 <context>

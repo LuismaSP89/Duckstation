@@ -3027,44 +3027,6 @@ const QFont& QtHost::GetFixedFont()
   return s_state.fixed_font;
 }
 
-bool Host::ResourceFileExists(std::string_view filename, bool allow_override)
-{
-  const std::string path = QtHost::GetResourcePath(filename, allow_override);
-  return FileSystem::FileExists(path.c_str());
-}
-
-std::optional<DynamicHeapArray<u8>> Host::ReadResourceFile(std::string_view filename, bool allow_override, Error* error)
-{
-  const std::string path = QtHost::GetResourcePath(filename, allow_override);
-  const std::optional<DynamicHeapArray<u8>> ret = FileSystem::ReadBinaryFile(path.c_str(), error);
-  if (!ret.has_value())
-    Error::AddPrefixFmt(error, "Failed to read resource file '{}': ", filename);
-  return ret;
-}
-
-std::optional<std::string> Host::ReadResourceFileToString(std::string_view filename, bool allow_override, Error* error)
-{
-  const std::string path = QtHost::GetResourcePath(filename, allow_override);
-  const std::optional<std::string> ret = FileSystem::ReadFileToString(path.c_str(), error);
-  if (!ret.has_value())
-    Error::AddPrefixFmt(error, "Failed to read resource file '{}': ", filename);
-  return ret;
-}
-
-std::optional<std::time_t> Host::GetResourceFileTimestamp(std::string_view filename, bool allow_override)
-{
-  const std::string path = QtHost::GetResourcePath(filename, allow_override);
-
-  FILESYSTEM_STAT_DATA sd;
-  if (!FileSystem::StatFile(path.c_str(), &sd))
-  {
-    ERROR_LOG("Failed to stat resource file '{}'", filename);
-    return std::nullopt;
-  }
-
-  return sd.ModificationTime;
-}
-
 void Host::CommitBaseSettingChanges()
 {
   QtHost::QueueSettingsSave();
@@ -3659,6 +3621,7 @@ int main(int argc, char* argv[])
   // We want to catch the early messages, but if the window is shown the Windows taskbar will use
   // the log window icon as the application icon because it's the first window shown.
   LogWindow::updateSettings(true);
+  TTYWindow::updateSettings(true);
 
   // Now we can actually start the CPU thread.
   HookSignals();
@@ -3680,6 +3643,7 @@ int main(int argc, char* argv[])
   if (IsRunningOnWayland())
   {
     LogWindow::deferredShow();
+    TTYWindow::deferredShow();
     QApplication::sync();
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
   }
@@ -3706,8 +3670,9 @@ int main(int argc, char* argv[])
   if (autoboot)
     g_core_thread->bootSystem(std::move(autoboot));
 
-  // Bring the log window up last, so that its icon does not take precedence.
-  if (LogWindow::deferredShow())
+  // Bring the log/TTY windows up last, so that their icon does not take precedence.
+  if (const bool log_window_shown = LogWindow::deferredShow(), tty_window_shown = TTYWindow::deferredShow();
+      log_window_shown || tty_window_shown)
   {
     // But ensure the main window still has focus.
     QtUtils::RaiseWindow(g_main_window);

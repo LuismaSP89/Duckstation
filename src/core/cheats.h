@@ -43,10 +43,23 @@ enum class FileFormat : u8
 using CodeOption = std::pair<std::string, u32>;
 using CodeOptionList = std::vector<CodeOption>;
 
-/// Contains all the information required to present a cheat code to the user.
-struct CodeInfo
+/// Metadata shared between parsed codes and code information, including setting overrides.
+struct CodeMetadata
 {
   std::string name;
+  CodeType type = CodeType::Gameshark;
+  CodeActivation activation = CodeActivation::EndFrame;
+  std::optional<u32> override_cpu_overclock;
+  std::optional<DisplayAspectRatio> override_aspect_ratio;
+  bool disable_widescreen_rendering = false;
+  bool enable_8mb_ram = false;
+  bool disallow_for_achievements = false;
+  bool has_options = false; // unused in CodeInfo
+};
+
+/// Contains all the information required to present a cheat code to the user.
+struct CodeInfo : CodeMetadata
+{
   std::string author;
   std::string description;
   std::string body;
@@ -56,10 +69,7 @@ struct CodeInfo
   u32 file_offset_start = 0;
   u32 file_offset_body_start = 0;
   u32 file_offset_end = 0;
-  CodeType type = CodeType::Gameshark;
-  CodeActivation activation = CodeActivation::EndFrame;
   bool from_database = false;
-  bool disallow_for_achievements = false;
 
   std::string_view GetNamePart() const;
   std::string_view GetNameParentPart() const;
@@ -139,6 +149,10 @@ bool ValidateCodeBody(const CodeInfo& code, Error* error);
 
 /// Returns the path to a new cheat/patch cht for the specified serial and hash.
 std::string GetChtFilename(const std::string_view serial, std::optional<GameHash> hash, bool cheats);
+
+/// Returns the path of the cht file on disk that the named code was loaded from, or an empty string if not found.
+std::string FindChtFileContainingCode(const std::string_view serial, std::optional<GameHash> hash, bool cheats,
+                                      const std::string_view name);
 
 /// Reloads cheats and game patches. The parameters control the degree to which data is reloaded.
 void ReloadCheats(bool reload_files, bool reload_enabled_list, bool verbose, bool verbose_if_changed,

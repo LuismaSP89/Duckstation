@@ -120,8 +120,8 @@ const void* CPU::Recompiler::Recompiler::CompileBlock(CodeCache::Block* block, u
     {
       if (!m_block_ended)
       {
-        // Block was truncated. Link it.
-        EndBlock(m_compiler_pc, false);
+        // Block was truncated. Link it, events are still checked between blocks like the interpreters.
+        EndBlock(m_compiler_pc, true);
       }
 
       break;
@@ -225,6 +225,11 @@ void CPU::Recompiler::Recompiler::UpdateLoadDelay()
       DEBUG_LOG("Clearing non-dirty constant {}", GetRegName(static_cast<Reg>(i)));
       ClearConstantReg(static_cast<Reg>(i));
     }
+
+    // a load to the same register cancels the incoming load delay, so hang on to the old value, it'll overwrite
+    // the incoming value if it's for the same register, and is the same value otherwise
+    if (m_next_load_delay_register != Reg::count)
+      AllocateHostReg(HR_MODE_READ | HR_MODE_WRITE, HR_TYPE_CPU_REG, m_next_load_delay_register);
 
     Flush(FLUSH_LOAD_DELAY_FROM_STATE);
   }
@@ -492,6 +497,9 @@ bool CPU::Recompiler::Recompiler::TrySwapDelaySlot(Reg rs, Reg rt, Reg rd)
             if (rd != Reg::zero && rd == opcode_rt)
               goto is_unsafe;
             break;
+
+          case CopCommonInstruction::bcnc: // BCnF/BCnT
+            goto is_unsafe;
         }
       }
       else
@@ -1331,15 +1339,19 @@ void CPU::Recompiler::Recompiler::CompileInstruction()
     case InstructionOp::lwc2: CompileLoadStoreTemplate(&Recompiler::Compile_lwc2, MemoryAccessSize::Word, false, false, TF_READS_S); break;
     case InstructionOp::swc2: CompileLoadStoreTemplate(&Recompiler::Compile_swc2, MemoryAccessSize::Word, true, false, TF_GTE_STALL | TF_READS_S); SpecExec_swc2(); break;
 
-      // swc0/lwc0/cop1/cop3 are essentially no-ops
+      // cop1/cop3 are essentially no-ops, their branches are left to the interpreter
     case InstructionOp::cop1:
     case InstructionOp::cop3:
+      break;
+
+      // lwc0/swc0 need the coprocessor enable check, and swc0 stores the next instruction
     case InstructionOp::lwc0:
     case InstructionOp::lwc1:
     case InstructionOp::lwc3:
     case InstructionOp::swc0:
     case InstructionOp::swc1:
     case InstructionOp::swc3:
+      Compile_Fallback();
       break;
 
     default: Compile_Fallback(); InvalidateSpeculativeValues(); TruncateBlock(); break;

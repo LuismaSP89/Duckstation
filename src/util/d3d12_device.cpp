@@ -36,9 +36,9 @@ enum : u32
   MAX_SAMPLERS_PER_FRAME = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE,
   MAX_DESCRIPTOR_SETS_PER_FRAME = MAX_DRAW_CALLS_PER_FRAME,
 
-  MAX_PERSISTENT_DESCRIPTORS = 2048,
-  MAX_PERSISTENT_RTVS = 512,
-  MAX_PERSISTENT_DSVS = 128,
+  MAX_PERSISTENT_DESCRIPTORS = 16384,
+  MAX_PERSISTENT_RTVS = 2048,
+  MAX_PERSISTENT_DSVS = 512,
   MAX_PERSISTENT_SAMPLERS = 512,
 };
 
@@ -323,8 +323,12 @@ void D3D12Device::DestroyDevice()
 
 void D3D12Device::GetPipelineCacheHeader(PIPELINE_CACHE_HEADER* hdr)
 {
-  const LUID adapter_luid = m_device->GetAdapterLuid();
-  std::memcpy(&hdr->adapter_luid, &adapter_luid, sizeof(hdr->adapter_luid));
+  // LUIDs change on reboot, so don't use them. CreatePipelineLibrary() rejects other adapters/drivers.
+  DXGI_ADAPTER_DESC desc = {};
+  if (m_adapter)
+    m_adapter->GetDesc(&desc);
+  hdr->vendor_id = desc.VendorId;
+  hdr->device_id = desc.DeviceId;
   hdr->render_api_version = m_render_api_version;
   hdr->unused = 0;
 }
@@ -590,7 +594,9 @@ ID3D12GraphicsCommandList4* D3D12Device::GetInitCommandList()
 
 void D3D12Device::SubmitCommandList(bool wait_for_completion)
 {
-  DebugAssert(!InRenderPass());
+  if (InRenderPass())
+    EndRenderPass();
+
   if (m_device_was_lost) [[unlikely]]
     return;
 
@@ -681,14 +687,11 @@ void D3D12Device::SubmitCommandList(bool wait_for_completion, const std::string_
 
 void D3D12Device::SubmitCommandListAndRestartRenderPass(const std::string_view reason)
 {
-  if (InRenderPass())
-    EndRenderPass();
-
-  D3D12Pipeline* pl = m_current_pipeline;
+  const bool in_render_pass = InRenderPass();
   SubmitCommandList(false, reason);
 
-  SetPipeline(pl);
-  BeginRenderPass();
+  if (in_render_pass)
+    BeginRenderPass();
 }
 
 void D3D12Device::WaitForFence(u64 fence)
@@ -1104,12 +1107,16 @@ bool D3D12SwapChain::ResizeBuffers(u32 new_width, u32 new_height, Error* error)
 
   DestroyRTVs();
 
-  HRESULT hr =
-    m_swap_chain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN,
-                                (m_using_allow_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0) |
-                                  (IsExclusiveFullscreen() ? 0 : DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT));
-  if (FAILED(hr))
-    ERROR_LOG("ResizeBuffers() failed: 0x{:08X}", static_cast<unsigned>(hr));
+  // Flags have to match what the swap chain was created with.
+  const UINT flags = IsExclusiveFullscreen() ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH :
+                                               ((m_using_allow_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0) |
+                                                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
+  HRESULT hr = m_swap_chain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, flags);
+  if (FAILED(hr)) [[unlikely]]
+  {
+    Error::SetHResult(error, "ResizeBuffers() failed: ", hr);
+    return false;
+  }
 
   return CreateRTV(D3D12Device::GetInstance(), error);
 }
@@ -1202,6 +1209,10 @@ GPUPresentResult D3D12Device::BeginPresent(GPUSwapChain* swap_chain, u32 clear_c
   if (m_device_was_lost) [[unlikely]]
     return GPUPresentResult::DeviceLost;
 
+  // Buffers are released if resizing or recreating the swap chain failed.
+  if (SC->m_swap_chain_buffers.empty()) [[unlikely]]
+    return GPUPresentResult::SkipPresent;
+
   // TODO: Check if the device was lost.
 
   // Check if we lost exclusive fullscreen. If so, notify the host, so it can switch to windowed mode.
@@ -1228,7 +1239,10 @@ GPUPresentResult D3D12Device::BeginPresent(GPUSwapChain* swap_chain, u32 clear_c
   for (u32 i = 0; i < num_textures; i++)
   {
     if (m_current_textures[i])
+    {
       m_current_textures[i]->TransitionToState(cmdlist, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+      m_current_textures[i]->SetUseFenceValue(GetCurrentFenceValue());
+    }
   }
 
   D3D12_RENDER_PASS_RENDER_TARGET_DESC rt_desc = {swap_chain_buf.second,
@@ -1256,8 +1270,9 @@ void D3D12Device::EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u6
 {
   D3D12SwapChain* const SC = static_cast<D3D12SwapChain*>(swap_chain);
   DebugAssert(present_time == 0);
-  DebugAssert(InRenderPass() && m_num_current_render_targets == 0 && !m_current_depth_target);
-  EndRenderPass();
+  DebugAssert(m_num_current_render_targets == 0 && !m_current_depth_target);
+  if (InRenderPass())
+    EndRenderPass();
 
   DebugAssert(SC == m_current_swap_chain);
   m_current_swap_chain = nullptr;
@@ -1376,10 +1391,11 @@ void D3D12Device::SetFeatures(D3D_FEATURE_LEVEL feature_level, CreateFlags creat
   m_features.raster_order_views = false;
   if (!HasCreateFlag(create_flags, CreateFlags::DisableRasterOrderViews))
   {
+    // ROV shaders load from RGBA8 UAVs.
     D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
     m_features.raster_order_views =
       SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options))) &&
-      options.ROVsSupported;
+      options.ROVsSupported && options.TypedUAVLoadAdditionalFormats;
   }
 
   m_features.dxt_textures =
@@ -1942,18 +1958,24 @@ void D3D12Device::BeginRenderPass()
   for (u32 i = 0; i < num_textures; i++)
   {
     if (m_current_textures[i])
+    {
       m_current_textures[i]->TransitionToState(cmdlist, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+      m_current_textures[i]->SetUseFenceValue(GetCurrentFenceValue());
+    }
   }
 
   DebugAssert(rt_desc_p || ds_desc_p || (m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages));
-  cmdlist->BeginRenderPass(num_rt_descs, rt_desc_p, ds_desc_p, D3D12_RENDER_PASS_FLAG_NONE);
+  cmdlist->BeginRenderPass(num_rt_descs, rt_desc_p, ds_desc_p,
+                           (m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages) ?
+                             D3D12_RENDER_PASS_FLAG_ALLOW_UAV_WRITES :
+                             D3D12_RENDER_PASS_FLAG_NONE);
 
   // TODO: Stats
   m_in_render_pass = true;
   s_stats.num_render_passes++;
 
   // If this is a new command buffer, bind the pipeline and such.
-  if (m_dirty_flags & DIRTY_FLAG_INITIAL)
+  if ((m_dirty_flags & DIRTY_FLAG_INITIAL) && m_current_pipeline)
     SetInitialPipelineState();
 }
 
@@ -2045,10 +2067,8 @@ bool D3D12Device::IsRenderTargetBound(const GPUTexture* tex) const
 void D3D12Device::InvalidateCachedState()
 {
   DebugAssert(!m_in_render_pass);
-  m_dirty_flags = ALL_DIRTY_STATE & ((m_current_pipeline_layout == GPUPipeline::Layout::HWImageBatch ||
-                                      IsComputeLayout(m_current_pipeline_layout)) ?
-                                       ~0u :
-                                       ~DIRTY_FLAG_RT_UAVS);
+  m_dirty_flags = ALL_DIRTY_STATE &
+                  ((m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages) ? ~0u : ~DIRTY_FLAG_RT_UAVS);
 }
 
 void D3D12Device::SetInitialPipelineState()
@@ -2108,17 +2128,17 @@ void D3D12Device::SetTextureSampler(u32 slot, GPUTexture* texture, GPUSampler* s
   {
     m_current_textures[slot] = T;
     m_dirty_flags |= DIRTY_FLAG_TEXTURES;
+  }
 
-    if (T)
+  if (T)
+  {
+    T->CommitClear();
+    T->SetUseFenceValue(GetCurrentFenceValue());
+    if (T->GetResourceState() != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
     {
-      T->CommitClear();
-      T->SetUseFenceValue(GetCurrentFenceValue());
-      if (T->GetResourceState() != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
-      {
-        if (InRenderPass())
-          EndRenderPass();
-        T->TransitionToState(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-      }
+      if (InRenderPass())
+        EndRenderPass();
+      T->TransitionToState(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
   }
 
@@ -2157,9 +2177,8 @@ void D3D12Device::UnbindTexture(D3D12Texture* tex)
     {
       if (m_current_render_targets[i] == tex)
       {
-        if (InRenderPass())
-          EndRenderPass();
-        m_current_render_targets[i] = nullptr;
+        SetRenderTargets(nullptr, 0, m_current_depth_target);
+        break;
       }
     }
   }
@@ -2195,6 +2214,10 @@ void D3D12Device::UnbindSampler(D3D12Sampler* sampler)
       m_dirty_flags |= DIRTY_FLAG_SAMPLERS;
     }
   }
+
+  // Groups are keyed by descriptor index, which can be reused by a new sampler.
+  for (CommandList& res : m_command_lists)
+    res.sampler_allocator.InvalidateCache();
 }
 
 void D3D12Device::RenderTextureMipmap(D3D12Texture* texture, u32 layer, u32 dst_level, u32 dst_width, u32 dst_height,
@@ -2257,11 +2280,15 @@ void D3D12Device::RenderTextureMipmap(D3D12Texture* texture, u32 layer, u32 dst_
   // we need a temporary SRV and RTV for each mip level
   // Safe to use the init buffer after exec, because everything will be done with the texture.
   D3D12DescriptorHandle rtv_handle;
-  while (!GetRTVHeapManager().Allocate(&rtv_handle))
+  if (!GetRTVHeapManager().Allocate(&rtv_handle))
   {
-    SubmitCommandList(false, "Allocate RTV for RenderTextureMipmap()");
-    if (m_device_was_lost)
+    // Wait for deferred RTVs to be released.
+    SubmitCommandList(true, "Allocate RTV for RenderTextureMipmap()");
+    if (!GetRTVHeapManager().Allocate(&rtv_handle))
+    {
+      ERROR_LOG("Failed to allocate RTV for RenderTextureMipmap()");
       return;
+    }
   }
 
   D3D12DescriptorHandle srv_handle;
@@ -2335,6 +2362,9 @@ void D3D12Device::RenderTextureMipmap(D3D12Texture* texture, u32 layer, u32 dst_
 
   cmdlist->EndRenderPass();
 
+  // RTVs are read at record time, so it can be released immediately.
+  GetRTVHeapManager().Free(&rtv_handle);
+
   if (texture->GetResourceState() != D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
   {
     texture->TransitionSubresourceToState(cmdlist, texture->CalculateSubresource(layer, src_level),
@@ -2346,9 +2376,6 @@ void D3D12Device::RenderTextureMipmap(D3D12Texture* texture, u32 layer, u32 dst_
                                           D3D12_RESOURCE_STATE_RENDER_TARGET, texture->GetResourceState());
   }
 
-  // Must destroy after current cmdlist.
-  DeferDescriptorDestruction(m_rtv_heap_manager, &rtv_handle);
-
   // Restore for next normal draw.
   SetViewport(cmdlist);
   SetScissor(cmdlist);
@@ -2357,6 +2384,10 @@ void D3D12Device::RenderTextureMipmap(D3D12Texture* texture, u32 layer, u32 dst_
     cmdlist->SetPipelineState(m_current_pipeline->GetPipeline());
     if (m_current_pipeline->GetTopology() != D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
       cmdlist->IASetPrimitiveTopology(m_current_pipeline->GetTopology());
+  }
+  else
+  {
+    m_current_topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
   }
 
   m_dirty_flags |= ROOT_SIGNATURE_DEPENDENT_DIRTY_STATE;
@@ -2390,6 +2421,9 @@ void D3D12Device::SetScissor(const GSVector4i rc)
 
 void D3D12Device::PreDrawCheck()
 {
+  if (!InRenderPass())
+    BeginRenderPass();
+
   // TODO: Flushing cmdbuffer because of descriptor OOM will lose push constants.
 
   DebugAssert(!(m_dirty_flags & DIRTY_FLAG_INITIAL));
@@ -2417,9 +2451,6 @@ void D3D12Device::PreDrawCheck()
       }
     }
   }
-
-  if (!InRenderPass())
-    BeginRenderPass();
 }
 
 void D3D12Device::PreDispatchCheck()
@@ -2435,12 +2466,16 @@ void D3D12Device::PreDispatchCheck()
   for (u32 i = 0; i < num_textures; i++)
   {
     if (m_current_textures[i])
+    {
       m_current_textures[i]->TransitionToState(cmdlist, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+      m_current_textures[i]->SetUseFenceValue(GetCurrentFenceValue());
+    }
   }
 
   if (m_num_current_render_targets > 0 && (m_current_render_pass_flags & GPUPipeline::BindRenderTargetsAsImages))
   {
     // Still need to clear the RTs.
+    std::array<D3D12_RESOURCE_BARRIER, MAX_RENDER_TARGETS> barriers;
     for (u32 i = 0; i < m_num_current_render_targets; i++)
     {
       D3D12Texture* const rt = m_current_render_targets[i];
@@ -2448,21 +2483,14 @@ void D3D12Device::PreDispatchCheck()
       rt->CommitClear(cmdlist);
       rt->TransitionToState(cmdlist, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       rt->SetState(GPUTexture::State::Dirty);
-    }
 
-    for (u32 i = 0; i < m_num_current_render_targets; i++)
-    {
-      D3D12Texture* const rt = m_current_render_targets[i];
-      if (!rt)
-        continue;
-
-      const D3D12_RESOURCE_BARRIER barrier = {
+      barriers[i] = {
         .Type = D3D12_RESOURCE_BARRIER_TYPE_UAV,
         .Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE,
         .UAV = {.pResource = rt->GetResource()},
       };
-      cmdlist->ResourceBarrier(1, &barrier);
     }
+    cmdlist->ResourceBarrier(m_num_current_render_targets, barriers.data());
   }
 
   // If this is a new command buffer, bind the pipeline and such.

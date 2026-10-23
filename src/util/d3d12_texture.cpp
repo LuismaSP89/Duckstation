@@ -163,8 +163,10 @@ std::unique_ptr<GPUTexture> D3D12Device::CreateTexture(u32 width, u32 height, u3
   {
     if (!CreateUAVDescriptor(resource.Get(), layers, samples, fm.srv_format, &uav_descriptor, error))
     {
-      if (write_descriptor_type != D3D12Texture::WriteDescriptorType::None)
-        m_descriptor_heap_manager.Free(&write_descriptor);
+      if (write_descriptor_type == D3D12Texture::WriteDescriptorType::RTV)
+        m_rtv_heap_manager.Free(&write_descriptor);
+      else if (write_descriptor_type == D3D12Texture::WriteDescriptorType::DSV)
+        m_dsv_heap_manager.Free(&write_descriptor);
 
       m_descriptor_heap_manager.Free(&srv_descriptor);
       return {};
@@ -482,7 +484,7 @@ bool D3D12Texture::Update(u32 x, u32 y, u32 width, u32 height, const void* data,
 bool D3D12Texture::Map(void** map, u32* map_stride, u32 x, u32 y, u32 width, u32 height, u32 layer, u32 level)
 {
   // TODO: linear textures for dynamic?
-  if ((x + width) > GetMipWidth(level) || (y + height) > GetMipHeight(level) || layer > m_layers || level > m_levels)
+  if ((x + width) > GetMipWidth(level) || (y + height) > GetMipHeight(level) || layer >= m_layers || level >= m_levels)
   {
     return false;
   }
@@ -492,8 +494,8 @@ bool D3D12Texture::Map(void** map, u32* map_stride, u32 x, u32 y, u32 width, u32
     CommitClear(GetCommandBufferForUpdate());
 
   // see note in Update() for the reason why.
-  const u32 aligned_pitch = Common::AlignUpPow2(CalcUploadPitch(m_width), D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
-  const u32 req_size = CalcUploadSize(m_height, aligned_pitch);
+  const u32 aligned_pitch = Common::AlignUpPow2(CalcUploadPitch(width), D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+  const u32 req_size = CalcUploadSize(height, aligned_pitch);
   D3D12StreamBuffer& buffer = dev.GetTextureUploadBuffer();
   if (req_size >= (buffer.GetSize() / 2))
     return false;
@@ -522,7 +524,7 @@ void D3D12Texture::Unmap()
 {
   D3D12Device& dev = D3D12Device::GetInstance();
   D3D12StreamBuffer& sb = dev.GetTextureUploadBuffer();
-  const u32 aligned_pitch = Common::AlignUpPow2(CalcUploadPitch(m_width), D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+  const u32 aligned_pitch = Common::AlignUpPow2(CalcUploadPitch(m_map_width), D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
   const u32 req_size = CalcUploadSize(m_map_height, aligned_pitch);
   const u32 offset = sb.GetCurrentOffset();
   sb.CommitMemory(req_size);
@@ -813,6 +815,7 @@ bool D3D12TextureBuffer::Create(D3D12Device& dev, Error* error)
 void D3D12TextureBuffer::Destroy(bool defer)
 {
   D3D12Device& dev = D3D12Device::GetInstance();
+  dev.UnbindTextureBuffer(this);
   if (m_descriptor)
   {
     if (defer)
@@ -949,15 +952,12 @@ void D3D12DownloadTexture::CopyFromTexture(u32 dst_x, u32 dst_y, GPUTexture* src
   D3D12_TEXTURE_COPY_LOCATION dstloc;
   dstloc.pResource = m_buffer.Get();
   dstloc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-  dstloc.PlacedFootprint.Offset = dst_y * m_current_pitch;
+  dstloc.PlacedFootprint.Offset = 0;
   dstloc.PlacedFootprint.Footprint.Format = src12->GetDXGIFormat();
   dstloc.PlacedFootprint.Footprint.Width = use_transfer_pitch ? width : m_width;
   dstloc.PlacedFootprint.Footprint.Height = use_transfer_pitch ? height : m_height;
   dstloc.PlacedFootprint.Footprint.Depth = 1;
   dstloc.PlacedFootprint.Footprint.RowPitch = m_current_pitch;
-
-  // Has to be 512-byte aligned.
-  Assert(Common::IsAlignedPow2(dstloc.PlacedFootprint.Offset, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT));
 
   const D3D12_RESOURCE_STATES old_layout = src12->GetResourceState();
   const u32 src_subresource = src12->CalculateSubresource(src_layer, src_level);

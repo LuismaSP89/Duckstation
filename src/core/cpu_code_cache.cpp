@@ -1017,6 +1017,15 @@ bool CPU::CodeCache::ReadBlockInstructions(u32 start_pc, BlockInstructionList* i
       break;
     }
 
+    // Coprocessor branches are left to the interpreter, nothing uses them.
+    if (IsCoprocessorBranchInstruction(instruction))
+    {
+      if (is_branch_delay_slot)
+        instructions->pop_back();
+
+      break;
+    }
+
     InstructionInfo info;
     std::memset(&info, 0, sizeof(info));
 
@@ -1361,6 +1370,9 @@ void CPU::CodeCache::FillBlockRegInfo(Block* block)
             case CopCommonInstruction::ctcn:
               BackpropSetReads(rt);
               break;
+
+            case CopCommonInstruction::bcnc:
+              break;
           }
         }
         break;
@@ -1435,6 +1447,7 @@ void CPU::CodeCache::CompileOrRevalidateBlock(u32 start_pc)
       free_far_code_space < Recompiler::MIN_CODE_RESERVE_FOR_BLOCK)
   {
     ERROR_LOG("Out of code space while compiling {:08X}. Resetting code cache.", start_pc);
+    ClearBlocks();
     ResetCodeBuffer();
   }
 

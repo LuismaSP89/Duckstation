@@ -299,6 +299,7 @@ struct Settings : public GPUSettings
 
   bool gpu_dump_cpu_to_vram_copies : 1 = false;
   bool gpu_dump_vram_to_cpu_copies : 1 = false;
+  bool gpu_mid_frame_scanout : 1 = false;
 
   bool mdec_use_old_routines : 1 = false;
   bool mdec_disable_cdrom_speedup : 1 = false;
@@ -382,6 +383,9 @@ struct Settings : public GPUSettings
   bool achievements_prefetch_badges : 1 = DEFAULT_ACHIEVEMENT_BADGE_PREFETCH;
   u8 achievements_notification_duration = DEFAULT_ACHIEVEMENT_NOTIFICATION_TIME;
   u8 achievements_leaderboard_duration = DEFAULT_LEADERBOARD_NOTIFICATION_TIME;
+
+  SettingOverrideMode gpu_pgxp_vertex_cache_mode = SettingOverrideMode::Automatic;
+  SettingOverrideMode gpu_pgxp_cpu_mode = SettingOverrideMode::Automatic;
 
   float emulation_speed = 1.0f;
   float fast_forward_speed = 0.0f;
@@ -545,6 +549,10 @@ struct Settings : public GPUSettings
   static std::optional<ForceVideoTimingMode> ParseForceVideoTimingName(std::string_view str);
   static const char* GetForceVideoTimingName(ForceVideoTimingMode mode);
   static const char* GetForceVideoTimingDisplayName(ForceVideoTimingMode mode);
+
+  static std::optional<SettingOverrideMode> ParseSettingOverrideModeName(std::string_view str);
+  static const char* GetSettingOverrideModeName(SettingOverrideMode mode);
+  static const char* GetSettingOverrideModeDisplayName(SettingOverrideMode mode);
 
   static std::optional<DisplayExclusiveFullscreenControl> ParseDisplayExclusiveFullscreenControl(std::string_view str);
   static const char* GetDisplayExclusiveFullscreenControlName(DisplayExclusiveFullscreenControl mode);

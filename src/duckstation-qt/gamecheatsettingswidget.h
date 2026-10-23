@@ -38,9 +38,14 @@ public:
 
   const Cheats::CodeInfo* getCodeInfo(const std::string_view name) const;
   void setCodeOption(const std::string_view name, u32 value);
-  std::string getPathForSavingCheats() const;
-  QStringList getGroupNames() const;
-  bool hasCodeWithName(const std::string_view name) const;
+
+  /// Returns the path to write codes to. Existing codes are written back to the file they came from.
+  static std::string getPathForSavingCodes(const SettingsWindow* dialog, bool cheats,
+                                           std::string_view existing_name = {});
+
+  /// Asks for confirmation, then removes a code from the user's file, along with its enable state and option value.
+  static bool removeCodeFromFile(QWidget* parent, SettingsWindow* dialog, bool cheats, const std::string& name);
+
   void disableAllCheats();
 
 private:
@@ -93,7 +98,8 @@ class CheatCodeEditorDialog final : public QDialog
   Q_OBJECT
 
 public:
-  CheatCodeEditorDialog(GameCheatSettingsWidget* parent, Cheats::CodeInfo code, const QStringList& group_names);
+  CheatCodeEditorDialog(QWidget* parent, SettingsWindow* dialog, bool cheats,
+                        const Cheats::CodeInfoList& existing_codes, Cheats::CodeInfo code);
   ~CheatCodeEditorDialog() override;
 
 private:
@@ -106,11 +112,15 @@ private:
   void onRangeMaxChanged(int value);
   void onEditChoiceClicked();
 
-  void setupAdditionalUi(const QStringList& group_names);
+  void setupAdditionalUi();
   void fillUi();
+  void renameCodeInSettings(const std::string& old_name);
 
-  GameCheatSettingsWidget* m_parent;
   Ui::GameCheatCodeEditorDialog m_ui;
+
+  SettingsWindow* m_dialog;
+  const Cheats::CodeInfoList& m_existing_codes;
+  bool m_cheats;
 
   Cheats::CodeInfo m_code;
   Cheats::CodeOptionList m_new_options;
