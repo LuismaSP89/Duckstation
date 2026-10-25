@@ -52,6 +52,9 @@ static constexpr GPUTextureFormat VRAM_DS_FORMAT = GPUTextureFormat::D16;
 static constexpr GPUTextureFormat VRAM_DS_DEPTH_FORMAT = GPUTextureFormat::D32F;
 static constexpr GPUTextureFormat VRAM_DS_COLOR_FORMAT = GPUTextureFormat::R32F;
 
+// Limit on the number of polygons that PGXP depth bias accumulates over.
+static constexpr s32 MAX_PGXP_DEPTH_DRAW_INDEX = 2048;
+
 #if defined(_DEBUG) || defined(_DEVEL)
 
 static u32 s_draw_number = 0;
@@ -392,6 +395,10 @@ void GPU_HW::ClearBatch()
 
 void GPU_HW::PostLoadState()
 {
+  // Live depth was overwritten by the VRAM upload, so don't keep merging in depth from before the load.
+  if (m_vram_depth_copy_texture)
+    g_gpu_device->ClearRenderTarget(m_vram_depth_copy_texture.get(), 0);
+
   ClearVRAMDirtyRectangle();
   SetFullVRAMDirtyRectangle();
   UpdateVRAMReadTexture(true, false);
@@ -641,7 +648,6 @@ bool GPU_HW::UpdateSettings(const GPUSettings& old_settings, Error* error)
   {
     m_pgxp_depth_buffer = g_gpu_settings.UsingPGXPDepthBuffer();
     m_batch.use_depth_buffer = false;
-    m_depth_was_copied = false;
   }
 
   CheckSettings();
@@ -1007,6 +1013,8 @@ bool GPU_HW::CreateBuffers(Error* error)
   }
 
   GL_OBJECT_NAME(m_vram_texture, "VRAM Texture");
+  if (m_vram_depth_copy_texture)
+    g_gpu_device->ClearRenderTarget(m_vram_depth_copy_texture.get(), 0);
   if (m_vram_depth_texture)
     GL_OBJECT_NAME(m_vram_depth_texture, "VRAM Depth Texture");
   GL_OBJECT_NAME(m_vram_read_texture, "VRAM Read Texture");
@@ -1062,10 +1070,13 @@ void GPU_HW::ClearFramebuffer()
   if (m_vram_depth_texture)
   {
     if (m_use_rov_for_shader_blend)
-      g_gpu_device->ClearRenderTarget(m_vram_depth_texture.get(), 0xFF);
+      g_gpu_device->ClearRenderTarget(m_vram_depth_texture.get(), 0);
     else
-      g_gpu_device->ClearDepth(m_vram_depth_texture.get(), m_pgxp_depth_buffer ? 1.0f : 0.0f);
+      g_gpu_device->ClearDepth(m_vram_depth_texture.get(), 0.0f);
   }
+  if (m_vram_depth_copy_texture)
+    g_gpu_device->ClearRenderTarget(m_vram_depth_copy_texture.get(), 0);
+  m_depth_dirty_rect = INVALID_RECT;
   ClearVRAMDirtyRectangle();
   if (m_use_texture_cache)
     GPUTextureCache::Invalidate();
@@ -1409,7 +1420,8 @@ bool GPU_HW::CompilePipelines(Error* error)
   m_vram_update_depth_pipeline.reset();
   m_vram_write_replacement_pipeline.reset();
   m_clear_depth_pipeline.reset();
-  m_copy_depth_pipeline.reset();
+  for (std::unique_ptr<GPUPipeline>& p : m_copy_depth_pipelines)
+    p.reset();
 
   ShaderCompileProgressTracker progress(total_items);
 
@@ -1738,7 +1750,7 @@ bool GPU_HW::CompilePipelines(Error* error)
                 {
                   plconfig.depth.depth_test =
                     m_pgxp_depth_buffer ?
-                      (depth_test ? GPUPipeline::DepthFunc::LessEqual : GPUPipeline::DepthFunc::Always) :
+                      (depth_test ? GPUPipeline::DepthFunc::GreaterEqual : GPUPipeline::DepthFunc::Always) :
                       (check_mask ? GPUPipeline::DepthFunc::GreaterEqual : GPUPipeline::DepthFunc::Always);
 
                   // Don't write for transparent, but still test.
@@ -2095,19 +2107,24 @@ bool GPU_HW::CompilePipelines(Error* error)
 
   if (m_pgxp_depth_buffer)
   {
-    std::unique_ptr<GPUShader> fs = g_gpu_device->CreateShader(
-      GPUShaderStage::Fragment, shadergen.GetLanguage(), shadergen.GenerateVRAMCopyDepthFragmentShader(msaa), error);
-    if (!fs)
-      return false;
-
-    plconfig.fragment_shader = fs.get();
     plconfig.render_pass_flags = GPUPipeline::NoRenderPassFlags;
     plconfig.depth = GPUPipeline::DepthState::GetNoTestsState();
     plconfig.blend = GPUPipeline::BlendState::GetNoBlendingState();
     plconfig.rasterization = GPUPipeline::RasterizationState::GetNoCullState(m_multisamples, true);
     plconfig.SetTargetFormats(VRAM_DS_COLOR_FORMAT);
-    if (!(m_copy_depth_pipeline = g_gpu_device->CreatePipeline(plconfig, error)))
-      return false;
+
+    std::unique_ptr<GPUShader> fs;
+    for (u32 merge = 0; merge < 2; merge++)
+    {
+      fs = g_gpu_device->CreateShader(GPUShaderStage::Fragment, shadergen.GetLanguage(),
+                                      shadergen.GenerateVRAMCopyDepthFragmentShader(msaa, merge != 0), error);
+      if (!fs)
+        return false;
+
+      plconfig.fragment_shader = fs.get();
+      if (!(m_copy_depth_pipelines[merge] = g_gpu_device->CreatePipeline(plconfig, error)))
+        return false;
+    }
 
     fs = g_gpu_device->CreateShader(GPUShaderStage::Fragment, shadergen.GetLanguage(),
                                     shadergen.GenerateVRAMClearDepthFragmentShader(m_use_rov_for_shader_blend), error);
@@ -2448,34 +2465,53 @@ void GPU_HW::UpdateDepthBufferFromMaskBit()
   SetScissor();
 }
 
+void GPU_HW::CopyDepthBuffer(const GSVector4i rect, bool merge)
+{
+  // Merging leaves undrawn (zero) depth alone, so it only needs to cover what has been drawn since the last clear.
+  if (merge && m_depth_dirty_rect.rempty())
+    return;
+
+  GL_SCOPE_FMT("Copy Depth Buffer ({})", merge ? "Merge" : "Replace");
+
+  // Viewport should already be set full, only need to fudge the scissor.
+  m_vram_texture->MakeReadyForSampling();
+  g_gpu_device->SetRenderTarget(m_vram_depth_copy_texture.get());
+  g_gpu_device->SetTextureSampler(0, m_vram_depth_texture.get(), g_gpu_device->GetNearestSampler());
+  g_gpu_device->SetPipeline(m_copy_depth_pipelines[BoolToUInt8(merge)].get());
+
+  // Rect can extend past the edge of VRAM when scanout wraps around.
+  const GSVector4i vram_rect = m_vram_depth_copy_texture->GetRect();
+  const GSVector4i clip_rect = merge ? m_depth_dirty_rect.mul32l(GSVector4i(m_resolution_scale)) : vram_rect;
+  for (s32 wrap_y = 0; wrap_y < 2; wrap_y++)
+  {
+    for (s32 wrap_x = 0; wrap_x < 2; wrap_x++)
+    {
+      const GSVector4i wrapped_rect =
+        rect.sub32(GSVector4i(wrap_x, wrap_y, wrap_x, wrap_y).mul32l(vram_rect.zwzw())).rintersect(clip_rect);
+      if (wrapped_rect.rempty())
+        continue;
+
+      GL_INS_FMT("Copy Depth {} Wrap {}/{}", wrapped_rect, wrap_x, wrap_y);
+      g_gpu_device->SetScissor(wrapped_rect);
+      g_gpu_device->Draw(3, 0);
+    }
+  }
+
+  // Restore state.
+  BindVRAMRenderTarget();
+  BindVRAMReadTexture();
+  SetScissor();
+}
+
 void GPU_HW::CopyAndClearDepthBuffer(bool only_drawing_area)
 {
-  if (!m_depth_was_copied)
+  // Accumulate the depth from each clear, so the whole frame is available when it gets scanned out.
+  // Don't bother when we're not postprocessing, it'd just be a wasted copy.
+  if (m_internal_postfx && m_internal_postfx->NeedsDepthBuffer())
   {
-    // Take a copy of the current depth buffer so it can be used when the previous frame/buffer gets scanned out.
-    // Don't bother when we're not postprocessing, it'd just be a wasted copy.
-    if (m_internal_postfx && m_internal_postfx->NeedsDepthBuffer())
-    {
-      // TODO: Shrink this to only the active area.
-      GL_SCOPE("Copy Depth Buffer");
-
-      // Viewport should already be set full, only need to fudge the scissor.
-      m_vram_texture->MakeReadyForSampling();
-      g_gpu_device->InvalidateRenderTarget(m_vram_depth_copy_texture.get());
-      g_gpu_device->SetRenderTarget(m_vram_depth_copy_texture.get());
-      g_gpu_device->SetScissor(m_vram_depth_texture->GetRect());
-      g_gpu_device->SetTextureSampler(0, m_vram_depth_texture.get(), g_gpu_device->GetNearestSampler());
-      g_gpu_device->SetPipeline(m_copy_depth_pipeline.get());
-
-      g_gpu_device->Draw(3, 0);
-
-      // Restore state.
-      BindVRAMRenderTarget();
-      BindVRAMReadTexture();
-      SetScissor();
-    }
-
-    m_depth_was_copied = true;
+    CopyDepthBuffer(only_drawing_area ? m_clamped_drawing_area.mul32l(GSVector4i(m_resolution_scale)) :
+                                        m_vram_depth_texture->GetRect(),
+                    true);
   }
 
   ClearDepthBuffer(only_drawing_area);
@@ -2484,34 +2520,49 @@ void GPU_HW::CopyAndClearDepthBuffer(bool only_drawing_area)
 void GPU_HW::ClearDepthBuffer(bool only_drawing_area)
 {
   GL_SCOPE_FMT("GPU_HW::ClearDepthBuffer({})", only_drawing_area ? "Only Drawing Area" : "Full Buffer");
+  GL_INS_FMT("Drawing Area: {}", m_clamped_drawing_area);
+  GL_INS_FMT("Depth Dirty Rect: {}", m_depth_dirty_rect);
+
   DebugAssert(m_pgxp_depth_buffer);
   if (only_drawing_area)
   {
-    g_gpu_device->SetPipeline(m_clear_depth_pipeline.get());
-
-    const GSVector4i clear_bounds = m_clamped_drawing_area.mul32l(GSVector4i(m_resolution_scale));
-
-    // need to re-bind for rov, because we can't turn colour writes off for only the first target
-    if (!m_use_rov_for_shader_blend)
+    // Everything outside the area drawn since the last clear is already zero.
+    const GSVector4i clear_rect = m_clamped_drawing_area.rintersect(m_depth_dirty_rect);
+    if (!clear_rect.rempty())
     {
-      DrawScreenQuad(clear_bounds, m_vram_depth_texture->GetSizeVec(), GSVector4::zero());
+      GL_INS_FMT("Clear Rect: {}", clear_rect);
+      g_gpu_device->SetPipeline(m_clear_depth_pipeline.get());
+
+      const GSVector4i clear_bounds = clear_rect.mul32l(GSVector4i(m_resolution_scale));
+
+      // need to re-bind for rov, because we can't turn colour writes off for only the first target
+      if (!m_use_rov_for_shader_blend)
+      {
+        DrawScreenQuad(clear_bounds, m_vram_depth_texture->GetSizeVec(), GSVector4::zero());
+      }
+      else
+      {
+        g_gpu_device->SetRenderTarget(m_vram_depth_texture.get());
+        DrawScreenQuad(clear_bounds, m_vram_depth_texture->GetSizeVec(), GSVector4::zero());
+        BindVRAMRenderTarget();
+      }
     }
-    else
-    {
-      g_gpu_device->SetRenderTarget(m_vram_depth_texture.get());
-      DrawScreenQuad(clear_bounds, m_vram_depth_texture->GetSizeVec(), GSVector4::zero());
-      BindVRAMRenderTarget();
-    }
+
+    if (m_clamped_drawing_area.rcontains(m_depth_dirty_rect))
+      m_depth_dirty_rect = INVALID_RECT;
   }
   else
   {
     if (m_use_rov_for_shader_blend)
-      g_gpu_device->ClearRenderTarget(m_vram_depth_texture.get(), 0xFF);
+      g_gpu_device->ClearRenderTarget(m_vram_depth_texture.get(), 0);
     else
-      g_gpu_device->ClearDepth(m_vram_depth_texture.get(), 1.0f);
+      g_gpu_device->ClearDepth(m_vram_depth_texture.get(), 0.0f);
+
+    m_depth_dirty_rect = INVALID_RECT;
   }
 
   m_last_depth_z = 1.0f;
+  m_current_depth = 1;
   s_counters.num_depth_buffer_clears++;
 }
 
@@ -3038,7 +3089,8 @@ void GPU_HW::DrawPreciseLine(const GPUBackendDrawPreciseLineCommand* cmd)
       continue;
     }
 
-    AddDrawnRectangle(clamped_rect);
+    // Expanded quad can extend one pixel before and two pixels past the fractional endpoints.
+    AddDrawnRectangle(rect.add32(GSVector4i::cxpr(-1, -1, 2, 2)).rintersect(m_clamped_drawing_area));
     DrawLine(cmd, bounds, start_color, end_color, start_depth, end_depth);
   }
 
@@ -3366,6 +3418,7 @@ void GPU_HW::DrawPrecisePolygon(const GPUBackendDrawPrecisePolygonCommand* cmd)
                                 ComputePolygonAverageZ(vertices[0].w, vertices[1].w, vertices[2].w, vertices[3].w) :
                                 ComputePolygonAverageZ(vertices[0].w, vertices[1].w, vertices[2].w);
       CheckForDepthClear(cmd, average_z);
+      m_current_depth = std::min(m_current_depth + 1, MAX_PGXP_DEPTH_DRAW_INDEX);
     }
 
     FinishPolygonDraw(cmd, vertices, num_vertices, true, is_3d, clamped_draw_rect_012, clamped_draw_rect_123);
@@ -3786,6 +3839,11 @@ void GPU_HW::ResetBatchVertexDepth()
 
 ALWAYS_INLINE float GPU_HW::GetCurrentNormalizedVertexDepth() const
 {
+  if (m_pgxp_depth_buffer)
+  {
+    // Bias later polygons towards the camera, so that coplanar polygons resolve in draw order.
+    return static_cast<float>(m_current_depth) * g_gpu_settings.gpu_pgxp_depth_bias * 1.0e-6f;
+  }
   return 1.0f - (static_cast<float>(m_current_depth) / 65535.0f);
 }
 
@@ -3928,7 +3986,8 @@ void GPU_HW::UpdateVRAM(u32 x, u32 y, u32 width, u32 height, const void* data, b
   if (check_mask)
   {
     // set new vertex counter since we want this to take into consideration previous masked pixels
-    m_current_depth++;
+    if (!m_pgxp_depth_buffer)
+      m_current_depth++;
   }
   else
   {
@@ -4194,7 +4253,7 @@ void GPU_HW::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32
       AddUnclampedDrawnRectangle(dst_bounds);
   }
 
-  if (check_mask)
+  if (check_mask && !m_pgxp_depth_buffer)
   {
     // set new vertex counter since we want this to take into consideration previous masked pixels
     m_current_depth++;
@@ -4399,7 +4458,7 @@ void GPU_HW::PrepareDraw(const GPUBackendDrawCommand* cmd)
     }
   }
 
-  if (cmd->check_mask_before_draw)
+  if (cmd->check_mask_before_draw && !m_pgxp_depth_buffer)
     m_current_depth++;
 }
 
@@ -4439,6 +4498,10 @@ void GPU_HW::FlushRender()
     m_batch_ubo_dirty = false;
     g_gpu_device->UploadUniformBuffer(&m_batch_ubo_data, sizeof(m_batch_ubo_data));
   }
+
+  // Only opaque depth-tested batches write depth.
+  if (m_batch.use_depth_buffer && m_batch.transparency_mode == GPUTransparencyMode::Disabled)
+    m_depth_dirty_rect = m_depth_dirty_rect.runion(m_current_draw_rect);
 
   m_current_draw_rect = INVALID_RECT;
   m_current_uv_rect = INVALID_RECT;
@@ -4570,10 +4633,17 @@ void GPU_HW::UpdateDisplay(const GPUBackendUpdateDisplayCommand* cmd)
     }
 
     // Don't bother grabbing depth if postfx doesn't need it.
-    GPUTexture* depth_source =
-      (!cmd->display_24bit && m_pgxp_depth_buffer && m_internal_postfx && m_internal_postfx->NeedsDepthBuffer()) ?
-        (m_depth_was_copied ? m_vram_depth_copy_texture.get() : m_vram_depth_texture.get()) :
-        nullptr;
+    GPUTexture* depth_source = nullptr;
+    if (!cmd->display_24bit && m_pgxp_depth_buffer && m_internal_postfx && m_internal_postfx->NeedsDepthBuffer())
+    {
+      // Merge in whatever was drawn since the last clear.
+      m_display_depth_rect =
+        GSVector4i(cmd->display_vram_left, cmd->display_vram_top, cmd->display_vram_left + cmd->display_vram_width,
+                   cmd->display_vram_top + (cmd->display_vram_height << line_skip))
+          .mul32l(GSVector4i(resolution_scale));
+      CopyDepthBuffer(m_display_depth_rect, true);
+      depth_source = m_vram_depth_copy_texture.get();
+    }
 
     // Nothing left to extract if partial scanouts already covered every row.
     if (scaled_start_row < scaled_end_row)
@@ -4744,7 +4814,15 @@ void GPU_HW::UpdateDownsamplingLevels()
 void GPU_HW::OnBufferSwapped()
 {
   GL_INS("OnBufferSwapped()");
-  m_depth_was_copied = false;
+
+  // The previously displayed buffer is going to be drawn to next, so throw away its accumulated depth.
+  if (m_pgxp_depth_buffer && m_internal_postfx && m_internal_postfx->NeedsDepthBuffer() &&
+      !m_display_depth_rect.rempty())
+  {
+    FlushRender();
+    CopyDepthBuffer(m_display_depth_rect, false);
+    m_display_depth_rect = GSVector4i::zero();
+  }
 }
 
 void GPU_HW::DownsampleFramebuffer()

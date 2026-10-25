@@ -2,18 +2,20 @@
 // SPDX-License-Identifier: CC-BY-NC-ND-4.0
 
 #include "core/cheats_private.h"
+#include "core/settings.h"
 
 #include "common/error.h"
+#include "common/scoped_guard.h"
 
 #include <array>
 #include <gtest/gtest.h>
 
 namespace {
 
-static Cheats::CheatCode::Metadata MakeMetadata(Cheats::CodeType type,
-                                                Cheats::CodeActivation activation = Cheats::CodeActivation::EndFrame)
+static Cheats::CodeMetadata MakeMetadata(Cheats::CodeType type,
+                                         Cheats::CodeActivation activation = Cheats::CodeActivation::EndFrame)
 {
-  Cheats::CheatCode::Metadata metadata = {};
+  Cheats::CodeMetadata metadata = {};
   metadata.name = "Test Code";
   metadata.type = type;
   metadata.activation = activation;
@@ -64,6 +66,7 @@ TEST(Cheats, ParseCodeInfo)
   EXPECT_EQ(code.type, Cheats::CodeType::Assembly);
   EXPECT_EQ(code.activation, Cheats::CodeActivation::EndFrame);
   EXPECT_FALSE(code.from_database);
+  EXPECT_FALSE(code.force_pgxp_preserve_projection_precision);
   EXPECT_TRUE(code.disallow_for_achievements);
   ASSERT_EQ(code.options.size(), 2u);
   EXPECT_EQ(code.options[0], Cheats::CodeOption("Easy", 0x12));
@@ -87,6 +90,7 @@ TEST(Cheats, ParseAndFormatCodeInfoOverrides)
                                             "OverrideAspectRatio = 16:9\n"
                                             "OverrideCPUOverclock = 200\n"
                                             "DisableWidescreenRendering = true\n"
+                                            "ForcePGXPPreserveProjectionPrecision = true\n"
                                             "Enable8MBRAM = true\n"
                                             "DisallowForAchievements = true\n"
                                             "80010000 0001\n";
@@ -102,11 +106,40 @@ TEST(Cheats, ParseAndFormatCodeInfoOverrides)
   EXPECT_EQ(code.override_aspect_ratio.value(), (DisplayAspectRatio{16, 9}));
   EXPECT_EQ(code.override_cpu_overclock, 200u);
   EXPECT_TRUE(code.disable_widescreen_rendering);
+  EXPECT_TRUE(code.force_pgxp_preserve_projection_precision);
   EXPECT_TRUE(code.enable_8mb_ram);
   EXPECT_TRUE(code.disallow_for_achievements);
 
   // writing the code back out should preserve the overrides
   EXPECT_EQ(Cheats::FormatCodeForFile(code), input);
+}
+
+TEST(Cheats, PGXPPreserveProjectionPrecisionOverride)
+{
+  const Settings old_settings = g_settings;
+  const ScopedGuard restore_settings([&old_settings]() { g_settings = old_settings; });
+
+  for (const bool force_precision : {false, true})
+  {
+    Cheats::CodeMetadata metadata = MakeMetadata(Cheats::CodeType::Gameshark);
+    metadata.force_pgxp_preserve_projection_precision = force_precision;
+    Error error;
+    std::unique_ptr<Cheats::CheatCode> code = Cheats::ParseCode(std::move(metadata), "80010000 0001\n", &error);
+    ASSERT_NE(code, nullptr) << error.GetDescription();
+    EXPECT_EQ(code->HasAnySettingOverrides(), force_precision);
+
+    for (const bool pgxp_enabled : {false, true})
+    {
+      for (const bool preserve_precision : {false, true})
+      {
+        g_settings.gpu_pgxp_enable = pgxp_enabled;
+        g_settings.gpu_pgxp_preserve_proj_fp = preserve_precision;
+        code->ApplySettingOverrides();
+        EXPECT_EQ(g_settings.gpu_pgxp_preserve_proj_fp, force_precision || preserve_precision);
+        EXPECT_EQ(g_settings.gpu_pgxp_enable, pgxp_enabled);
+      }
+    }
+  }
 }
 
 TEST(Cheats, ParseCodeInfoLegacyIgnoreAndReplacement)
@@ -196,7 +229,7 @@ TEST(Cheats, ParseGamesharkCode)
 
 TEST(Cheats, ParseGamesharkOptions)
 {
-  Cheats::CheatCode::Metadata metadata = MakeMetadata(Cheats::CodeType::Gameshark);
+  Cheats::CodeMetadata metadata = MakeMetadata(Cheats::CodeType::Gameshark);
   metadata.has_options = true;
   Error error;
   std::unique_ptr<Cheats::CheatCode> base =
@@ -229,7 +262,7 @@ TEST(Cheats, ParseGamesharkCodeErrors)
 
 TEST(Cheats, ParseAssemblyCode)
 {
-  Cheats::CheatCode::Metadata metadata = MakeMetadata(Cheats::CodeType::Assembly);
+  Cheats::CodeMetadata metadata = MakeMetadata(Cheats::CodeType::Assembly);
   metadata.has_options = true;
   static constexpr std::string_view input = ".org 0x80010000\n"
                                             "start: addiu t0, zero, 1\n"

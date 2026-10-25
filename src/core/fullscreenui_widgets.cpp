@@ -63,6 +63,14 @@ struct OnScreenKeyboardKey;
 
 static constexpr float MENU_BACKGROUND_ANIMATION_TIME = 0.25f;
 static constexpr float SMOOTH_SCROLLING_SPEED = 3.5f;
+static constexpr float DRAG_SCROLL_THRESHOLD = 8.0f;     // layout units
+static constexpr float DRAG_SCROLL_MIN_VELOCITY = 50.0f; // layout units/sec
+static constexpr float DRAG_SCROLL_MAX_VELOCITY = 16000.0f;
+static constexpr float DRAG_SCROLL_FRICTION = 2.0f;
+static constexpr float DRAG_SCROLL_VELOCITY_HORIZON = 0.1f; // seconds of movement that the release velocity uses
+static constexpr float DRAG_SCROLL_STOP_TIME = 0.04f;       // seconds without movement that count as stopped
+static constexpr u32 DRAG_SCROLL_MAX_SAMPLES = 16;
+static constexpr float TOUCH_HIGHLIGHT_DELAY = 0.1f; // seconds
 static constexpr u32 LOADING_PROGRESS_SAMPLE_COUNT = 30;
 
 static constexpr int MENU_BUTTON_SPLIT_LAYER_BACKGROUND = 0;
@@ -112,6 +120,7 @@ static void SetMenuButtonSplitLayer(int layer);
 static void DrawMenuButtonFrameAt(const ImVec2& frame_min, const ImVec2& frame_max, u32 col, bool border);
 static void DrawMenuButtonFrameAtOnCurrentLayer(const ImVec2& frame_min, const ImVec2& frame_max, u32 col, bool border);
 static void PostDrawMenuButtonFrame();
+static bool ShouldHighlightHoveredItem(bool held);
 
 static void DrawBackgroundProgressDialogs(float& current_y);
 static void UpdateLoadingScreenProgress(s32 progress_min, s32 progress_max, s32 progress_value);
@@ -130,6 +139,10 @@ static void DrawToast(float& current_y);
 static void DrawLoadingScreen();
 
 static ImGuiID GetBackgroundProgressID(std::string_view str_id);
+
+static void UpdateDragScroll();
+static void AddDragScrollSample(double time, float position);
+static float GetDragScrollReleaseVelocity();
 
 static void UpdateOnScreenKeyboardInput();
 static void ActivateOnScreenKeyboardKey(const OnScreenKeyboardKey& key);
@@ -497,6 +510,13 @@ struct WidgetsState
   bool blur_valid = false;
   bool header_background_valid = false;
 
+  bool loading_screen_open = false;
+
+  bool drag_scroll_active = false;
+  ImGuiID drag_scroll_window_id = 0;
+  float drag_scroll_position = 0.0f;
+  float drag_scroll_velocity = 0.0f;
+
   ImVec2 horizontal_menu_button_size = {};
 
   LRUCache<std::string, GPUTexture*, GPUDevice::PooledTextureDeleter> texture_cache{128, true};
@@ -548,6 +568,9 @@ struct WidgetsState
   ImAnimatedVec2 menu_button_frame_min_animated;
   ImAnimatedVec2 menu_button_frame_max_animated;
 
+  ImGuiID toggle_button_animation_id = 0;
+  double toggle_button_animation_start_time = 0.0;
+
   // TODO: Make these dynamic rather than global state.
   OnScreenKeyboardState on_screen_keyboard;
   ChoiceDialog choice_dialog;
@@ -566,6 +589,15 @@ struct WidgetsState
 
   std::vector<BackgroundProgressDialogData> background_progress_dialogs;
 
+  // pointer positions since it was pressed, newest at (drag_scroll_sample_count - 1) % DRAG_SCROLL_MAX_SAMPLES
+  struct DragScrollSample
+  {
+    double time;
+    float position;
+  };
+  std::array<DragScrollSample, DRAG_SCROLL_MAX_SAMPLES> drag_scroll_samples = {};
+  u32 drag_scroll_sample_count = 0;
+
   std::string loading_screen_image;
   std::string loading_screen_title;
   std::string loading_screen_caption;
@@ -575,7 +607,6 @@ struct WidgetsState
 
   u32 loading_screen_sample_index = 0;
   u32 loading_screen_valid_samples = 0;
-  bool loading_screen_open = false;
 
   std::array<std::pair<Timer::Value, s32>, LOADING_PROGRESS_SAMPLE_COUNT> loading_screen_samples;
 
@@ -653,6 +684,13 @@ void FullscreenUI::ShutdownWidgets()
     s_state.choice_dialog.ClearState();
     s_state.dropdown_dialog.ClearState();
     s_state.file_selector_dialog.ClearState();
+    s_state.directory_selector_dialog.ClearState();
+    s_state.fixed_popup_dialog.ClearState();
+    s_state.progress_dialog.ClearState();
+    s_state.toggle_button_animation_id = 0;
+    s_state.toggle_button_animation_start_time = 0.0;
+    s_state.drag_scroll_active = false;
+    s_state.drag_scroll_window_id = 0;
   }
 
   UIStyle.Font = nullptr;
@@ -1896,9 +1934,194 @@ ImRect FullscreenUI::FitImage(const ImVec2& fit_size, const ImVec2& image_size)
   return rect;
 }
 
+void FullscreenUI::UpdateDragScroll()
+{
+  // Dragging/swiping with the pointer scrolls the window underneath, and cancels any pending button press.
+  // This runs before any widgets, so that a press can be cancelled on the same frame the pointer is released.
+  ImGuiContext& g = *GImGui;
+  const ImGuiIO& io = g.IO;
+  const ImGuiID drag_id = ImHashStr("##drag_scroll");
+
+  // track the pointer from its press, so a flick's speed includes the movement before it started dragging
+  if (io.MouseClicked[0])
+    s_state.drag_scroll_sample_count = 0;
+  if ((io.MouseDown[0] || io.MouseReleased[0]) && (io.MouseClicked[0] || io.MouseDelta.y != 0.0f))
+    AddDragScrollSample(g.Time, io.MousePos.y);
+
+  // pressing while flinging catches it, without pressing what's under the pointer
+  ImGuiWindow* fling_window = nullptr;
+  if (!s_state.drag_scroll_active && s_state.drag_scroll_window_id != 0 && io.MouseClicked[0] && g.HoveredWindow)
+  {
+    fling_window = ImGui::FindWindowByID(s_state.drag_scroll_window_id);
+    if (fling_window && !ImGui::IsWindowChildOf(g.HoveredWindow, fling_window, false))
+      fling_window = nullptr;
+  }
+
+  if (fling_window)
+  {
+    ImGui::SetActiveID(drag_id, g.HoveredWindow);
+    g.MovingWindow = nullptr;
+    s_state.drag_scroll_active = true;
+    s_state.drag_scroll_position = fling_window->Scroll.y;
+    s_state.drag_scroll_velocity = 0.0f;
+  }
+  else if (!s_state.drag_scroll_active)
+  {
+    // NewFrame() has already cleared a press on empty space if the pointer was released this frame
+    ImGuiWindow* active_window = (g.ActiveId != 0) ? g.ActiveIdWindow : nullptr;
+    ImGuiID active_id = g.ActiveId;
+    if (!active_window && io.MouseReleased[0] && g.HoveredWindow && g.ActiveIdPreviousFrame == g.HoveredWindow->MoveId)
+    {
+      active_window = g.HoveredWindow;
+      active_id = g.ActiveIdPreviousFrame;
+    }
+
+    // only take over empty space and buttons, not sliders/text inputs/scrollbars
+    const float threshold = LayoutScale(DRAG_SCROLL_THRESHOLD);
+    if (active_window && (io.MouseDown[0] || io.MouseReleased[0]) &&
+        ImLengthSqr(io.MousePos - io.MouseClickedPos[0]) > (threshold * threshold) &&
+        (active_id == active_window->MoveId ||
+         (g.ActiveIdUsingNavDirMask == 0 && !g.ActiveIdUsingAllKeyboardKeys && !g.ScrollbarHeld)))
+    {
+      ImGuiWindow* window = active_window;
+      while ((window->Flags & ImGuiWindowFlags_ChildWindow) &&
+             (window->ScrollMax.y == 0.0f || (window->Flags & ImGuiWindowFlags_NoScrollWithMouse)))
+      {
+        window = window->ParentWindow;
+      }
+      if (window->ScrollMax.y == 0.0f ||
+          (window->Flags & (ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoMouseInputs)))
+      {
+        window = nullptr;
+      }
+
+      ImGui::SetActiveID(drag_id, active_window);
+
+      // our windows are positioned every frame, so cancel any "move" from clicking on empty space
+      g.MovingWindow = nullptr;
+
+      s_state.drag_scroll_active = true;
+      s_state.drag_scroll_window_id = window ? window->ID : 0;
+      s_state.drag_scroll_position = window ? window->Scroll.y : 0.0f;
+      s_state.drag_scroll_velocity = 0.0f;
+    }
+    else if (io.MouseDown[0] || io.MouseWheel != 0.0f || g.NavMoveDir != ImGuiDir_None || g.NavActivateId != 0)
+    {
+      // stop inertia on any other input
+      s_state.drag_scroll_window_id = 0;
+    }
+  }
+  else if (g.ActiveId != drag_id)
+  {
+    // something else took over, e.g. a popup opening
+    s_state.drag_scroll_active = false;
+    s_state.drag_scroll_window_id = 0;
+  }
+
+  // stop if the window went away, or something else changed the scroll position, e.g. nav or a page change
+  ImGuiWindow* window =
+    (s_state.drag_scroll_window_id != 0) ? ImGui::FindWindowByID(s_state.drag_scroll_window_id) : nullptr;
+  if (window && (!window->WasActive || (!s_state.drag_scroll_active &&
+                                        window->ScrollExpected.y != ImRoundPositive64(s_state.drag_scroll_position))))
+  {
+    window = nullptr;
+    s_state.drag_scroll_window_id = 0;
+  }
+
+  if (window)
+  {
+    if (s_state.drag_scroll_active)
+    {
+      // a touch jumps from where the last one ended, so the press that catches a fling doesn't scroll
+      if (!io.MouseClicked[0])
+        s_state.drag_scroll_position -= io.MouseDelta.y;
+      if (!io.MouseDown[0])
+        s_state.drag_scroll_velocity = GetDragScrollReleaseVelocity();
+    }
+    else
+    {
+      s_state.drag_scroll_position += s_state.drag_scroll_velocity * io.DeltaTime;
+      s_state.drag_scroll_velocity *= std::exp(-DRAG_SCROLL_FRICTION * io.DeltaTime);
+    }
+
+    // bypass smooth scrolling, we want to track the pointer exactly
+    s_state.drag_scroll_position = ImClamp(s_state.drag_scroll_position, 0.0f, window->ScrollMax.y);
+    window->Scroll.y = window->ScrollExpected.y = ImRoundPositive64(s_state.drag_scroll_position);
+  }
+
+  if (s_state.drag_scroll_active)
+  {
+    if (io.MouseDown[0])
+    {
+      ImGui::KeepAliveID(drag_id);
+    }
+    else
+    {
+      ImGui::ClearActiveID();
+      s_state.drag_scroll_active = false;
+    }
+  }
+
+  if (window && !s_state.drag_scroll_active &&
+      (std::abs(s_state.drag_scroll_velocity) < LayoutScale(DRAG_SCROLL_MIN_VELOCITY) ||
+       s_state.drag_scroll_position == 0.0f || s_state.drag_scroll_position == window->ScrollMax.y))
+  {
+    s_state.drag_scroll_window_id = 0;
+  }
+}
+
+void FullscreenUI::AddDragScrollSample(double time, float position)
+{
+  s_state.drag_scroll_samples[s_state.drag_scroll_sample_count % DRAG_SCROLL_MAX_SAMPLES] = {time, position};
+  s_state.drag_scroll_sample_count++;
+}
+
+float FullscreenUI::GetDragScrollReleaseVelocity()
+{
+  // Like Android's VelocityTracker, this fits a line to the pointer's recent positions, which evens out frames that
+  // received more or fewer pointer updates than others. A pointer that stopped before it was released doesn't fling.
+  const u32 count = std::min(s_state.drag_scroll_sample_count, DRAG_SCROLL_MAX_SAMPLES);
+  if (count < 2)
+    return 0.0f;
+
+  const ImGuiContext& g = *GImGui;
+  const WidgetsState::DragScrollSample& newest =
+    s_state.drag_scroll_samples[(s_state.drag_scroll_sample_count - 1) % DRAG_SCROLL_MAX_SAMPLES];
+  if ((g.Time - newest.time) > (DRAG_SCROLL_STOP_TIME + g.IO.DeltaTime))
+    return 0.0f;
+
+  // relative to the newest sample, to keep precision
+  float n = 0.0f, sum_t = 0.0f, sum_p = 0.0f, sum_tt = 0.0f, sum_tp = 0.0f;
+  for (u32 i = 0; i < count; i++)
+  {
+    const WidgetsState::DragScrollSample& sample =
+      s_state.drag_scroll_samples[(s_state.drag_scroll_sample_count - 1 - i) % DRAG_SCROLL_MAX_SAMPLES];
+    const float t = static_cast<float>(sample.time - newest.time);
+    if (t < -DRAG_SCROLL_VELOCITY_HORIZON)
+      break;
+
+    const float p = sample.position - newest.position;
+    n += 1.0f;
+    sum_t += t;
+    sum_p += p;
+    sum_tt += t * t;
+    sum_tp += t * p;
+  }
+
+  const float denominator = n * sum_tt - sum_t * sum_t;
+  if (denominator <= 0.0f)
+    return 0.0f;
+
+  // the content moves the opposite way to the pointer
+  const float velocity = -(n * sum_tp - sum_t * sum_p) / denominator;
+  const float max_velocity = LayoutScale(DRAG_SCROLL_MAX_VELOCITY);
+  return ImClamp(velocity, -max_velocity, max_velocity);
+}
+
 void FullscreenUI::BeginLayout()
 {
   UpdateOnScreenKeyboardInput();
+  UpdateDragScroll();
 
   // we evict from the texture cache at the start of the frame, in case we go over mid-frame,
   // we need to keep all those textures alive until the end of the frame
@@ -2174,7 +2397,7 @@ void FullscreenUI::ForceKeyNavEnabled()
                        g.ActiveIdSource;
   g.NavInputSource = (g.NavInputSource == ImGuiInputSource_Mouse || g.NavInputSource == ImGuiInputSource_None) ?
                        ImGuiInputSource_Keyboard :
-                       g.ActiveIdSource;
+                       g.NavInputSource;
   g.NavCursorVisible = true;
   g.NavHighlightItemUnderNav = true;
 }
@@ -2409,7 +2632,7 @@ bool FullscreenUI::BeginBlurWindow(const char* name, bool* p_open /* = nullptr *
   const ImVec4& background = GImGui->Style.Colors[ImGuiCol_WindowBg];
   const bool actually_blur = (blur && UIStyle.BlurMenuBackground && CanBlurBackground());
   const bool has_background = (background.w != 0.0f);
-  const bool res = ImGui::Begin(name, nullptr,
+  const bool res = ImGui::Begin(name, p_open,
                                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                                   ImGuiWindowFlags_NoBringToFrontOnFocus |
                                   ((!has_background || actually_blur) ? ImGuiWindowFlags_NoBackground : 0) | flags);
@@ -2700,7 +2923,7 @@ bool FullscreenUI::MenuButtonFrame(std::string_view str_id, float height, bool e
 
   *item_bb = ImRect(pos + style.FramePadding, pos + style.FramePadding + ImVec2(avail_width, height));
   const ImRect frame_bb = ImRect(pos, pos + style.FramePadding * 2.0f + ImVec2(avail_width, height));
-  return MenuButtonFrame(str_id, enabled, frame_bb, visible, hovered, 0);
+  return MenuButtonFrame(str_id, enabled, frame_bb, visible, hovered, flags);
 }
 
 void FullscreenUI::DrawWindowTitle(std::string_view title)
@@ -2778,12 +3001,23 @@ bool FullscreenUI::MenuButtonFrame(std::string_view str_id, bool enabled, const 
   return pressed;
 }
 
+bool FullscreenUI::ShouldHighlightHoveredItem(bool held)
+{
+  // Like Android's tap timeout, a touch only highlights once it's held without scrolling.
+  const ImGuiIO& io = ImGui::GetIO();
+  return (io.MouseSource != ImGuiMouseSource_TouchScreen || GImGui->NavCursorVisible ||
+          (held && io.MouseDownDuration[ImGuiMouseButton_Left] >= TOUCH_HIGHLIGHT_DELAY));
+}
+
 void FullscreenUI::DrawMenuButtonFrame(const ImVec2& p_min, const ImVec2& p_max, bool held)
 {
+  if (!ShouldHighlightHoveredItem(held))
+    return;
+
+  const ImGuiIO& io = ImGui::GetIO();
   ImVec2 frame_min = p_min;
   ImVec2 frame_max = p_max;
 
-  const ImGuiIO& io = ImGui::GetIO();
   if (UIStyle.Animations && io.NavVisible && GImGui->CurrentWindow == GImGui->NavWindow)
   {
     if (!s_state.had_hovered_menu_item || io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)
@@ -3787,7 +4021,7 @@ bool FullscreenUI::FloatingButton(std::string_view text, float x, float y, float
   {
     bool held;
     pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-    hovered |= (GImGui->NavInitResult.ID == id);
+    hovered = ((hovered && ShouldHighlightHoveredItem(held)) || GImGui->NavInitResult.ID == id);
     if (hovered)
     {
       const ImU32 col = ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
@@ -3815,7 +4049,7 @@ bool FullscreenUI::ToggleButton(std::string_view title, std::string_view summary
   const MenuButtonBounds bb(title, ImVec2(toggle_size.x, toggle_size.y), summary);
 
   bool visible, hovered;
-  bool pressed = MenuButtonFrame(title, enabled, bb.frame_bb, &visible, &hovered, ImGuiButtonFlags_PressedOnClick);
+  bool pressed = MenuButtonFrame(title, enabled, bb.frame_bb, &visible, &hovered, 0);
   if (!visible)
     return false;
 
@@ -3832,17 +4066,21 @@ bool FullscreenUI::ToggleButton(std::string_view title, std::string_view summary
                               ImVec2(0.0f, 0.0f), bb.summary_size.x, &bb.summary_bb);
   }
 
+  const ImGuiID id = ImGui::GetCurrentWindow()->GetID(IMSTR_START_END(title));
   if (pressed)
+  {
     *v = !*v;
+    s_state.toggle_button_animation_id = id;
+    s_state.toggle_button_animation_start_time = ImGui::GetTime();
+  }
 
   float t = *v ? 1.0f : 0.0f;
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  ImGuiContext& g = *GImGui;
-  if (UIStyle.Animations &&
-      g.LastActiveId == g.CurrentWindow->GetID(IMSTR_START_END(title))) // && g.LastActiveIdTimer < ANIM_SPEED)
+  if (UIStyle.Animations && s_state.toggle_button_animation_id == id)
   {
     static constexpr const float ANIM_SPEED = 0.08f;
-    float t_anim = ImSaturate(g.LastActiveIdTimer / ANIM_SPEED);
+    float t_anim =
+      ImSaturate(static_cast<float>(ImGui::GetTime() - s_state.toggle_button_animation_start_time) / ANIM_SPEED);
     t = *v ? (t_anim) : (1.0f - t_anim);
   }
 
@@ -3878,7 +4116,7 @@ bool FullscreenUI::ThreeWayToggleButton(std::string_view title, std::string_view
   const MenuButtonBounds bb(title, ImVec2(toggle_size.x, toggle_size.y), summary);
 
   bool visible, hovered;
-  bool pressed = MenuButtonFrame(title, enabled, bb.frame_bb, &visible, &hovered, ImGuiButtonFlags_PressedOnClick);
+  bool pressed = MenuButtonFrame(title, enabled, bb.frame_bb, &visible, &hovered, 0);
   if (!visible)
     return false;
 
@@ -3895,6 +4133,7 @@ bool FullscreenUI::ThreeWayToggleButton(std::string_view title, std::string_view
                               ImVec2(0.0f, 0.0f), bb.summary_size.x, &bb.summary_bb);
   }
 
+  const ImGuiID id = ImGui::GetCurrentWindow()->GetID(IMSTR_START_END(title));
   if (pressed)
   {
     if (v->has_value() && v->value())
@@ -3903,15 +4142,18 @@ bool FullscreenUI::ThreeWayToggleButton(std::string_view title, std::string_view
       v->reset();
     else
       *v = true;
+
+    s_state.toggle_button_animation_id = id;
+    s_state.toggle_button_animation_start_time = ImGui::GetTime();
   }
 
   float t = v->has_value() ? (v->value() ? 1.0f : 0.0f) : 0.5f;
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  ImGuiContext& g = *GImGui;
   float ANIM_SPEED = 0.08f;
-  if (g.LastActiveId == g.CurrentWindow->GetID(IMSTR_START_END(title))) // && g.LastActiveIdTimer < ANIM_SPEED)
+  if (s_state.toggle_button_animation_id == id)
   {
-    float t_anim = ImSaturate(g.LastActiveIdTimer / ANIM_SPEED);
+    float t_anim =
+      ImSaturate(static_cast<float>(ImGui::GetTime() - s_state.toggle_button_animation_start_time) / ANIM_SPEED);
     t = (v->has_value() ? (v->value() ? std::min(t_anim + 0.5f, 1.0f) : (1.0f - t_anim)) : (t_anim * 0.5f));
   }
 
@@ -4401,7 +4643,7 @@ bool FullscreenUI::NavTab(std::string_view title, bool is_active, bool enabled, 
   if (enabled)
   {
     pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held, ImGuiButtonFlags_NoNavFocus);
-    hovered = (hovered || GImGui->NavInitResult.ID == id);
+    hovered = ((hovered && ShouldHighlightHoveredItem(held)) || GImGui->NavInitResult.ID == id);
   }
   else
   {
@@ -4559,7 +4801,7 @@ bool FullscreenUI::FloatingNavBarIcon(std::string_view title, ImTextureID image,
   if (enabled)
   {
     pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held, ImGuiButtonFlags_NoNavFocus);
-    hovered = (hovered || GImGui->NavInitResult.ID == id);
+    hovered = ((hovered && ShouldHighlightHoveredItem(held)) || GImGui->NavInitResult.ID == id);
     if (hovered || is_active)
     {
       // Intentionally no animation here.
@@ -4622,8 +4864,12 @@ bool FullscreenUI::BeginHorizontalMenu(const char* name, const ImVec2& position,
                       LayoutScale(UIStyle.MenuBorders ? LAYOUT_FRAME_BORDER_SIZE : 0.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(item_spacing, 0.0f));
 
+  // EndHorizontalMenu() is always called, so the split must be started even when hidden.
   if (!BeginFullscreenWindow(position, size, name, bg_color, 0.0f, ImVec2()))
+  {
+    BeginMenuButtonDrawSplit();
     return false;
+  }
 
   ImGui::SetCursorPos(ImFloor(ImVec2((size.x - menu_width) * 0.5f, (size.y - menu_height) * 0.5f)));
 
@@ -4763,7 +5009,11 @@ bool FullscreenUI::BeginSplitWindowSidebar(float sidebar_width /*= 0.2f*/)
   const float sidebar_width_px = ImFloor(ImGui::GetCurrentWindowRead()->WorkRect.GetWidth() * sidebar_width);
   if (!ImGui::BeginChild("sidebar", ImVec2(sidebar_width_px, 0.0f),
                          ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NoNavCancel))
+  {
+    // EndSplitWindowSidebar() is always called, and pops the menu button state.
+    BeginMenuButtons();
     return false;
+  }
 
   if (ImGui::IsWindowFocused())
   {
@@ -5722,19 +5972,13 @@ void FullscreenUI::ChoiceDialog::Draw()
   if (choice >= 0)
   {
     // immediately close dialog when selecting, save the callback doing it. have to take a copy in this instance,
-    // because the callback may open another dialog, and we don't want to close that one.
+    // because the callback may open another dialog, and we don't want to close that one. checkable dialogs stay
+    // open, so the callback has to be kept for the next toggle.
+    const auto selected = m_options[choice];
+    const ChoiceDialogCallback callback = m_checkable ? m_callback : std::exchange(m_callback, ChoiceDialogCallback());
     if (!m_checkable)
-    {
-      const auto selected = m_options[choice];
-      const ChoiceDialogCallback callback = std::exchange(m_callback, ChoiceDialogCallback());
       StartClose();
-      callback(choice, selected.first, selected.second);
-    }
-    else
-    {
-      const auto& option = m_options[choice];
-      m_callback(choice, option.first, option.second);
-    }
+    callback(choice, selected.first, selected.second);
   }
 }
 
@@ -5798,8 +6042,8 @@ void FullscreenUI::DropdownDialog::Open(std::string_view hidden_title, DropdownD
   const ImVec2 display_size = ImGui::GetIO().DisplaySize;
   const float content_width = max_label_width + (item_x_padding * 2.0f) + (box_padding_x * 2.0f);
   const float max_width = display_size.x * 0.5f;
-  const float popup_width = std::clamp(std::max(content_width, LayoutScale(min_width)),
-                                       m_value_bb.GetWidth() + (box_padding_x * 2.0f), max_width);
+  const float popup_width = std::min(
+    std::max({content_width, LayoutScale(min_width), m_value_bb.GetWidth() + (box_padding_x * 2.0f)}), max_width);
 
   const float item_spacing = LayoutScale(LAYOUT_MENU_BUTTON_SPACING);
   const float item_height = MenuButtonBounds::GetSingleLineHeight() + item_spacing;
@@ -6538,17 +6782,18 @@ std::unique_ptr<ProgressCallbackWithPrompt> FullscreenUI::OpenModalProgressDialo
 bool FullscreenUI::AreAnyWidgetsDialogOpen()
 {
   return (s_state.on_screen_keyboard.open || s_state.choice_dialog.IsOpen() || s_state.dropdown_dialog.IsOpen() ||
-          s_state.file_selector_dialog.IsOpen() || s_state.input_string_dialog.IsOpen() ||
-          s_state.fixed_popup_dialog.IsOpen() || s_state.progress_dialog.IsOpen() || s_state.message_dialog.IsOpen());
+          s_state.file_selector_dialog.IsOpen() || s_state.directory_selector_dialog.IsOpen() ||
+          s_state.input_string_dialog.IsOpen() || s_state.fixed_popup_dialog.IsOpen() ||
+          s_state.progress_dialog.IsOpen() || s_state.message_dialog.IsOpen());
 }
 
 bool FullscreenUI::AreAnyWidgetsDialogInteractable()
 {
   return ((s_state.on_screen_keyboard.open && !s_state.on_screen_keyboard.closing) ||
           s_state.choice_dialog.IsInteractable() || s_state.dropdown_dialog.IsInteractable() ||
-          s_state.file_selector_dialog.IsInteractable() || s_state.input_string_dialog.IsInteractable() ||
-          s_state.fixed_popup_dialog.IsInteractable() || s_state.progress_dialog.IsInteractable() ||
-          s_state.message_dialog.IsInteractable());
+          s_state.file_selector_dialog.IsInteractable() || s_state.directory_selector_dialog.IsInteractable() ||
+          s_state.input_string_dialog.IsInteractable() || s_state.fixed_popup_dialog.IsInteractable() ||
+          s_state.progress_dialog.IsInteractable() || s_state.message_dialog.IsInteractable());
 }
 
 ImGuiID FullscreenUI::GetBackgroundProgressID(std::string_view str_id)
@@ -6685,7 +6930,7 @@ void FullscreenUI::DrawBackgroundProgressDialogs(float& current_y)
       // indeterminate, so draw a scrolling bar
       const float bar_width = LayoutScale(30.0f);
       const float fraction = static_cast<float>(std::fmod(ImGui::GetTime(), 2.0) * 0.5);
-      const ImVec2 bar_start(pos.x + ImLerp(0.0f, box_end.x, fraction) - bar_width, pos.y);
+      const ImVec2 bar_start(pos.x + ImLerp(0.0f, box_end.x - pos.x + bar_width, fraction) - bar_width, pos.y);
       const ImVec2 bar_end(std::min(bar_start.x + bar_width, box_end.x), pos.y + LayoutScale(25.0f));
       dl->AddRectFilled(ImClamp(bar_start, pos, box_end), ImClamp(bar_end, pos, box_end),
                         ImGui::GetColorU32(UIStyle.SecondaryColor));
@@ -7023,7 +7268,8 @@ void FullscreenUI::DrawLoadingScreen(ImDrawList* dl, std::string_view image, std
       // indeterminate, so draw a scrolling bar
       const float bar_width = LayoutScale(30.0f);
       const float fraction = static_cast<float>(std::fmod(ImGui::GetTime(), 2.0) * 0.5);
-      const ImVec2 bar_start = ImVec2(box_start.x + ImLerp(0.0f, box_end.x, fraction) - bar_width, box_start.y);
+      const ImVec2 bar_start =
+        ImVec2(box_start.x + ImLerp(0.0f, progress_width + bar_width, fraction) - bar_width, box_start.y);
       const ImVec2 bar_end = ImVec2(std::min(bar_start.x + bar_width, box_end.x), box_end.y);
       if ((bar_end.x - bar_start.x) > LayoutScale(1.0f))
       {

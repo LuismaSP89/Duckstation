@@ -50,6 +50,8 @@ static constexpr u32 MAX_SKIPPED_PRESENT_COUNT = 50;
 static constexpr double MIN_VBLANK_WAIT_MS = 0.5;
 static constexpr double PRESENT_GAP_BASELINE_RISE_MS = 0.25;
 static constexpr double ON_TIME_PRESENT_TOLERANCE_MS = 0.5;
+static constexpr double MIN_BACKLOG_PROBE_INTERVAL = 1.0; // Seconds between probes, doubled for each failure.
+static constexpr double MAX_BACKLOG_PROBE_INTERVAL = 5.0;
 
 namespace VideoPresenter {
 
@@ -77,6 +79,9 @@ static bool DeinterlaceSetTargetSize(u32 width, u32 height, bool preserve);
 static void DestroyDeinterlaceTextures();
 
 static void UpdatePostProcessingSettings(bool force_load);
+
+/// Returns true if the previous present was displayed late, and blocked past the specified present time.
+static bool IsPresentLate(u64 present_time);
 
 /// Returns true if the image path or alpha blend option has changed.
 static bool LoadOverlaySettings();
@@ -108,6 +113,9 @@ struct Locals
   u64 next_throttle_time = 0;
   u64 last_present_gap = 0;
   u64 present_gap_baseline = 0;
+  u64 present_gap_floor = std::numeric_limits<u64>::max();
+  u64 next_backlog_probe_time = 0;
+  double backlog_probe_interval = MIN_BACKLOG_PROBE_INTERVAL;
   std::atomic<u64> last_vblank_time{0};
   std::atomic<u32> missed_vblank_count{0};
   bool last_present_on_time = false;
@@ -1449,28 +1457,14 @@ bool VideoPresenter::ShouldPresentFrame(u64 present_time)
     // If the previous frame was displayed a vblank later than usual, and its present blocked past this frame's
     // scheduled time, this frame will also be displayed late. Drop it, otherwise every following frame is too.
     if (present_time != 0 && s_locals.skipped_present_count == 0 &&
-        g_gpu_device->GetMainSwapChain()->IsVSyncModeBlocking() &&
-        s_locals.last_vblank_time.load(std::memory_order_relaxed) > present_time &&
-        s_locals.last_present_gap > s_locals.present_gap_baseline)
+        g_gpu_device->GetMainSwapChain()->IsVSyncModeBlocking() && IsPresentLate(present_time)) [[unlikely]]
     {
-      const WindowInfo& swap_chain_wi = g_gpu_device->GetMainSwapChain()->GetWindowInfo();
-      const float refresh_rate =
-        (swap_chain_wi.surface_refresh_rate > 0.0f) ? swap_chain_wi.surface_refresh_rate : 60.0f;
-      if ((s_locals.last_present_gap - s_locals.present_gap_baseline) >
-          Timer::ConvertSecondsToValue(0.5 / static_cast<double>(refresh_rate))) [[unlikely]]
-      {
-        DEV_LOG("Dropping late frame, previous frame displayed {:.2f} ms after scheduled time (expected {:.2f} ms)",
-                Timer::ConvertValueToMilliseconds(s_locals.last_present_gap),
-                Timer::ConvertValueToMilliseconds(s_locals.present_gap_baseline));
-        s_locals.last_present_gap = s_locals.present_gap_baseline;
-        s_locals.skipped_present_count++;
-
-        // If the previous frame was presented on time, the throttler's margin wasn't enough to display it.
-        if (s_locals.last_present_on_time)
-          s_locals.missed_vblank_count.fetch_add(1, std::memory_order_release);
-
-        return false;
-      }
+      DEV_LOG("Dropping late frame, previous frame displayed {:.2f} ms after scheduled time (expected {:.2f} ms)",
+              Timer::ConvertValueToMilliseconds(s_locals.last_present_gap),
+              Timer::ConvertValueToMilliseconds(s_locals.present_gap_baseline));
+      s_locals.last_present_gap = s_locals.present_gap_baseline;
+      s_locals.skipped_present_count++;
+      return false;
     }
 
     s_locals.skipped_present_count = 0;
@@ -1491,6 +1485,49 @@ bool VideoPresenter::ShouldPresentFrame(u64 present_time)
 
   s_locals.skipped_present_count++;
   return false;
+}
+
+bool VideoPresenter::IsPresentLate(u64 present_time)
+{
+  // The previous present was displayed before this one was due, so there's no backlog.
+  if (s_locals.last_vblank_time.load(std::memory_order_relaxed) <= present_time)
+  {
+    s_locals.backlog_probe_interval = MIN_BACKLOG_PROBE_INTERVAL;
+    return false;
+  }
+
+  const WindowInfo& swap_chain_wi = g_gpu_device->GetMainSwapChain()->GetWindowInfo();
+  const float refresh_rate = (swap_chain_wi.surface_refresh_rate > 0.0f) ? swap_chain_wi.surface_refresh_rate : 60.0f;
+  const u64 half_refresh = Timer::ConvertSecondsToValue(0.5 / static_cast<double>(refresh_rate));
+  if (s_locals.last_present_gap <= s_locals.present_gap_baseline ||
+      (s_locals.last_present_gap - s_locals.present_gap_baseline) <= half_refresh)
+  {
+    // The baseline can't tell a swap chain that releases a vblank late from presents that are a vblank behind, since
+    // each one waits for the previous. So after a long enough hitch, e.g. a system overlay, it rises until the lag
+    // looks normal. If it's well above the lowest gap we've seen, occasionally skip a present anyway. If it was lag,
+    // the next present is on time, and the baseline drops back down with its gap. Otherwise, probe less often.
+    if (s_locals.present_gap_baseline <= (s_locals.present_gap_floor + half_refresh))
+    {
+      s_locals.backlog_probe_interval = MIN_BACKLOG_PROBE_INTERVAL;
+      return false;
+    }
+
+    const u64 current_time = Timer::GetCurrentValue();
+    if (current_time < s_locals.next_backlog_probe_time)
+      return false;
+
+    DEV_LOG("Probing for presentation backlog, gap baseline {:.2f} ms, lowest {:.2f} ms",
+            Timer::ConvertValueToMilliseconds(s_locals.present_gap_baseline),
+            Timer::ConvertValueToMilliseconds(s_locals.present_gap_floor));
+    s_locals.next_backlog_probe_time = current_time + Timer::ConvertSecondsToValue(s_locals.backlog_probe_interval);
+    s_locals.backlog_probe_interval = std::min(s_locals.backlog_probe_interval * 2.0, MAX_BACKLOG_PROBE_INTERVAL);
+  }
+
+  // If the previous frame was presented on time, the throttler's margin wasn't enough to display it.
+  if (s_locals.last_present_on_time)
+    s_locals.missed_vblank_count.fetch_add(1, std::memory_order_release);
+
+  return true;
 }
 
 void VideoPresenter::SetPresentSkipMode(PresentSkipMode mode)
@@ -1670,6 +1707,7 @@ bool VideoPresenter::PresentFrame(GPUBackend* backend, u64 present_time)
       {
         const u64 gap = (current_time > present_time) ? (current_time - present_time) : 0;
         s_locals.last_present_gap = gap;
+        s_locals.present_gap_floor = std::min(s_locals.present_gap_floor, gap);
         s_locals.last_present_on_time =
           (present_start_time <= (present_time + Timer::ConvertMillisecondsToValue(ON_TIME_PRESENT_TOLERANCE_MS)));
         s_locals.present_gap_baseline =

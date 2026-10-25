@@ -189,6 +189,7 @@ private:
   void PostLoadState();
   void UpdateVRAMReadTexture(bool drawn, bool written);
   void UpdateDepthBufferFromMaskBit();
+  void CopyDepthBuffer(const GSVector4i rect, bool merge);
   void CopyAndClearDepthBuffer(bool only_drawing_area);
   void ClearDepthBuffer(bool only_drawing_area);
   void SetViewport();
@@ -326,7 +327,6 @@ private:
 
   bool m_batch_ubo_dirty = true;
   bool m_drawing_area_changed = true;
-  bool m_depth_was_copied = false;
   BatchConfig m_batch = {};
 
   // Changed state
@@ -340,6 +340,8 @@ private:
   GSVector4i m_vram_dirty_write_rect = INVALID_RECT; // TODO: Don't use in TC mode, should be kept at zero.
   GSVector4i m_current_uv_rect = INVALID_RECT;
   GSVector4i m_current_draw_rect = INVALID_RECT;
+  GSVector4i m_depth_dirty_rect = INVALID_RECT; // Bounding box of depth written since the last clear.
+  GSVector4i m_display_depth_rect = GSVector4i::zero();
   alignas(8) s32 m_current_texture_page_offset[2] = {};
 
   union
@@ -374,7 +376,7 @@ private:
   std::unique_ptr<GPUTexture> m_vram_extract_depth_texture;
   std::unique_ptr<GPUPipeline> m_display_24bit_filter_pipeline;
   std::unique_ptr<GPUTexture> m_display_filter_texture;
-  std::unique_ptr<GPUPipeline> m_copy_depth_pipeline;
+  std::array<std::unique_ptr<GPUPipeline>, 2> m_copy_depth_pipelines; // [merge]
   std::unique_ptr<GPUPipeline> m_clear_depth_pipeline;
   std::unique_ptr<PostProcessing::Chain> m_internal_postfx;
 

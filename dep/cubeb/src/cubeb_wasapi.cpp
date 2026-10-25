@@ -512,6 +512,9 @@ struct cubeb_stream {
 
   /* True if the stream is active, false if inactive. */
   bool active = false;
+  /* Set by the render loop when a reconfigure was requested while the stream
+     was inactive, so that the next stream start picks up the new device. */
+  bool reconfigure_pending = false;
 };
 
 class monitor_device_notifications {
@@ -1568,10 +1571,10 @@ static unsigned int __stdcall wasapi_stream_render_loop(LPVOID stream)
       auto_lock lock(stm->stream_reset_lock);
       if (!stm->active) {
         /* Avoid reconfiguring, stream start will handle it. */
-        LOG("Stream is not active, ignoring reconfigure.");
+        LOG("Stream is not active, deferring reconfigure.");
+        stm->reconfigure_pending = true;
         continue;
       }
-      XASSERT(stm->output_client || stm->input_client);
       LOG("Reconfiguring the stream");
       /* Close the stream */
       if (stm->output_client) {
@@ -1588,41 +1591,57 @@ static unsigned int __stdcall wasapi_stream_render_loop(LPVOID stream)
           pick the new default device for this role. */
       int r = setup_wasapi_stream(stm);
       if (r != CUBEB_OK) {
-        LOG("Error setting up the stream during reconfigure.");
-        /* Don't destroy the stream here, since we expect the caller to do
-            so after the error has propagated via the state callback. */
-        is_playing = false;
-        hr = E_FAIL;
+        /* Keep the render loop alive with the stream closed, so that the next
+           default device change or stream start can reopen it. */
+        LOG("Error setting up the stream during reconfigure, waiting for the "
+            "next device change.");
+        /* Setup can fail part way through, don't leave partial state. */
+        close_wasapi_stream(stm);
         continue;
       }
       LOG("Stream setup successfuly.");
       XASSERT(stm->output_client || stm->input_client);
+      HRESULT start_hr = S_OK;
       if (stm->output_client) {
-        hr = stm->output_client->Start();
-        if (FAILED(hr)) {
-          LOG("Error starting output after reconfigure, error: %lx", hr);
-          is_playing = false;
-          continue;
+        start_hr = stm->output_client->Start();
+        if (FAILED(start_hr)) {
+          LOG("Error starting output after reconfigure, error: %lx", start_hr);
+        } else {
+          LOG("Output started after reconfigure.");
         }
-        LOG("Output started after reconfigure.");
       }
-      if (stm->input_client) {
-        hr = stm->input_client->Start();
-        if (FAILED(hr)) {
-          LOG("Error starting input after reconfiguring, error: %lx", hr);
-          is_playing = false;
-          continue;
+      if (SUCCEEDED(start_hr) && stm->input_client) {
+        start_hr = stm->input_client->Start();
+        if (FAILED(start_hr)) {
+          LOG("Error starting input after reconfiguring, error: %lx",
+              start_hr);
+        } else {
+          LOG("Input started after reconfigure.");
         }
-        LOG("Input started after reconfigure.");
+      }
+      if (FAILED(start_hr)) {
+        /* Same as above, close and wait for the next device change. */
+        if (stm->output_client) {
+          stm->output_client->Stop();
+        }
+        close_wasapi_stream(stm);
       }
       break;
     }
     case WAIT_OBJECT_0 + 2: /* refill */
+      /* Stale event from before the stream was closed by a failed
+         reconfigure. */
+      if (!stm->output_client && !stm->input_client) {
+        break;
+      }
       XASSERT((has_input(stm) && has_output(stm)) ||
               (!has_input(stm) && has_output(stm)));
       is_playing = stm->refill_callback(stm);
       break;
     case WAIT_OBJECT_0 + 3: { /* input available */
+      if (!stm->input_client) {
+        break;
+      }
       bool rv = get_input_buffer(stm);
       if (!rv) {
         is_playing = false;
@@ -3171,6 +3190,9 @@ wasapi_stream_release(cubeb_stream * stm)
     CloseHandle(stm->reconfigure_event);
     CloseHandle(stm->refill_event);
     CloseHandle(stm->input_available_event);
+    if (stm->thread_ready_event) {
+      CloseHandle(stm->thread_ready_event);
+    }
 
     CloseHandle(stm->thread);
 
@@ -3214,24 +3236,9 @@ stream_start_one_side(cubeb_stream * stm, StreamDirection dir)
     LOG("audioclient invalidated for %s device, reconfiguring",
         dir == OUTPUT ? "output" : "input");
 
-    BOOL ok = ResetEvent(stm->reconfigure_event);
-    if (!ok) {
-      LOG("resetting reconfig event failed for %s stream: %lx",
-          dir == OUTPUT ? "output" : "input", GetLastError());
-    }
-
-    close_wasapi_stream(stm);
-    int r = setup_wasapi_stream(stm);
-    if (r != CUBEB_OK) {
-      LOG("reconfigure failed");
-      return r;
-    }
-
-    HRESULT hr2 = dir == OUTPUT ? stm->output_client->Start()
-                                : stm->input_client->Start();
-    if (FAILED(hr2)) {
-      LOG("could not start the %s stream after reconfig: %lx",
-          dir == OUTPUT ? "output" : "input", hr);
+    /* Reopen on the render loop, closing the stream here could race with
+       callbacks still running there. */
+    if (!trigger_async_reconfigure(stm)) {
       return CUBEB_ERROR;
     }
   } else if (FAILED(hr)) {
@@ -3249,19 +3256,30 @@ wasapi_stream_start(cubeb_stream * stm)
   auto_lock lock(stm->stream_reset_lock);
 
   XASSERT(stm);
-  XASSERT(stm->output_client || stm->input_client);
 
-  if (stm->output_client) {
-    int rv = stream_start_one_side(stm, OUTPUT);
-    if (rv != CUBEB_OK) {
-      return rv;
+  /* The default device changed while the stream was inactive, or a previous
+     reconfigure failed and left the stream closed. Have the render loop reopen
+     and start it instead of starting on a stale device or aborting, closing
+     the stream here could race with callbacks still running there. */
+  if (stm->reconfigure_pending || (!stm->output_client && !stm->input_client)) {
+    LOG("stream start: deferring reconfigure to render loop");
+    stm->reconfigure_pending = false;
+    if (!trigger_async_reconfigure(stm)) {
+      return CUBEB_ERROR;
     }
-  }
+  } else {
+    if (stm->output_client) {
+      int rv = stream_start_one_side(stm, OUTPUT);
+      if (rv != CUBEB_OK) {
+        return rv;
+      }
+    }
 
-  if (stm->input_client) {
-    int rv = stream_start_one_side(stm, INPUT);
-    if (rv != CUBEB_OK) {
-      return rv;
+    if (stm->input_client) {
+      int rv = stream_start_one_side(stm, INPUT);
+      if (rv != CUBEB_OK) {
+        return rv;
+      }
     }
   }
 

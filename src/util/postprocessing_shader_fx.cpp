@@ -338,9 +338,10 @@ bool PostProcessing::ReShadeFXShader::LoadFromString(std::string name, std::stri
 
   // TODO: This could use spv, it's probably fastest.
   const auto& [cg, cg_language] = CreateRFXCodegen(only_config, error);
-  if (!cg || !CreateModule(only_config ? DEFAULT_BUFFER_WIDTH : g_gpu_device->GetMainSwapChain()->GetWidth(),
-                           only_config ? DEFAULT_BUFFER_HEIGHT : g_gpu_device->GetMainSwapChain()->GetHeight(),
-                           cg.get(), cg_language, std::move(code), error))
+  const GPUSwapChain* swap_chain = only_config ? nullptr : g_gpu_device->GetMainSwapChain();
+  if (!cg || !CreateModule(swap_chain ? swap_chain->GetWidth() : DEFAULT_BUFFER_WIDTH,
+                           swap_chain ? swap_chain->GetHeight() : DEFAULT_BUFFER_HEIGHT, cg.get(), cg_language,
+                           std::move(code), error))
   {
     return false;
   }
@@ -413,7 +414,7 @@ bool PostProcessing::ReShadeFXShader::CreateModule(s32 buffer_width, s32 buffer_
   pp.add_macro_definition("BUFFER_COLOR_BIT_DEPTH", "32");
   pp.add_macro_definition("RESHADE_DEPTH_INPUT_IS_UPSIDE_DOWN", "0");
   pp.add_macro_definition("RESHADE_DEPTH_INPUT_IS_LOGARITHMIC", "0");
-  pp.add_macro_definition("RESHADE_DEPTH_LINEARIZATION_FAR_PLANE", "1000.0");
+  pp.add_macro_definition("RESHADE_DEPTH_LINEARIZATION_FAR_PLANE", "1.0"); // Depth is already linear.
   pp.add_macro_definition("RESHADE_DEPTH_INPUT_IS_REVERSED", "0");
 
   switch (cg_language)

@@ -103,8 +103,12 @@ std::string GPU_HW_ShaderGen::GenerateScreenVertexShader() const
   DeclareVertexEntryPoint(ss, {"float2 a_pos", "float2 a_tex0"}, 0, 1, {}, false, "", false, false, false);
   ss << R"(
 {
-  // Depth set to 1 for PGXP depth buffer.
-  v_pos = float4(a_pos, 1.0f, 1.0f);
+  // VRAM writes and depth clears reset reversed PGXP depth to zero.
+  #if API_OPENGL || API_OPENGL_ES
+    v_pos = float4(a_pos, -1.0f, 1.0f);
+  #else
+    v_pos = float4(a_pos, 0.0f, 1.0f);
+  #endif
   v_tex0 = a_tex0;
 
   // NDC space Y flip in Vulkan.
@@ -182,8 +186,10 @@ std::string GPU_HW_ShaderGen::GenerateBatchVertexShader(const BatchVertexShaderS
   float pos_y = ((a_pos.y + vertex_offset) / -256.0) + 1.0;
 
 #if PGXP_DEPTH
-  // Ignore mask Z when using PGXP depth.
-  float pos_z = a_pos.w;
+  // Interpolate reciprocal camera Z in screen space, preserving W for perspective correction.
+  // Reversed depth retains precision at large distances and clears to zero.
+  // Z holds a bias towards the camera that grows with draw order, so that coplanar polygons don't fight.
+  float pos_z = (1.0 + a_pos.z) / max(a_pos.w * 65535.0, 1.0);
   float pos_w = a_pos.w;
 #else
   float pos_z = a_pos.z;
@@ -3156,7 +3162,7 @@ float4 SampleFromVRAM(TEXPAGE_VALUE texpage, DECLARE_UV_LIMITS(float2 coords, fl
 
       #if ROV_DEPTH_TEST
         float bg_depth = ROV_LOAD(rov_depth, fragpos).r;
-        discarded = (v_pos.z > bg_depth);
+        discarded = (v_pos.z < bg_depth);
       #endif
       #if CHECK_MASK_BIT
         discarded = discarded || (bg_col.a != 0.0);
@@ -3399,7 +3405,9 @@ float3 SampleVRAM24(uint2 icoords)
   #endif
 
   #if DEPTH_BUFFER
-    o_col1 = float4(LoadDepth(wrapped_coords), 0.0, 0.0, 0.0);
+    // Post-processing expects linear camera Z normalized to the GTE depth range.
+    float depth = LoadDepth(wrapped_coords);
+    o_col1 = float4((depth > 0.0) ? min(1.0 / (depth * 65535.0), 1.0) : 1.0, 0.0, 0.0, 0.0);
   #endif
 }
 )";
@@ -3777,14 +3785,14 @@ float4 SampleFromVRAM(TEXPAGE_VALUE texpage, float2 coords, float4 uv_limits)
   {
     ROV_STORE(rov_color, v_pos.xy, o_col0);
   #if WRITE_DEPTH_AS_RT
-    ROV_STORE_SCALAR(rov_depth, v_pos.xy, 1.0f);
+    ROV_STORE_SCALAR(rov_depth, v_pos.xy, 0.0f);
   #endif
   }
   END_ROV_REGION;
 #elif WRITE_MASK_AS_DEPTH
   o_depth = (o_col0.a == 1.0) ? u_depth_value : 0.0;
 #elif WRITE_DEPTH_AS_RT
-  o_col1 = float4(1.0f, 0.0f, 0.0f, 0.0f);
+  o_col1 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 #endif
 })";
 
@@ -3867,14 +3875,14 @@ std::string GPU_HW_ShaderGen::GenerateVRAMCopyFragmentShader(bool write_mask_as_
   {
     ROV_STORE(rov_color, v_pos.xy, o_col0);
   #if WRITE_DEPTH_AS_RT
-    ROV_STORE_SCALAR(rov_depth, v_pos.xy, 1.0f);
+    ROV_STORE_SCALAR(rov_depth, v_pos.xy, 0.0f);
   #endif
   }
   END_ROV_REGION;
 #elif WRITE_MASK_AS_DEPTH
   o_depth = (u_set_mask_bit ? 1.0f : ((o_col0.a == 1.0) ? u_depth_value : 0.0));
 #elif WRITE_DEPTH_AS_RT
-  o_col1 = float4(1.0f, 0.0f, 0.0f, 0.0f);
+  o_col1 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 #endif
 })";
 
@@ -3923,7 +3931,7 @@ std::string GPU_HW_ShaderGen::GenerateVRAMFillFragmentShader(bool wrapped, bool 
 #if WRITE_MASK_AS_DEPTH
   o_depth = u_fill_color.a;
 #elif WRITE_DEPTH_AS_RT
-  o_col1 = float4(1.0f, 0.0f, 0.0f, 0.0f);
+  o_col1 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 #endif
 })";
 
@@ -3952,22 +3960,31 @@ std::string GPU_HW_ShaderGen::GenerateVRAMUpdateDepthFragmentShader(bool msaa) c
   return std::move(ss).str();
 }
 
-std::string GPU_HW_ShaderGen::GenerateVRAMCopyDepthFragmentShader(bool msaa) const
+std::string GPU_HW_ShaderGen::GenerateVRAMCopyDepthFragmentShader(bool msaa, bool merge) const
 {
   std::stringstream ss;
   WriteHeader(ss);
   m_has_uniform_buffer = true;
   DefineMacro(ss, "MULTISAMPLED", msaa);
+  DefineMacro(ss, "MERGE", merge);
   DeclareTexture(ss, "samp0", 0, msaa);
   DeclareFragmentEntryPoint(ss, 0, 1, {}, msaa, 1, false, false, msaa, msaa, msaa);
 
   ss << R"(
 {
 #if MULTISAMPLED
-  o_col0 = float4(LOAD_TEXTURE_MS(samp0, int2(v_pos.xy), int(f_sample_index)).r, 0.0, 0.0, 0.0);
+  float depth = LOAD_TEXTURE_MS(samp0, int2(v_pos.xy), int(f_sample_index)).r;
 #else
-  o_col0 = float4(SAMPLE_TEXTURE(samp0, v_tex0).r, 0.0, 0.0, 0.0);
+  float depth = SAMPLE_TEXTURE(samp0, v_tex0).r;
 #endif
+
+#if MERGE
+  // Keep the previous value where nothing has been drawn since the last clear.
+  if (depth == 0.0)
+    discard;
+#endif
+
+  o_col0 = float4(depth, 0.0, 0.0, 0.0);
 }
 )";
 
@@ -3984,7 +4001,7 @@ std::string GPU_HW_ShaderGen::GenerateVRAMClearDepthFragmentShader(bool write_de
   ss << R"(
 {
 #if WRITE_DEPTH_AS_RT
-  o_col0 = float4(1.0f, 0.0f, 0.0f, 0.0f);
+  o_col0 = float4(0.0f, 0.0f, 0.0f, 0.0f);
 #endif
 }
 )";

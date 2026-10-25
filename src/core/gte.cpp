@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <numbers>
 #include <numeric>
 
@@ -281,7 +282,9 @@ static void Execute_DPCT(Instruction inst);
 static void Execute_DCPL(Instruction inst);
 static void Execute_INTPL(Instruction inst);
 static void Execute_GPL(Instruction inst);
+static void Execute_GPL_PGXP(Instruction inst);
 static void Execute_GPF(Instruction inst);
+static void Execute_GPF_PGXP(Instruction inst);
 
 static void ApplyFreecam(s64& x, s64& y, s64& z);
 
@@ -908,7 +911,21 @@ NEVER_INLINE void GTE::RTPS_PGXP(const s16 V[3], u8 shift, bool lm, s64 x, s64 y
 
   precise_x = std::clamp<float>(precise_x, -1024.0f, 1023.0f);
   precise_y = std::clamp<float>(precise_y, -1024.0f, 1023.0f);
-  CPU::PGXP::GTE_RTPS(precise_x, precise_y, precise_z, REGS.dr32[14]);
+
+  // Some games scale the whole view transform per object to keep it within 16-bit range, compensating when sorting.
+  // Undo the scale of the rotation matrix's Z row, so that depth is comparable between objects.
+  float precise_depth = precise_z;
+  if (g_settings.gpu_pgxp_normalize_depth)
+  {
+    const float scale =
+      std::sqrt(static_cast<float>(s32(REGS.RT[2][0]) * REGS.RT[2][0] + s32(REGS.RT[2][1]) * REGS.RT[2][1] +
+                                   s32(REGS.RT[2][2]) * REGS.RT[2][2])) /
+      4096.0f;
+    if (scale > 0.0f)
+      precise_depth /= scale;
+  }
+
+  CPU::PGXP::GTE_RTPS(precise_x, precise_y, precise_depth, REGS.dr32[14]);
 }
 
 ALWAYS_INLINE void GTE::Execute_RTPS(Instruction inst)
@@ -1281,6 +1298,22 @@ ALWAYS_INLINE void GTE::Execute_GPF(Instruction inst)
   REGS.FLAG.UpdateError();
 }
 
+void GTE::Execute_GPL_PGXP(Instruction inst)
+{
+  // PGXP needs the inputs from before they are overwritten.
+  const u32 old_ir[3] = {REGS.dr32[9], REGS.dr32[10], REGS.dr32[11]};
+  const u32 old_mac[3] = {REGS.dr32[25], REGS.dr32[26], REGS.dr32[27]};
+  Execute_GPL(inst);
+  CPU::PGXP::GTE_GPF_GPL(old_ir, old_mac, inst.GetShift());
+}
+
+void GTE::Execute_GPF_PGXP(Instruction inst)
+{
+  const u32 old_ir[3] = {REGS.dr32[9], REGS.dr32[10], REGS.dr32[11]};
+  Execute_GPF(inst);
+  CPU::PGXP::GTE_GPF_GPL(old_ir, nullptr, inst.GetShift());
+}
+
 namespace GTE {
 
 /// Wraps an instruction handler, fixing the sf/lm bits at compile time. Once the handler is inlined, the shift amounts
@@ -1414,12 +1447,18 @@ void GTE::ExecuteInstruction(u32 inst_bits)
 
     case 0x3D:
       CPU::AddGTETicks(5);
-      GetSpecializedHandler<&Execute_GPF>(inst)(inst);
+      if (g_settings.UsingPGXPCPUMode())
+        Execute_GPF_PGXP(inst);
+      else
+        GetSpecializedHandler<&Execute_GPF>(inst)(inst);
       break;
 
     case 0x3E:
       CPU::AddGTETicks(5);
-      GetSpecializedHandler<&Execute_GPL>(inst)(inst);
+      if (g_settings.UsingPGXPCPUMode())
+        Execute_GPL_PGXP(inst);
+      else
+        GetSpecializedHandler<&Execute_GPL>(inst)(inst);
       break;
 
     case 0x3F:
@@ -1535,11 +1574,17 @@ GTE::InstructionImpl GTE::GetInstructionImpl(u32 inst_bits, TickCount* ticks)
 
     case 0x3D:
       *ticks = 5;
-      return GetSpecializedHandler<&Execute_GPF>(inst);
+      if (g_settings.UsingPGXPCPUMode())
+        return &Execute_GPF_PGXP;
+      else
+        return GetSpecializedHandler<&Execute_GPF>(inst);
 
     case 0x3E:
       *ticks = 5;
-      return GetSpecializedHandler<&Execute_GPL>(inst);
+      if (g_settings.UsingPGXPCPUMode())
+        return &Execute_GPL_PGXP;
+      else
+        return GetSpecializedHandler<&Execute_GPL>(inst);
 
     case 0x3F:
       *ticks = 39;
