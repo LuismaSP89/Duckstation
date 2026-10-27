@@ -112,6 +112,7 @@ struct ALIGN_TO_CACHE_LINE State
   bool requested_fullscreen_ui = false;
   bool use_thread = false;
   bool fullscreen_state = false;
+  bool per_present_vsync = false;
 
   // Hot variables between both threads.
   ALIGN_TO_CACHE_LINE std::atomic<u32> command_fifo_write_ptr{0};
@@ -812,6 +813,7 @@ bool VideoThread::CreateDeviceOnThread(RenderAPI api, bool fullscreen, bool star
     s_state.render_window_info = WindowInfo();
   s_state.render_window_info.surface_width = std::max<u16>(s_state.render_window_info.surface_width, 1);
   s_state.render_window_info.surface_height = std::max<u16>(s_state.render_window_info.surface_height, 1);
+  s_state.per_present_vsync = g_gpu_device->GetFeatures().per_present_vsync;
 
   UpdateRunIdle();
 
@@ -850,6 +852,7 @@ void VideoThread::DestroyDeviceOnThread(bool preserve_imgui_state)
 
   UpdateRunIdle();
   s_state.render_window_info = WindowInfo();
+  s_state.per_present_vsync = false;
 }
 
 bool VideoThread::CreateGPUBackendOnThread(bool hardware_renderer, bool upload_vram, const GPUSettings* old_settings,
@@ -1393,6 +1396,14 @@ void VideoThread::ResizeRenderWindow(s32 width, s32 height, float scale, float r
 {
   DebugAssert(Host::IsOnCoreThread());
 
+  // The client area is 0x0 while minimized on Windows. DXGI would resize to 8x8, and Vulkan can't create
+  // a swap chain at all, so keep the current size until the window is restored.
+  if (width <= 0 || height <= 0)
+  {
+    DEV_LOG("Ignoring render window resize to {}x{}", width, height);
+    return;
+  }
+
   const u16 clamped_width = static_cast<u16>(std::clamp<s32>(width, 1, std::numeric_limits<u16>::max()));
   const u16 clamped_height = static_cast<u16>(std::clamp<s32>(height, 1, std::numeric_limits<u16>::max()));
   const bool size_changed = (s_state.render_window_info.surface_width != clamped_width ||
@@ -1438,6 +1449,33 @@ void VideoThread::ResizeRenderWindowOnThread(u32 width, u32 height, float scale,
   swap_chain->SetRefreshRate(refresh_rate);
 
   RenderWindowResizedOnThread();
+
+  // The swap chain can end up a different size to what was requested, e.g. clamped to the X11 server's size, or this
+  // was a stale size from MainSwapChainResized(). Tell the core thread the actual size so it doesn't get stuck.
+  if (swap_chain->GetWidth() != width || swap_chain->GetHeight() != height)
+    MainSwapChainResized();
+}
+
+void VideoThread::MainSwapChainResized()
+{
+  DebugAssert(IsOnThread());
+
+  const GPUSwapChain* const swap_chain = g_gpu_device->GetMainSwapChain();
+  const WindowInfo& wi = swap_chain->GetWindowInfo();
+  DEV_LOG("Main swap chain resized to {}x{}", wi.surface_width, wi.surface_height);
+
+  // Update ImGui now so the next frame is drawn at the new size. Can't use RenderWindowResizedOnThread(), since it
+  // presents if paused, and we're in the middle of presenting.
+  ImGuiManager::WindowResized(swap_chain->GetFormat(), static_cast<float>(std::max(swap_chain->GetWidth(), 1u)),
+                              static_cast<float>(std::max(swap_chain->GetHeight(), 1u)));
+
+  // Then go through the core thread, so it updates the window size and anything that depends on it. That comes back
+  // to RenderWindowResizedOnThread(), which re-presents if paused. Only the size comes from the swap chain, the host
+  // may have changed the scale or refresh rate since, and ours would be stale.
+  Host::RunOnCoreThread([width = wi.surface_width, height = wi.surface_height]() {
+    ResizeRenderWindow(width, height, s_state.render_window_info.surface_scale,
+                       s_state.render_window_info.surface_refresh_rate);
+  });
 }
 
 void VideoThread::RecreateRenderWindow()
@@ -1565,6 +1603,7 @@ void VideoThread::RenderWindowResizedOnThread()
   // our imgui stuff can't cope with 0x0/hidden windows
   const float f_width = static_cast<float>(std::max(swap_chain->GetWidth(), 1u));
   const float f_height = static_cast<float>(std::max(swap_chain->GetHeight(), 1u));
+  DEV_LOG("Swap chain size is {}x{}", swap_chain->GetWidth(), swap_chain->GetHeight());
   ImGuiManager::WindowResized(swap_chain->GetFormat(), f_width, f_height);
 
   // If we're paused, re-present the current frame at the new window size.
@@ -1580,6 +1619,11 @@ void VideoThread::RenderWindowResizedOnThread()
 const WindowInfo& VideoThread::GetRenderWindowInfo()
 {
   return s_state.render_window_info;
+}
+
+bool VideoThread::HasPerPresentVSync()
+{
+  return s_state.per_present_vsync;
 }
 
 void VideoThread::SetVSync(GPUVSyncMode mode, PresentSkipMode present_skip_mode)

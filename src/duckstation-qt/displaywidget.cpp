@@ -35,6 +35,10 @@
 #include "common/windows_headers.h"
 #endif
 
+#ifdef ENABLE_X11
+#include <xcb/xcb.h>
+#endif
+
 using namespace Qt::StringLiterals;
 
 LOG_CHANNEL(Host);
@@ -127,7 +131,10 @@ void DisplayWidget::setIgnoreDoubleClick(bool enabled)
 void DisplayWidget::checkForSizeChange(bool update_refresh_rate)
 {
   if (!m_window_info.has_value())
+  {
+    DEV_LOG("Ignoring display widget size change to Qt {}x{} without window info", width(), height());
     return;
+  }
 
   // avoid spamming resize events for paint events (sent on move on windows)
   const u16 prev_width = m_window_info->surface_width;
@@ -546,7 +553,11 @@ bool DisplayWidget::event(QEvent* event)
 
       const QWindowStateChangeEvent* ws_event = static_cast<const QWindowStateChangeEvent*>(event);
       if (ws_event->oldState() & Qt::WindowMinimized)
+      {
+        // The client area is 0x0 while minimized, and Qt doesn't send a resize on restore if its size didn't change.
+        checkForSizeChange(false);
         emit windowRestoredEvent();
+      }
 
 #if defined(_WIN32)
       // Work around incorrect rounded windows11 theme bug.
@@ -578,6 +589,33 @@ bool DisplayWidget::event(QEvent* event)
       return QWidget::event(event);
   }
 }
+
+#ifdef ENABLE_X11
+
+bool DisplayWidget::nativeEvent(const QByteArray& event_type, void* message, qintptr* result)
+{
+  // On X11, the window info has the server's size, see QtUtils::UpdateSurfaceSize(). The window manager can change it
+  // at any time, e.g. some time after leaving fullscreen. Qt doesn't send a resize event if its own size doesn't
+  // change, because it already assumed the new size, or it rounds to the same logical size with fractional scaling.
+  if (event_type == "xcb_generic_event_t"_ba &&
+      (static_cast<const xcb_generic_event_t*>(message)->response_type & 0x7f) == XCB_CONFIGURE_NOTIFY)
+  {
+    const xcb_configure_notify_event_t* const ev = static_cast<const xcb_configure_notify_event_t*>(message);
+    if (m_window_info.has_value() &&
+        (ev->width != m_window_info->surface_width || ev->height != m_window_info->surface_height))
+    {
+      DEV_LOG("X11 window resized to {}x{}", ev->width, ev->height);
+      m_window_info->surface_width = ev->width;
+      m_window_info->surface_height = ev->height;
+      emit windowResizedEvent(m_window_info->surface_width, m_window_info->surface_height, m_window_info->surface_scale,
+                              m_window_info->surface_refresh_rate);
+    }
+  }
+
+  return QWidget::nativeEvent(event_type, message, result);
+}
+
+#endif
 
 DisplayContainer::DisplayContainer() : QStackedWidget(nullptr)
 {
@@ -618,7 +656,10 @@ bool DisplayContainer::event(QEvent* event)
     case QEvent::WindowStateChange:
     {
       if (static_cast<QWindowStateChangeEvent*>(event)->oldState() & Qt::WindowMinimized)
+      {
+        m_display_widget->checkForSizeChange(false);
         emit m_display_widget->windowRestoredEvent();
+      }
     }
     break;
 

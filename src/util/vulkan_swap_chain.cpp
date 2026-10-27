@@ -336,19 +336,58 @@ bool VulkanSwapChain::CreateSwapChain(VulkanDevice& dev, Error* error)
     (present_mode.value() == VK_PRESENT_MODE_MAILBOX_KHR) ? 3 : 2, surface_caps.surfaceCapabilities.minImageCount,
     (surface_caps.surfaceCapabilities.maxImageCount == 0) ? std::numeric_limits<u32>::max() :
                                                             surface_caps.surfaceCapabilities.maxImageCount);
-  DEV_LOG("Creating a swap chain with {} images in present mode {}", image_count,
-          PresentModeToString(present_mode.value()));
 
-  // Determine the dimensions of the swap chain. Values of -1 indicate the size we specify here determines
-  // window size? We want to avoid the system-level downsampling with fractional scaling on MacOS too.
-  VkExtent2D size = surface_caps.surfaceCapabilities.currentExtent;
-#ifndef __APPLE__
-  if (size.width == UINT32_MAX)
-#endif
+  // With VK_KHR_swapchain_maintenance1, vsync can be toggled without recreating the swap chain, by switching between
+  // FIFO and immediate on present. The modes have to be compatible with each other, and the swap chain needs enough
+  // images for both, since the minimum image count from VkSurfacePresentModeKHR only applies to that mode.
+  static constexpr std::array<VkPresentModeKHR, 2> switch_present_modes = {VK_PRESENT_MODE_FIFO_KHR,
+                                                                           VK_PRESENT_MODE_IMMEDIATE_KHR};
+  u32 switch_min_image_count = 0;
+  m_supports_present_mode_switching =
+    (dev.GetOptionalExtensions().vk_khr_swapchain_maintenance1 && optional_extensions.vk_khr_get_surface_capabilities2);
+  for (size_t i = 0; i < switch_present_modes.size() && m_supports_present_mode_switching; i++)
   {
-    size.width = m_window_info.surface_width;
-    size.height = m_window_info.surface_height;
+    // Immediate is only queried after it's been found in FIFO's compatible modes, so it's known to be supported.
+    std::array<VkPresentModeKHR, 8> compatible_modes;
+    VkSurfacePresentModeCompatibilityKHR compat = {.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_COMPATIBILITY_KHR,
+                                                   .pNext = nullptr,
+                                                   .presentModeCount = static_cast<u32>(compatible_modes.size()),
+                                                   .pPresentModes = compatible_modes.data()};
+    VkSurfaceCapabilities2KHR caps = {
+      .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR, .pNext = &compat, .surfaceCapabilities = {}};
+    const VkSurfacePresentModeKHR dsi_pm = {
+      .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR, .pNext = nullptr, .presentMode = switch_present_modes[i]};
+    const VkPhysicalDeviceSurfaceInfo2KHR dsi = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR, .pNext = &dsi_pm, .surface = m_surface};
+    res = vkGetPhysicalDeviceSurfaceCapabilities2KHR(physdev, &dsi, &caps);
+    if (res != VK_SUCCESS)
+      LOG_VULKAN_ERROR(res, "vkGetPhysicalDeviceSurfaceCapabilities2KHR() failed: ");
+
+    const auto compatible_end = compatible_modes.begin() + compat.presentModeCount;
+    m_supports_present_mode_switching =
+      (res == VK_SUCCESS && std::find(compatible_modes.begin(), compatible_end,
+                                      switch_present_modes[(i + 1) % switch_present_modes.size()]) != compatible_end);
+    switch_min_image_count = std::max(switch_min_image_count, caps.surfaceCapabilities.minImageCount);
   }
+
+  m_present_mode_switching =
+    (m_supports_present_mode_switching && std::find(switch_present_modes.begin(), switch_present_modes.end(),
+                                                    present_mode.value()) != switch_present_modes.end());
+  if (m_present_mode_switching)
+    image_count = std::max(image_count, switch_min_image_count);
+
+  DEV_LOG("Creating a swap chain with {} images in present mode {}{}", image_count,
+          PresentModeToString(present_mode.value()), m_present_mode_switching ? " (switchable)" : "");
+
+  // Prefer the window size, the same as GL, and to avoid the system-level downsampling with fractional scaling on
+  // MacOS. It still has to be within the surface's limits, which on X11 and Win32 means currentExtent. On X11, that
+  // comes from the server, which lags behind the window manager applying the requested size (e.g. when leaving
+  // fullscreen). Not all drivers report the swap chain as suboptimal or out of date once it catches up, so the host
+  // sends the size again. If they do, the size is cleared so we use currentExtent, and the caller is told via
+  // GPUPresentResult::SwapChainResized.
+  VkExtent2D size = {m_window_info.surface_width, m_window_info.surface_height};
+  if (size.width == 0 || size.height == 0)
+    size = surface_caps.surfaceCapabilities.currentExtent;
   size.width = std::clamp(size.width, surface_caps.surfaceCapabilities.minImageExtent.width,
                           surface_caps.surfaceCapabilities.maxImageExtent.width);
   size.height = std::clamp(size.height, surface_caps.surfaceCapabilities.minImageExtent.height,
@@ -511,6 +550,14 @@ bool VulkanSwapChain::CreateSwapChain(VulkanDevice& dev, Error* error)
   if (m_exclusive_fullscreen_control.has_value())
     ERROR_LOG("Exclusive fullscreen control requested, but is not supported on this platform.");
 #endif
+
+  VkSwapchainPresentModesCreateInfoKHR present_modes_info = {
+    .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_KHR,
+    .pNext = nullptr,
+    .presentModeCount = static_cast<u32>(switch_present_modes.size()),
+    .pPresentModes = switch_present_modes.data()};
+  if (m_present_mode_switching)
+    Vulkan::AddPointerToChain(&swap_chain_info, &present_modes_info);
 
   const VkDevice vkdev = dev.GetVulkanDevice();
   res = vkCreateSwapchainKHR(vkdev, &swap_chain_info, nullptr, &m_swap_chain);
@@ -736,6 +783,16 @@ bool VulkanSwapChain::HandleAcquireOrPresentError(VkResult& res)
   {
     DEV_LOG("Swap chain is {}, recreating swap chain", (res == VK_SUBOPTIMAL_KHR) ? "suboptimal" : "out of date");
 
+    // The window was probably resized without us being told, e.g. the window manager applying a requested size late
+    // on X11. Use the surface's size instead. Wayland doesn't have one, the swap chain determines the window size.
+#ifdef __linux__
+    if (m_window_info.type != WindowInfoType::Wayland)
+#endif
+    {
+      m_window_info.surface_width = 0;
+      m_window_info.surface_height = 0;
+    }
+
     VulkanDevice& dev = VulkanDevice::GetInstance();
 
     // Older NVIDIA drivers completely lock up if there is no device idle wait prior to waiting of the command
@@ -881,9 +938,17 @@ bool VulkanSwapChain::SetVSyncMode(GPUVSyncMode mode, Error* error)
   if (m_present_mode == new_present_mode.value())
     return true;
 
+  // If the swap chain was created with both modes, switch on the next present.
+  if (m_present_mode_switching && (new_present_mode.value() == VK_PRESENT_MODE_FIFO_KHR ||
+                                   new_present_mode.value() == VK_PRESENT_MODE_IMMEDIATE_KHR))
+  {
+    VERBOSE_LOG("Switching present mode to {}.", PresentModeToString(new_present_mode.value()));
+    m_present_mode = new_present_mode.value();
+    return true;
+  }
+
   dev.WaitForGPUIdle();
 
-  // TODO: Use the maintenance extension to change it without recreating...
   // Recreate the swap chain with the new present mode.
   VERBOSE_LOG("Recreating swap chain to change present mode.");
   ReleaseCurrentImage();

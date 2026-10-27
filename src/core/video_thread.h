@@ -66,8 +66,14 @@ void SetFullscreenWithCompletionHandler(bool fullscreen, AsyncCallType completio
 /// Called when the window is resized.
 void ResizeRenderWindow(s32 width, s32 height, float scale, float refresh_rate);
 
+/// Updates the window size when the main swap chain changes size without the host asking, e.g. window manager delay.
+void MainSwapChainResized();
+
 /// Access to main window size from CPU thread.
 const WindowInfo& GetRenderWindowInfo();
+
+/// Returns true if the device can switch vsync on and off without recreating the swap chain.
+bool HasPerPresentVSync();
 
 void UpdateSettings(bool gpu_settings_changed, bool device_settings_changed, bool thread_changed);
 void UpdateGameInfo(const std::string& title, const std::string& serial, const std::string& path, GameHash hash,

@@ -548,6 +548,7 @@ public:
     bool exclusive_fullscreen : 1;
     bool explicit_present : 1;
     bool timed_present : 1;
+    bool per_present_vsync : 1;
     bool gpu_timing : 1;
     bool shader_cache : 1;
     bool pipeline_cache : 1;
@@ -861,8 +862,8 @@ public:
 
   /// Returns false if the window was completely occluded.
   virtual GPUPresentResult BeginPresent(GPUSwapChain* swap_chain, u32 clear_color = DEFAULT_CLEAR_COLOR) = 0;
-  virtual void EndPresent(GPUSwapChain* swap_chain, bool explicit_submit, u64 submit_time = 0) = 0;
-  virtual void SubmitPresent(GPUSwapChain* swap_chain) = 0;
+  virtual GPUPresentResult EndPresent(GPUSwapChain* swap_chain, bool explicit_submit, u64 submit_time = 0) = 0;
+  virtual GPUPresentResult SubmitPresent(GPUSwapChain* swap_chain) = 0;
 
   ALWAYS_INLINE bool IsDebugDevice() const { return m_debug_device; }
   ALWAYS_INLINE size_t GetVRAMUsage() const { return s_total_vram_usage; }

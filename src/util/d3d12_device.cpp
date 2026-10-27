@@ -928,7 +928,8 @@ bool D3D12SwapChain::CreateSwapChain(D3D12Device& dev, Error* error)
     DXGI_SWAP_CHAIN_DESC1 fs_sd_desc = swap_chain_desc;
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC fs_desc = {};
 
-    fs_sd_desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    // Unlike D3D11, D3D12 can use the waitable object in exclusive fullscreen.
+    fs_sd_desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
     fs_sd_desc.Width = m_fullscreen_mode->Width;
     fs_sd_desc.Height = m_fullscreen_mode->Height;
     fs_desc.RefreshRate = m_fullscreen_mode->RefreshRate;
@@ -967,9 +968,7 @@ bool D3D12SwapChain::CreateSwapChain(D3D12Device& dev, Error* error)
   if (FAILED(hr))
     WARNING_LOG("MakeWindowAssociation() to disable ALT+ENTER failed");
 
-  // Waitable object can't be used with exclusive fullscreen.
-  if (!IsExclusiveFullscreen())
-    m_frame_latency_waitable = D3DCommon::GetFrameLatencyWaitableObject(m_swap_chain.Get());
+  m_frame_latency_waitable = D3DCommon::GetFrameLatencyWaitableObject(m_swap_chain.Get());
 
   return true;
 }
@@ -1108,9 +1107,9 @@ bool D3D12SwapChain::ResizeBuffers(u32 new_width, u32 new_height, Error* error)
   DestroyRTVs();
 
   // Flags have to match what the swap chain was created with.
-  const UINT flags = IsExclusiveFullscreen() ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH :
-                                               ((m_using_allow_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0) |
-                                                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
+  const UINT flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT |
+                     (IsExclusiveFullscreen() ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH :
+                                                (m_using_allow_tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0));
   HRESULT hr = m_swap_chain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, flags);
   if (FAILED(hr)) [[unlikely]]
   {
@@ -1266,7 +1265,7 @@ GPUPresentResult D3D12Device::BeginPresent(GPUSwapChain* swap_chain, u32 clear_c
   return GPUPresentResult::OK;
 }
 
-void D3D12Device::EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u64 present_time)
+GPUPresentResult D3D12Device::EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u64 present_time)
 {
   D3D12SwapChain* const SC = static_cast<D3D12SwapChain*>(swap_chain);
   DebugAssert(present_time == 0);
@@ -1287,21 +1286,21 @@ void D3D12Device::EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u6
   SubmitCommandList(false);
   TrimTexturePool();
 
-  if (!explicit_present)
-    SubmitPresent(swap_chain);
+  return explicit_present ? GPUPresentResult::OK : SubmitPresent(swap_chain);
 }
 
-void D3D12Device::SubmitPresent(GPUSwapChain* swap_chain)
+GPUPresentResult D3D12Device::SubmitPresent(GPUSwapChain* swap_chain)
 {
   D3D12SwapChain* const SC = static_cast<D3D12SwapChain*>(swap_chain);
   if (m_device_was_lost) [[unlikely]]
-    return;
+    return GPUPresentResult::DeviceLost;
 
   const UINT sync_interval = static_cast<UINT>(SC->GetVSyncMode() == GPUVSyncMode::FIFO);
   const UINT flags =
     (SC->GetVSyncMode() == GPUVSyncMode::Disabled && SC->IsUsingAllowTearing()) ? DXGI_PRESENT_ALLOW_TEARING : 0;
   D3DCommon::PresentSwapChain(SC->GetSwapChain(), SC->GetFrameLatencyWaitable(), SC->GetFullscreenOutput(),
                               sync_interval, flags);
+  return GPUPresentResult::OK;
 }
 
 #ifdef ENABLE_GPU_OBJECT_NAMES
@@ -1382,6 +1381,7 @@ void D3D12Device::SetFeatures(D3D_FEATURE_LEVEL feature_level, CreateFlags creat
   m_features.exclusive_fullscreen = true;
   m_features.explicit_present = true;
   m_features.timed_present = false;
+  m_features.per_present_vsync = true;
   m_features.gpu_timing = true;
   m_features.shader_cache = true;
   m_features.pipeline_cache = true;

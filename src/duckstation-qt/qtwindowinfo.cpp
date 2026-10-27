@@ -17,9 +17,12 @@
 #include <QtGui/QScreen>
 #include <QtWidgets/QWidget>
 
+#include <cmath>
+
 #if defined(_WIN32)
 
 #include "common/windows_headers.h"
+#include <QtCore/QOperatingSystemVersion>
 #include <dwmapi.h>
 
 #elif defined(__APPLE__)
@@ -35,6 +38,10 @@
 #include <QtDBus/QDBusMessage>
 #include <QtDBus/QDBusReply>
 #include <qpa/qplatformnativeinterface.h>
+
+#ifdef ENABLE_X11
+#include "util/x11_tools.h"
+#endif
 
 #else
 
@@ -81,7 +88,7 @@ WindowInfoType QtUtils::GetWindowInfoType()
     // See the comment below for information about this bullshit.
     return WindowInfoType::XCB;
   }
-  else if (platform_name == "wayland"_L1)
+  else if (platform_name.startsWith("wayland"_L1))
   {
     return WindowInfoType::Wayland;
   }
@@ -124,7 +131,7 @@ std::optional<WindowInfo> QtUtils::GetWindowInfoForWidget(QWidget* widget, Rende
     }
     wi.window_handle = reinterpret_cast<void*>(widget->winId());
   }
-  else if (platform_name == QStringLiteral("wayland"))
+  else if (platform_name.startsWith("wayland"_L1))
   {
     wi.type = WindowInfoType::Wayland;
     wi.display_connection = pni->nativeResourceForWindow("display", widget->windowHandle());
@@ -184,14 +191,32 @@ void QtUtils::UpdateSurfaceSize(QWidget* widget, RenderAPI render_api, WindowInf
 
     return;
   }
+#elif defined(ENABLE_X11)
+  // On X11, Qt's size is updated as soon as a resize is requested, and rounded from its logical size. The server's
+  // size, which is what EGL/Vulkan see, is applied later by the window manager, and can be rounded differently with
+  // fractional scaling. So use the server's size, DisplayWidget picks up changes to it from configure events.
+  if (wi->type == WindowInfoType::XCB || wi->type == WindowInfoType::Xlib)
+  {
+    if (const auto* x11_app = qGuiApp->nativeInterface<QNativeInterface::QX11Application>())
+    {
+      if (const std::optional<std::pair<int, int>> size =
+            X11Tools::GetWindowSize(x11_app->connection(), static_cast<xcb_window_t>(widget->winId())))
+      {
+        wi->surface_width = static_cast<u16>(size->first);
+        wi->surface_height = static_cast<u16>(size->second);
+        wi->surface_scale = static_cast<float>(widget->devicePixelRatio());
+        return;
+      }
+    }
+  }
 #endif
 
-  // On Linux, fuck you, enjoy round trip to the X server, and on Wayland you can't query it in the first place...
-  // I ain't dealing with this crap OS. Enjoy your mismatched sizes and shit experience.
+  // On Wayland, you can't query it in the first place, the client picks the buffer size. fractional-scale-v1 defines
+  // it as the logical size multiplied by the scale, rounded half away from zero. Don't use ceil(), since float error
+  // with scales such as 140/120 can push an exact product over the next integer. Terrible fucking protocol, so broken.
   const qreal device_pixel_ratio = widget->devicePixelRatio();
-  const QSize scaled_size = ApplyDevicePixelRatioToSize(widget->size(), device_pixel_ratio);
-  wi->surface_width = static_cast<u16>(scaled_size.width());
-  wi->surface_height = static_cast<u16>(scaled_size.height());
+  wi->surface_width = static_cast<u16>(std::lround(static_cast<qreal>(widget->width()) * device_pixel_ratio));
+  wi->surface_height = static_cast<u16>(std::lround(static_cast<qreal>(widget->height()) * device_pixel_ratio));
   wi->surface_scale = static_cast<float>(device_pixel_ratio);
 }
 
@@ -328,6 +353,10 @@ bool Host::SetScreensaverInhibit(bool inhibit, Error* error)
 
 bool QtUtils::SetWindowRoundedCornerState(QWidget* widget, std::optional<bool> enabled)
 {
+  // DWMWA_WINDOW_CORNER_PREFERENCE was added in Windows 11, it fails on Windows 10.
+  if (QOperatingSystemVersion::current() < QOperatingSystemVersion::Windows11)
+    return false;
+
   const HWND window_handle = reinterpret_cast<HWND>(widget->winId());
 
   const DWM_WINDOW_CORNER_PREFERENCE wanted_value =
@@ -337,7 +366,7 @@ bool QtUtils::SetWindowRoundedCornerState(QWidget* widget, std::optional<bool> e
     DwmGetWindowAttribute(window_handle, DWMWA_WINDOW_CORNER_PREFERENCE, &current_value, sizeof(current_value));
   if (FAILED(hr)) [[unlikely]]
   {
-    ERROR_LOG("DwmGetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE) failed: ",
+    ERROR_LOG("DwmGetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE) failed: {}",
               Error::CreateHResult(hr).GetDescription());
   }
   else if (current_value == wanted_value)
@@ -348,7 +377,7 @@ bool QtUtils::SetWindowRoundedCornerState(QWidget* widget, std::optional<bool> e
   hr = DwmSetWindowAttribute(window_handle, DWMWA_WINDOW_CORNER_PREFERENCE, &wanted_value, sizeof(wanted_value));
   if (FAILED(hr)) [[unlikely]]
   {
-    ERROR_LOG("DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE) failed: ",
+    ERROR_LOG("DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE) failed: {}",
               Error::CreateHResult(hr).GetDescription());
   }
 

@@ -1404,6 +1404,14 @@ void VulkanDevice::QueuePresent(VulkanSwapChain* present_swap_chain)
                                    present_swap_chain->GetCurrentImageIndexPtr(),
                                    nullptr};
 
+  // Pass the present mode, so it can be switched without recreating the swap chain.
+  VkSwapchainPresentModeInfoKHR present_mode_info = {.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_KHR,
+                                                     .pNext = nullptr,
+                                                     .swapchainCount = 1,
+                                                     .pPresentModes = present_swap_chain->GetPresentModePtr()};
+  if (present_swap_chain->IsUsingPresentModeSwitching())
+    Vulkan::AddPointerToChain(&present_info, &present_mode_info);
+
   // Acquiring the next image isn't guaranteed to block until this frame is displayed, drivers can return immediately
   // and block in the command buffer instead. With vsync, wait for it explicitly, like the frame latency waitable on
   // D3D, see D3DCommon::PresentSwapChain(). VideoPresenter uses the time we return as the vblank timestamp.
@@ -1413,7 +1421,7 @@ void VulkanDevice::QueuePresent(VulkanSwapChain* present_swap_chain)
                            0;
   const VkPresentIdKHR present_id_info = {VK_STRUCTURE_TYPE_PRESENT_ID_KHR, nullptr, 1, &present_id};
   if (present_id != 0)
-    present_info.pNext = &present_id_info;
+    Vulkan::AddPointerToChain(&present_info, &present_id_info);
 
   present_swap_chain->ResetImageAcquireResult();
 
@@ -1825,6 +1833,7 @@ bool VulkanDevice::CreateDeviceAndMainSwapChain(std::string_view adapter, Create
       return false;
 
     RenderBlankFrame(swap_chain.get());
+    m_features.per_present_vsync = swap_chain->SupportsPresentModeSwitching();
     m_main_swap_chain = std::move(swap_chain);
   }
 
@@ -2082,25 +2091,32 @@ GPUPresentResult VulkanDevice::BeginPresent(GPUSwapChain* swap_chain, u32 clear_
     return GPUPresentResult::DeviceLost;
 
   VulkanSwapChain* const SC = static_cast<VulkanSwapChain*>(swap_chain);
+  const u32 prev_width = SC->GetWidth();
+  const u32 prev_height = SC->GetHeight();
   VkResult res = SC->AcquireNextImage(true);
 
   // This can happen when multiple resize events happen in quick succession.
   // In this case, just wait until the next frame to try again.
-  if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
+  // If the swap chain was recreated with a different size, skip this frame too, it was drawn for the old size.
+  // The acquired image is kept for the next frame.
+  const bool resized = (SC->GetWidth() != prev_width || SC->GetHeight() != prev_height);
+  if ((res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) || resized)
   {
     // Still submit the command buffer, otherwise we'll end up with several frames waiting.
     SubmitCommandBuffer(false);
     TrimTexturePool();
-    return GPUPresentResult::SkipPresent;
+    return resized ? GPUPresentResult::SwapChainResized : GPUPresentResult::SkipPresent;
   }
 
   BeginSwapChainRenderPass(SC, clear_color);
   return GPUPresentResult::OK;
 }
 
-void VulkanDevice::EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u64 present_time)
+GPUPresentResult VulkanDevice::EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u64 present_time)
 {
   VulkanSwapChain* const SC = static_cast<VulkanSwapChain*>(swap_chain);
+  const u32 prev_width = SC->GetWidth();
+  const u32 prev_height = SC->GetHeight();
 
   DebugAssert(present_time == 0);
   DebugAssert(m_num_current_render_targets == 0 && !m_current_depth_target);
@@ -2116,15 +2132,24 @@ void VulkanDevice::EndPresent(GPUSwapChain* swap_chain, bool explicit_present, u
   EndAndSubmitCommandBuffer(false, SC, explicit_present);
   InvalidateCachedState();
   TrimTexturePool();
+
+  // Presenting can recreate the swap chain if it's suboptimal or out of date.
+  return (SC->GetWidth() != prev_width || SC->GetHeight() != prev_height) ? GPUPresentResult::SwapChainResized :
+                                                                            GPUPresentResult::OK;
 }
 
-void VulkanDevice::SubmitPresent(GPUSwapChain* swap_chain)
+GPUPresentResult VulkanDevice::SubmitPresent(GPUSwapChain* swap_chain)
 {
   DebugAssert(swap_chain);
   if (m_device_was_lost) [[unlikely]]
-    return;
+    return GPUPresentResult::DeviceLost;
 
-  QueuePresent(static_cast<VulkanSwapChain*>(swap_chain));
+  VulkanSwapChain* const SC = static_cast<VulkanSwapChain*>(swap_chain);
+  const u32 prev_width = SC->GetWidth();
+  const u32 prev_height = SC->GetHeight();
+  QueuePresent(SC);
+  return (SC->GetWidth() != prev_width || SC->GetHeight() != prev_height) ? GPUPresentResult::SwapChainResized :
+                                                                            GPUPresentResult::OK;
 }
 
 #ifdef ENABLE_GPU_OBJECT_NAMES
@@ -2226,6 +2251,7 @@ void VulkanDevice::SetFeatures(CreateFlags create_flags, VkPhysicalDevice physic
   m_features.exclusive_fullscreen = false;
   m_features.explicit_present = true;
   m_features.timed_present = false;
+  m_features.per_present_vsync = false;
   m_features.shader_cache = true;
   m_features.pipeline_cache = true;
   m_features.thread_safe_shader_compile = true;

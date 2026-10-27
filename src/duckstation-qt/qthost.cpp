@@ -148,7 +148,6 @@ static bool ParseCommandLineParametersAndInitializeConfig(QApplication& app,
 
 #ifdef __linux__
 static void AdjustQtEnvironmentVariables();
-static bool IsRunningOnWayland();
 static void ApplyWaylandWorkarounds();
 static void WarnAboutLDLibraryPath();
 static bool ParseDesktopFileExecPath(const std::string& desktop_file_path, std::string* out_exec_path);
@@ -382,7 +381,7 @@ void QtHost::AdjustQtEnvironmentVariables()
 bool QtHost::IsRunningOnWayland()
 {
   const QString platform_name = QGuiApplication::platformName();
-  return (platform_name == "wayland"_L1);
+  return (platform_name.startsWith("wayland"_L1));
 }
 
 void QtHost::ApplyWaylandWorkarounds()
