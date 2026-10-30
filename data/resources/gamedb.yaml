@@ -102418,6 +102418,8 @@ SLPS-02743:
   controllers:
     - AnalogController
     - DigitalController
+  traits:
+    - DisableWidescreen # Game is 2D, and breaks HUD elements.
   metadata:
     publisher: "Micro Cabin"
     developer: "Micro Cabin"
@@ -102439,6 +102441,8 @@ SLPM-87004:
   controllers:
     - AnalogController
     - DigitalController
+  traits:
+    - DisableWidescreen # Game is 2D, and breaks HUD elements.
   metadata:
     publisher: "Micro Cabin"
     developer: "Micro Cabin"
@@ -119766,8 +119770,6 @@ SLPS-01774:
   saveName: "Next Tetris, The (Japan)"
   controllers:
     - DigitalController
-  traits:
-    - ForceRecompilerICache
   codes:
     - SLPS-01774
     - SLPS-02701
@@ -119794,8 +119796,6 @@ SLUS-00862:
     versionTested: "0.1-1638-g0af22825"
   controllers:
     - DigitalController
-  traits:
-    - ForceRecompilerICache
   metadata:
     publisher: "Atari / Hasbro Interactive"
     developer: "Blue Planet Interactive"
@@ -125260,10 +125260,6 @@ SLPS-02459:
     comments: "Does not boot with analog controller."
   controllers:
     - DigitalController
-  traits:
-    - ForceRecompilerICache # Works around crash on startup.
-  settings:
-    cpuOverclockPercent: 95 # Works around crash on startup.
   metadata:
     publisher: "Nichibutsu"
     developer: "Nichibutsu"
@@ -154617,6 +154613,8 @@ SLUS-00728:
   controllers:
     - AnalogController
     - DigitalController
+  traits:
+    - DisableAutoAnalogMode # Required for the hidden Lunar 2 trailer, BIOS pad can't handle analog.
   metadata:
     publisher: "Spaz (Working Designs)"
     developer: "Treasure"
@@ -154638,6 +154636,8 @@ SLPS-01449:
   controllers:
     - AnalogController
     - DigitalController
+  traits:
+    - DisableAutoAnalogMode # Required for the hidden Lunar 2 trailer, BIOS pad can't handle analog.
   metadata:
     publisher: "ESP"
     developer: "Treasure"

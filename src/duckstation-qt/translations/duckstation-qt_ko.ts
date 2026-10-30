@@ -282,7 +282,7 @@ Do you want to enable hardcore mode?</source>
     </message>
     <message>
         <source>When enabled, DuckStation will assume all achievements are locked and not send any unlock notifications to the server.</source>
-        <translation>활성화하면 DuckStation은 모든 도전 과제가 잠긴 것으로 간주하고 봉인 해제 알림을 서버로 보내지 않습니다.</translation>
+        <translation>활성화하면 DuckStation은 모든 도전 과제가 잠긴 것으로 간주하고 잠금 해제 알림을 서버로 보내지 않습니다.</translation>
     </message>
     <message>
         <source>&quot;Challenge&quot; mode for achievements, including leaderboard tracking. Disables save state, cheats, and slowdown functions.</source>
@@ -314,7 +314,7 @@ Do you want to enable hardcore mode?</source>
     </message>
     <message>
         <source>Plays sound effects for events such as achievement unlocks and leaderboard submissions.</source>
-        <translation>도전 과제 봉인 해제 및 순위표 제출과 같은 이벤트에서 음향 효과를 재생합니다.</translation>
+        <translation>도전 과제 잠금 해제 및 순위표 제출과 같은 이벤트에서 음향 효과를 재생합니다.</translation>
     </message>
     <message>
         <source>Downloads all locked achievement badges while starting the game. This will reduce delays in the images being shown when unlocking achievements.</source>
@@ -367,7 +367,7 @@ Do you want to enable hardcore mode?</source>
     </message>
     <message>
         <source>Shows a notification or icons in the selected location when a challenge/primed achievement is active.</source>
-        <translation>도전/프라임 도전 과제가 활성화되었을 때 선택한 위치에 알림 또는 아이콘을 표시합니다.</translation>
+        <translation>도전 또는 달성 준비가 된 도전 과제가 활성화되었을 때 선택한 위치에 알림 또는 아이콘을 표시합니다.</translation>
     </message>
     <message>
         <source>Indicator Location</source>
@@ -700,7 +700,7 @@ Error: {}</source>
     </message>
     <message>
         <source>Almost There</source>
-        <translation>거의 도착</translation>
+        <translation>거의 완료</translation>
     </message>
     <message>
         <source>Not Confirmed</source>
@@ -778,27 +778,27 @@ Error: {}</source>
     </message>
     <message>
         <source>Game was beaten {0}, and completed {1}.</source>
-        <translation>게임을 {0}에 클리어했고 {1}에 완료했습니다.</translation>
+        <translation>게임을 {0} 클리어했고 {1} 완료했습니다.</translation>
     </message>
     <message>
         <source>Subset was beaten {0}, and completed {1}.</source>
-        <translation>하위 집합을 {0}에 클리어했고 {1}에 완료했습니다.</translation>
+        <translation>하위 집합을 {0} 클리어했고 {1} 완료했습니다.</translation>
     </message>
     <message>
         <source>Game was beaten {0}.</source>
-        <translation>게임을 {0}에 클리어했습니다.</translation>
+        <translation>게임을 {0} 클리어했습니다.</translation>
     </message>
     <message>
         <source>Subset was beaten {0}.</source>
-        <translation>하위 집합을 {0}에 클리어했습니다.</translation>
+        <translation>하위 집합을 {0} 클리어했습니다.</translation>
     </message>
     <message>
         <source>Game was completed {0}.</source>
-        <translation>게임을 {0}에 완료했습니다.</translation>
+        <translation>게임을 {0} 완료했습니다.</translation>
     </message>
     <message>
         <source>Subset was completed {0}.</source>
-        <translation>하위 집합을 {0}에 완료했습니다.</translation>
+        <translation>하위 집합을 {0} 완료했습니다.</translation>
     </message>
     <message>
         <source>View Profile</source>
@@ -1370,7 +1370,7 @@ Error: {}</source>
     </message>
     <message>
         <source>Sets the bias value for the small vibration motor. If vibration in some games is too weak or not functioning, try increasing this value. Negative values will decrease the intensity of vibration.</source>
-        <translation>소형진동모터의 편향값을 설정합니다. 일부 게임에서 진동이 너무 약하거나 작동하지 않는 경우 이 값을 늘려보세요. 음수 값은 진동 강도를 감소시킵니다.</translation>
+        <translation>소형 진동 모터의 편향값을 설정합니다. 일부 게임에서 진동이 너무 약하거나 작동하지 않는 경우 이 값을 늘려보세요. 음수 값은 진동 강도를 감소시킵니다.</translation>
     </message>
     <message>
         <source>Invert Left Stick</source>
@@ -1766,11 +1766,6 @@ Error: {}</source>
         <source>Clear</source>
         <comment>dialog_clear</comment>
         <translation>지우기</translation>
-    </message>
-    <message>
-        <source>OK</source>
-        <comment>dialog_ok</comment>
-        <translation>확인</translation>
     </message>
     <message>
         <source>App Settings</source>
@@ -2722,11 +2717,6 @@ Do you want to %1$s anyway?</source>
         <translation>되감기 상태 스크린샷</translation>
     </message>
     <message>
-        <source>Requires Restart</source>
-        <comment>settings_requires_restart</comment>
-        <translation>다시 시작 필요</translation>
-    </message>
-    <message>
         <source>Edit Menu</source>
         <comment>emulation_menu_edit</comment>
         <translation>편집 메뉴</translation>
@@ -2800,11 +2790,6 @@ Do you want to %1$s anyway?</source>
         <source>Enable Rewinding</source>
         <comment>settings_rewind_enable</comment>
         <translation>되감기 활성화</translation>
-    </message>
-    <message>
-        <source>How often a rewind state will be created. Higher frequencies have greater system requirements.</source>
-        <comment>settings_summary_rewind_enable</comment>
-        <translation>되감기 상태를 생성하는 빈도입니다. 빈도가 높을수록 더 높은 시스템 성능이 필요합니다.</translation>
     </message>
     <message>
         <source>Save Frequency</source>
@@ -3765,12 +3750,12 @@ Do you want to %1$s anyway?</source>
     <message>
         <source>Audio Backend</source>
         <comment>settings_backend</comment>
-        <translation>음향 후단부</translation>
+        <translation>음향 백엔드</translation>
     </message>
     <message>
         <source>The audio backend determines how frames produced by the emulator are submitted to the host.</source>
         <comment>settings_summary_backend</comment>
-        <translation>음향 후단부는 에뮬레이터에서 생성된 프레임이 호스트에 전송되는 방식을 결정합니다.</translation>
+        <translation>음향 백엔드는 에뮬레이터에서 생성된 음향 프레임이 호스트에 전송되는 방식을 결정합니다.</translation>
     </message>
     <message>
         <source>Stretch Mode</source>
@@ -4073,6 +4058,86 @@ Do you want to %1$s anyway?</source>
         <translation>제외된 경로에서 제거</translation>
     </message>
     <message>
+        <source>Local Game Storage</source>
+        <comment>game_folders_tab_local_storage</comment>
+        <translation>로컬 게임 저장소</translation>
+    </message>
+    <message>
+        <source>Local game storage is for devices that do not support selecting game folders through the system file picker (Storage Access Framework). Games can be copied here with Add Files, or placed in this folder with a file manager or over USB.</source>
+        <comment>local_game_storage_message</comment>
+        <translation>로컬 게임 저장소는 시스템 파일 선택기(Storage Access Framework)로 게임 폴더를 선택할 수 없는 기기를 위한 공간입니다. &apos;파일 추가&apos;로 게임을 이곳에 복사하거나, 파일 관리자 또는 USB를 통해 이 폴더에 게임을 넣을 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Scan Local Game Storage</source>
+        <comment>local_game_storage_scan</comment>
+        <translation>로컬 게임 저장소 검색</translation>
+    </message>
+    <message>
+        <source>Searches this folder and its subfolders for games.</source>
+        <comment>local_game_storage_scan_summary</comment>
+        <translation>이 폴더와 하위 폴더에서 게임을 검색합니다.</translation>
+    </message>
+    <message>
+        <source>Location</source>
+        <comment>local_game_storage_location</comment>
+        <translation>위치</translation>
+    </message>
+    <message>
+        <source>Add Files</source>
+        <comment>local_game_storage_add_files</comment>
+        <translation>파일 추가</translation>
+    </message>
+    <message>
+        <source>Copies the selected files into local game storage. Select a disc image&apos;s .cue file together with its .bin files.</source>
+        <comment>local_game_storage_add_files_summary</comment>
+        <translation>선택한 파일을 로컬 게임 저장소에 복사합니다. 디스크 이미지의 .cue 파일과 해당 .bin 파일을 함께 선택하세요.</translation>
+    </message>
+    <message>
+        <source>Files</source>
+        <comment>local_game_storage_files</comment>
+        <translation>파일</translation>
+    </message>
+    <message>
+        <source>No files are in local game storage.</source>
+        <comment>local_game_storage_empty</comment>
+        <translation>로컬 게임 저장소에 파일이 없습니다.</translation>
+    </message>
+    <message>
+        <source>Copying %1$s (%2$d of %3$d)…</source>
+        <comment>local_game_storage_copying</comment>
+        <translation>%1$s 복사 중(%3$d개 중 %2$d개)…</translation>
+    </message>
+    <message>
+        <source>%s already exists in local game storage. Do you want to overwrite it?</source>
+        <comment>local_game_storage_overwrite_confirm</comment>
+        <translation>로컬 게임 저장소에 %s 파일이 이미 있습니다. 덮어쓰시겠습니까?</translation>
+    </message>
+    <message>
+        <source>More file actions</source>
+        <comment>local_game_storage_more_actions</comment>
+        <translation>기타 파일 작업</translation>
+    </message>
+    <message>
+        <source>Delete File</source>
+        <comment>local_game_storage_delete</comment>
+        <translation>파일 삭제</translation>
+    </message>
+    <message>
+        <source>Are you sure you want to delete %s? This cannot be undone.</source>
+        <comment>local_game_storage_delete_confirm</comment>
+        <translation>%s 파일을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.</translation>
+    </message>
+    <message>
+        <source>On-Screen Messages</source>
+        <comment>settings_category_osd_messages</comment>
+        <translation>화면 메시지</translation>
+    </message>
+    <message>
+        <source>On-Screen Overlays</source>
+        <comment>settings_category_osd_overlays</comment>
+        <translation>화면 오버레이</translation>
+    </message>
+    <message>
         <source>Game Display</source>
         <comment>settings_category_game_display</comment>
         <translation>게임 화면</translation>
@@ -4275,7 +4340,7 @@ Do you want to %1$s anyway?</source>
     <message>
         <source>Shows a notification or icons in the selected location when a challenge/primed achievement is active.</source>
         <comment>settings_summary_challenge_indicator_mode</comment>
-        <translation>도전/프라임 도전 과제가 활성화되었을 때 선택한 위치에 알림 또는 아이콘을 표시합니다.</translation>
+        <translation>도전 또는 달성 준비가 된 도전 과제가 활성화되었을 때 선택한 위치에 알림 또는 아이콘을 표시합니다.</translation>
     </message>
     <message>
         <source>Indicator Location</source>
@@ -4451,6 +4516,11 @@ Do you want to %1$s anyway?</source>
         <translation>아날로그 모드 전환</translation>
     </message>
     <message>
+        <source>Toggle Software Rendering</source>
+        <comment>emulation_menu_toggle_software_rendering</comment>
+        <translation>소프트웨어 렌더링 전환</translation>
+    </message>
+    <message>
         <source>Change Disc</source>
         <comment>emulation_menu_change_media</comment>
         <translation>디스크 교체</translation>
@@ -4474,6 +4544,11 @@ Do you want to %1$s anyway?</source>
         <source>Controller Settings</source>
         <comment>emulation_menu_input_settings</comment>
         <translation>컨트롤러 설정</translation>
+    </message>
+    <message>
+        <source>Saves state periodically so you can rewind any mistakes while playing.</source>
+        <comment>settings_summary_rewind_enable</comment>
+        <translation>주기적으로 상태를 저장하여 플레이 중 실수한 부분을 되돌릴 수 있습니다.</translation>
     </message>
     <message>
         <source>Unlimited</source>
@@ -5971,6 +6046,16 @@ ${serial}: 게임 일련번호.
         <translation>CD-ROM 설정</translation>
     </message>
     <message>
+        <source>Switch to Next Disc on Stop</source>
+        <comment>settings_auto_disc_change</comment>
+        <translation>CD-ROM 정지 시 다음 디스크로 전환</translation>
+    </message>
+    <message>
+        <source>Automatically switches to the next disc in the game when the game stops the CD-ROM. Does not work for all games.</source>
+        <comment>settings_summary_auto_disc_change</comment>
+        <translation>게임이 CD-ROM을 정지하면 게임의 다음 디스크로 자동 전환합니다. 모든 게임에서 작동하는 것은 아닙니다.</translation>
+    </message>
+    <message>
         <source>Downsampling Display Scale</source>
         <comment>settings_downsample_scale</comment>
         <translation>하향 표본화 화면 표시 크기</translation>
@@ -5979,6 +6064,36 @@ ${serial}: 게임 일련번호.
         <source>Selects the resolution scale that will be applied to the final image. 1x will downsample to the original console resolution.</source>
         <comment>settings_summary_downsample_scale</comment>
         <translation>최종 이미지에 적용할 해상도 배율을 선택합니다. 1배를 선택하면 원래 콘솔 해상도로 다운샘플링됩니다.</translation>
+    </message>
+    <message>
+        <source>Depth Clear Threshold</source>
+        <comment>settings_pgxp_depth_clear_threshold</comment>
+        <translation>심도 지우기 임계값</translation>
+    </message>
+    <message>
+        <source>Determines the increase in depth that will result in the depth buffer being cleared. Can help with depth issues in some games, but is still a hack/workaround.</source>
+        <comment>settings_summary_pgxp_depth_clear_threshold</comment>
+        <translation>심도 버퍼를 지울 심도 증가량을 결정합니다. 일부 게임의 심도 문제를 해결하는 데 도움이 될 수 있지만, 여전히 편법을 이용한 우회책입니다.</translation>
+    </message>
+    <message>
+        <source>Depth Bias</source>
+        <comment>settings_pgxp_depth_bias</comment>
+        <translation>심도 바이어스</translation>
+    </message>
+    <message>
+        <source>Offsets each polygon towards the camera to reduce flickering decals and shadows. Too high can show hidden surfaces.</source>
+        <comment>settings_summary_pgxp_depth_bias</comment>
+        <translation>각 폴리곤을 카메라 쪽으로 이동시켜 데칼과 그림자의 깜박임을 줄입니다. 값을 너무 높이면 가려진 표면이 보일 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Normalize Depth Scale</source>
+        <comment>settings_pgxp_normalize_depth</comment>
+        <translation>심도 배율 정규화</translation>
+    </message>
+    <message>
+        <source>Fixes missing geometry with the depth buffer in some games, but breaks others.</source>
+        <comment>settings_summary_pgxp_normalize_depth</comment>
+        <translation>일부 게임에서 심도 버퍼 사용 시 지오메트리가 누락되는 문제를 해결하지만, 다른 게임에서는 문제를 일으킵니다.</translation>
     </message>
     <message>
         <source>Skip presenting frames when the image has not changed. Can help performance on very slow devices.</source>
@@ -7543,7 +7658,7 @@ Would you like to import one now?</source>
     </message>
     <message>
         <source>Backend:</source>
-        <translation>후단부 :</translation>
+        <translation>백엔드 :</translation>
     </message>
     <message>
         <source>Buffer Size:</source>
@@ -7556,6 +7671,18 @@ Would you like to import one now?</source>
     <message>
         <source>Output Latency:</source>
         <translation>출력 대기 시간 :</translation>
+    </message>
+    <message>
+        <source>Menu Volume:</source>
+        <translation>메뉴 음량:</translation>
+    </message>
+    <message>
+        <source>Reset Menu Volume</source>
+        <translation>메뉴 음량 초기화</translation>
+    </message>
+    <message>
+        <source>Mute Game Audio</source>
+        <translation>게임 오디오 음소거</translation>
     </message>
     <message>
         <source>Stretch Mode:</source>
@@ -7584,10 +7711,6 @@ Would you like to import one now?</source>
     <message>
         <source>Fast Forward Volume:</source>
         <translation>빨리 감기 음량 :</translation>
-    </message>
-    <message>
-        <source>Mute All Sound</source>
-        <translation>모두 음소거</translation>
     </message>
     <message>
         <source>Mute CD Audio</source>
@@ -7643,11 +7766,11 @@ Would you like to import one now?</source>
     </message>
     <message>
         <source>Audio Backend</source>
-        <translation>음향 후단부</translation>
+        <translation>음향 백엔드</translation>
     </message>
     <message>
         <source>The audio backend determines how frames produced by the emulator are submitted to the host. Cubeb provides the lowest latency, if you encounter issues, try the SDL backend. The null backend disables all host audio output.</source>
-        <translation>후단부 음향은 에뮬레이터에서 생성된 프레임이 호스트에 전송되는 방식을 결정합니다. Cubeb은 가장 낮은 대기 시간을 제공하므로 문제가 발생하면 SDL 후단부를 사용해 보세요. 후단부 없음은 모든 호스트 음향 출력을 비활성화합니다.</translation>
+        <translation>음향 백엔드는 에뮬레이터에서 생성된 음향 프레임이 호스트에 전송되는 방식을 결정합니다. Cubeb은 가장 낮은 대기 시간을 제공합니다. 문제가 발생하면 SDL 백엔드를 사용해 보세요. Null 백엔드는 호스트의 모든 음향 출력을 비활성화합니다.</translation>
     </message>
     <message>
         <source>Output Latency</source>
@@ -7655,7 +7778,7 @@ Would you like to import one now?</source>
     </message>
     <message>
         <source>The buffer size determines the size of the chunks of audio which will be pulled by the host. Smaller values reduce the output latency, but may cause hitches if the emulation speed is inconsistent. Note that the Cubeb backend uses smaller chunks regardless of this value, so using a low value here may not significantly change latency.</source>
-        <translation>버퍼 크기는 호스트가 가져올 음향 청크의 크기를 결정합니다. 값이 작을수록 출력 대기 시간이 줄어들지만 에뮬레이션 속도가 일정하지 않을 경우 버벅거림이 발생할 수 있습니다. Cubeb 후단부는 이 값에 관계없이 더 작은 청크를 사용하므로 여기에 낮은 값을 사용해도 대기 시간이 크게 달라지지 않을 수 있습니다.</translation>
+        <translation>버퍼 크기는 호스트가 가져올 음향 청크의 크기를 결정합니다. 값이 작을수록 출력 대기 시간이 줄어들지만 에뮬레이션 속도가 일정하지 않을 경우 버벅거림이 발생할 수 있습니다. Cubeb 백엔드는 이 값에 관계없이 더 작은 청크를 사용하므로 여기에 낮은 값을 사용해도 대기 시간이 크게 달라지지 않을 수 있습니다.</translation>
     </message>
     <message>
         <source>Output Volume</source>
@@ -7668,6 +7791,18 @@ Would you like to import one now?</source>
     <message>
         <source>Controls the volume of the audio played on the host when fast forwarding.</source>
         <translation>빨리 감기 시, 호스트에서 재생되는 음향의 음량을 제어합니다.</translation>
+    </message>
+    <message>
+        <source>Menu Volume</source>
+        <translation>메뉴 음량</translation>
+    </message>
+    <message>
+        <source>Controls the volume of sound effects played by the Big Picture UI and achievement notifications.</source>
+        <translation>빅피처 UI와 도전 과제 알림에서 재생되는 효과음의 음량을 조절합니다.</translation>
+    </message>
+    <message>
+        <source>Prevents the game from producing any audible sound.</source>
+        <translation>게임에서 소리가 나지 않도록 합니다.</translation>
     </message>
     <message>
         <source>N/A</source>
@@ -7744,10 +7879,6 @@ Would you like to import one now?</source>
         <source>When enabled, the minimum supported output latency will be used for the host API.</source>
         <oldsource>When enabled, the minimum supported output latency will be used for the host API.</oldsource>
         <translation>이 기능이 활성화되면 호스트 API에 대해 지원되는 최소 출력 지연 시간이 사용됩니다.</translation>
-    </message>
-    <message>
-        <source>Prevents the emulator from producing any audible sound.</source>
-        <translation>에뮬레이터에서 가청음을 생성하지 않도록 합니다.</translation>
     </message>
     <message>
         <source>Forcibly mutes both CD-DA and XA audio from the CD-ROM. Can be used to disable background music in some games.</source>
@@ -7931,7 +8062,7 @@ You can manually update DuckStation by re-downloading the latest release. Do you
     <message>
         <source>Failed to remove updater exe after update:
 %1</source>
-        <translation>업데이트 후 업데이트 프로그램 exe를 제거 실패 :
+        <translation>업데이트 후 업데이트 프로그램 실행 파일을 제거하지 못했습니다:
 %1</translation>
     </message>
 </context>
@@ -8271,7 +8402,7 @@ Your dump may be corrupted, or the physical disc is scratched.</source>
     </message>
     <message>
         <source>Backend:</source>
-        <translation>후단부 :</translation>
+        <translation>백엔드 :</translation>
     </message>
     <message>
         <source>Container:</source>
@@ -8364,7 +8495,7 @@ Your dump may be corrupted, or the physical disc is scratched.</source>
     </message>
     <message>
         <source>Backend</source>
-        <translation>후단부</translation>
+        <translation>백엔드</translation>
     </message>
     <message>
         <source>Selects the framework that is used to encode video/audio.</source>
@@ -8600,7 +8731,7 @@ Trying to use this cheat will not work as expected. Do you want to continue?</so
     </message>
     <message>
         <source>{} disabled by achievements hardcore mode/safe mode.</source>
-        <translation>{} 도전 과제 하드코어 모드/안전 모드로 인해 비활성화되었습니다.</translation>
+        <translation>도전 과제 하드코어 모드/안전 모드로 인해 {} 비활성화되었습니다.</translation>
     </message>
     <message>
         <source>Cheat &apos;{}&apos; applied.</source>
@@ -10086,7 +10217,7 @@ This file is approximately 206KB, do you want to download it now?</source>
     <message>
         <source>By default, the downloaded covers will be saved with the game&apos;s title. If this is not desired, you can check the &quot;Use Serial File Names&quot; box below. Using serials instead of game titles will prevent conflicts when multiple regions of the same game are used.</source>
         <oldsource>By default, the downloaded covers will be saved with the game&apos;s title. If this is not desired, you can check the &quot;Use Serial File Names&quot; box below. Using serials instead of game titles will prevent conflicts when multiple regions of the same game are used.</oldsource>
-        <translation>기본적으로 내려받기한 커버는 게임 타이틀과 함께 저장됩니다. 원하지 않으시면 아래의 &quot;시리얼 파일 이름 사용&quot; 상자를 체크하세요. 게임 타이틀 대신 시리얼을 사용하면 같은 게임의 여러 지역을 사용할 때 충돌을 방지할 수 있습니다.</translation>
+        <translation>기본적으로 내려받은 커버는 게임 타이틀을 파일 이름으로 사용하여 저장됩니다. 이를 원하지 않으면 아래의 "시리얼 파일 이름 사용" 상자를 선택하세요. 게임 타이틀 대신 일련번호를 사용하면 같은 게임의 여러 지역 버전을 사용할 때 충돌을 방지할 수 있습니다.</translation>
     </message>
     <message>
         <source>Use Serial File Names</source>
@@ -10143,7 +10274,7 @@ This file is approximately 206KB, do you want to download it now?</source>
     </message>
     <message>
         <source>Power Off</source>
-        <translation>전원 끔</translation>
+        <translation>동력 차단</translation>
     </message>
     <message>
         <source>Power 1</source>
@@ -11150,20 +11281,20 @@ Clicking Reset will restore the serial back to the value scanned from in the dis
         <translation>선택 안 함</translation>
     </message>
     <message>
-        <source>Synchronizes presentation of the console&apos;s frames to the host. Enabling may result in smoother animations, at the cost of increased input lag. &lt;strong&gt;GSync/FreeSync users should enable Optimal Frame Pacing instead.&lt;/strong&gt;</source>
-        <translation>콘솔 프레임의 표시를 호스트에 동기화합니다. 활성화하면 애니메이션이 더 매끄러워질 수 있지만 입력 지연이 증가합니다. &lt;strong&gt;GSync/FreeSync 사용자는 대신 최적 프레임 페이싱을 활성화해야 합니다.&lt;/strong&gt;</translation>
-    </message>
-    <message>
-        <source>Adjusts the emulation speed so the console&apos;s refresh rate matches the host&apos;s refresh rate when VSync is enabled. This results in the smoothest animations possible, at the cost of potentially increasing the emulation speed by less than 1%. Sync To Host Refresh Rate will not take effect if the console&apos;s refresh rate is too far from the host&apos;s refresh rate. Users with variable refresh rate displays should disable this option.</source>
-        <translation>수직 동기화가 활성화된 경우 콘솔의 새로 고침 빈도가 호스트의 새로 고침 빈도와 일치하도록 에뮬레이션 속도를 조정합니다. 이로 인해 잠재적으로 에뮬레이션 속도가 1% 미만으로 증가하는 대신 가능한 가장 부드러운 애니메이션이 생성됩니다. 콘솔의 새로 고침 빈도가 호스트의 새로 고침 빈도와 너무 먼 경우 호스트 새로 고침 빈도에 동기화가 적용되지 않습니다. 가변 새로 고침 빈도 디스플레이를 사용하는 사용자는 이 옵션을 비활성화해야 합니다.</translation>
-    </message>
-    <message>
         <source>Checked</source>
         <translation>선택됨</translation>
     </message>
     <message>
-        <source>Enabling this option will ensure every frame the console renders is displayed to the screen, at a consistent rate, for optimal frame pacing. If you have a GSync/FreeSync display, enable this option. If you are having difficulties maintaining full speed, or are getting audio glitches, try disabling this option.</source>
-        <translation>이 옵션을 활성화하면 최적의 프레임 페이싱을 위해 콘솔이 렌더링하는 모든 프레임이 일관된 속도로 화면에 표시됩니다. 화면에 GSync/FreeSync 기능이 있으면 이 옵션을 활성화하세요. 최대 속도를 유지하는 데 어려움이 있거나 음향 오류가 발생하는 경우 이 옵션을 비활성화해 보세요.</translation>
+        <source>Waits for your display to refresh before showing each frame. This stops tearing, where the top and bottom of the screen show different frames. &lt;strong&gt;Leave this on if you have a GSync/FreeSync display, or you can still get tearing.&lt;/strong&gt;</source>
+        <translation>디스플레이가 새로 고쳐질 때까지 기다렸다가 각 프레임을 표시합니다. 화면 위쪽과 아래쪽에 서로 다른 프레임이 표시되는 티어링 현상을 방지합니다. &lt;strong&gt;GSync/FreeSync 디스플레이에서도 이 설정을 켜 두세요. 그렇지 않으면 티어링이 발생할 수 있습니다.&lt;/strong&gt;</translation>
+    </message>
+    <message>
+        <source>Runs the game very slightly faster or slower so its frame rate exactly matches your display&apos;s refresh rate. With VSync on, this gives the smoothest motion, but the game may run up to 1% faster than it should. It has no effect if the two rates are too far apart. &lt;strong&gt;Turn this off if you have a GSync/FreeSync display, since the display already changes its refresh rate to match the game.&lt;/strong&gt;</source>
+        <translation>게임의 프레임 속도가 디스플레이의 주사율과 정확히 일치하도록 게임을 아주 조금 빠르게 또는 느리게 실행합니다. VSync가 켜져 있으면 가장 부드러운 움직임을 제공하지만, 게임이 원래보다 최대 1% 빠르게 실행될 수 있습니다. 두 값의 차이가 너무 크면 효과가 없습니다. &lt;strong&gt;GSync/FreeSync 디스플레이는 이미 게임에 맞춰 주사율을 변경하므로 이 설정을 끄세요.&lt;/strong&gt;</translation>
+    </message>
+    <message>
+        <source>Shows every frame the game draws, evenly spaced, for the smoothest motion. Only turn this off if your computer can&apos;t keep the game at full speed. With it off, an occasional slow frame is less likely to cause stuttering or crackling sound, but motion won&apos;t be as even.</source>
+        <translation>게임이 그리는 모든 프레임을 일정한 간격으로 표시하여 가장 부드러운 움직임을 제공합니다. 컴퓨터가 게임을 정상 속도로 실행할 수 없는 경우에만 이 설정을 끄세요. 끄면 가끔 프레임 처리가 늦어져도 화면이 끊기거나 소리가 지직거릴 가능성은 줄어들지만, 움직임은 덜 고르게 됩니다.</translation>
     </message>
     <message>
         <source>Reduces input latency by delaying the start of frame until closer to the presentation time. This may cause dropped frames on slower systems with higher frame time variance, if the buffer size is not sufficient.</source>
@@ -11554,7 +11685,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>Audio Backend</source>
-        <translation>음향 후단부</translation>
+        <translation>음향 백엔드</translation>
     </message>
     <message>
         <source>Audio Control</source>
@@ -11586,7 +11717,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>Automatic mapping failed, no devices are available.</source>
-        <translation>자동 매핑에 실패하여, 사용할 수 있는 장치가 없습니다.</translation>
+        <translation>사용 가능한 장치가 없어 자동 매핑에 실패했습니다.</translation>
     </message>
     <message>
         <source>Automatically Resize Window</source>
@@ -11638,7 +11769,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>Backend Settings</source>
-        <translation>후단부 설정</translation>
+        <translation>백엔드 설정</translation>
     </message>
     <message>
         <source>Behavior</source>
@@ -12012,7 +12143,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>Displays popup messages on events such as achievement unlocks and leaderboard submissions.</source>
-        <translation>도전 과제 봉인 해제 및 순위표 제출과 같은 이벤트에 대한 팝업 메시지를 표시합니다.</translation>
+        <translation>도전 과제 잠금 해제 및 순위표 제출과 같은 이벤트에 대한 팝업 메시지를 표시합니다.</translation>
     </message>
     <message>
         <source>Displays popup messages when starting, submitting, or failing a leaderboard challenge.</source>
@@ -12020,7 +12151,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>Do you want to continue from the automatic save created {}?</source>
-        <translation>{}에 생성된 자동 저장에서 계속하시겠습니까?</translation>
+        <translation>{} 생성된 자동 저장에서 계속하시겠습니까?</translation>
     </message>
     <message>
         <source>Double-Click Toggles Fullscreen</source>
@@ -12181,10 +12312,6 @@ You cannot undo this action.</source>
     <message>
         <source>Encore Mode</source>
         <translation>앙코르 모드</translation>
-    </message>
-    <message>
-        <source>Ensures every frame generated is displayed for optimal pacing. Enable for variable refresh displays, such as GSync/FreeSync. Disable if you are having speed or sound issues.</source>
-        <translation>최적의 프레임 간격을 위해 생성된 모든 프레임이 표시되도록 합니다. GSync/FreeSync와 같은 가변 주사율 디스플레이에서는 활성화하세요. 속도나 사운드 문제가 있으면 비활성화하세요.</translation>
     </message>
     <message>
         <source>Enter Value</source>
@@ -12671,7 +12798,7 @@ Please check your username and password, and try again.</source>
     </message>
     <message>
         <source>Shows a notification or icons in the selected location when a challenge/primed achievement is active.</source>
-        <translation>도전/프라임 도전 과제가 활성화되었을 때 선택한 위치에 알림 또는 아이콘을 표시합니다.</translation>
+        <translation>도전 또는 달성 준비가 된 도전 과제가 활성화되었을 때 선택한 위치에 알림 또는 아이콘을 표시합니다.</translation>
     </message>
     <message>
         <source>Shows a popup in the selected location when progress towards a measured achievement changes.</source>
@@ -12699,7 +12826,7 @@ Please check your username and password, and try again.</source>
     </message>
     <message>
         <source>Smooths out the blockiness of magnified textures on 2D objects.</source>
-        <translation>2D 객체의 확대된 텍스처의 블록성을 부드럽게 합니다.</translation>
+        <translation>2D 객체에서 확대된 텍스처의 각진 픽셀을 부드럽게 처리합니다.</translation>
     </message>
     <message>
         <source>Sort Alphabetically</source>
@@ -12732,10 +12859,6 @@ Please check your username and password, and try again.</source>
     <message>
         <source>Stores the current settings to a controller preset.</source>
         <translation>현재 설정을 컨트롤러 사전 설정에 저장합니다.</translation>
-    </message>
-    <message>
-        <source>Synchronizes presentation of the console&apos;s frames to the host. GSync/FreeSync users should enable Optimal Frame Pacing instead.</source>
-        <translation>콘솔 프레임의 표시를 호스트에 동기화합니다. GSync/FreeSync 사용자는 대신 최적 프레임 페이싱을 활성화해야 합니다.</translation>
     </message>
     <message>
         <source>Textures Directory</source>
@@ -12894,10 +13017,6 @@ Please check your username and password, and try again.</source>
         <translation>도전 과제 : </translation>
     </message>
     <message>
-        <source>Adjusts the emulation speed so the console&apos;s refresh rate matches the host when VSync is enabled.</source>
-        <translation>수직 동기화가 활성화되어 있을 때, 콘솔의 재생 빈도가 호스트와 일치하도록 에뮬레이션 속도를 조정합니다.</translation>
-    </message>
-    <message>
         <source>Allows booting to continue even without a required SBI file. These games will not run correctly.</source>
         <translation>필수 SBI 파일 없이도 부팅을 계속할 수 있습니다. 이러한 게임은 제대로 실행되지 않습니다.</translation>
     </message>
@@ -13011,7 +13130,7 @@ Please check your username and password, and try again.</source>
     </message>
     <message>
         <source>Dumps textures that have replacements already loaded.</source>
-        <translation>대체 항목이 이미 불러온 텍스처를 덤프합니다.</translation>
+        <translation>대체 텍스처가 이미 불러와진 원본 텍스처를 덤프합니다.</translation>
     </message>
     <message>
         <source>Enable Cheats</source>
@@ -13203,7 +13322,7 @@ Please check your username and password, and try again.</source>
     </message>
     <message>
         <source>How often a rewind state will be created. Higher frequencies have greater system requirements.</source>
-        <translation>되감기 상태가 생성되는 빈도입니다. 주파수가 높을수록 시스템 요구 사항이 커집니다.</translation>
+        <translation>되감기 상태가 생성되는 빈도입니다. 빈도가 높을수록 시스템 요구 사항이 커집니다.</translation>
     </message>
     <message>
         <source>Identifies any new files added to the game directories.</source>
@@ -13390,10 +13509,6 @@ Please check your username and password, and try again.</source>
         <translation>멀티탭 모드</translation>
     </message>
     <message>
-        <source>Mute All Sound</source>
-        <translation>모두 음소거</translation>
-    </message>
-    <message>
         <source>Mute CD Audio</source>
         <translation>CD 음소거</translation>
     </message>
@@ -13447,7 +13562,7 @@ Please check your username and password, and try again.</source>
     </message>
     <message>
         <source>Open Containing Directory</source>
-        <translation>포함된 디렉터리 열기</translation>
+        <translation>파일이 있는 디렉터리 열기</translation>
     </message>
     <message>
         <source>Open To Game List</source>
@@ -13559,7 +13674,7 @@ Please check your username and password, and try again.</source>
     </message>
     <message>
         <source>Plays sound effects for events such as achievement unlocks and leaderboard submissions.</source>
-        <translation>도전 과제 봉인 해제 및 순위표 제출과 같은 이벤트에서 음향 효과를 재생합니다.</translation>
+        <translation>도전 과제 잠금 해제 및 순위표 제출과 같은 이벤트에서 음향 효과를 재생합니다.</translation>
     </message>
     <message>
         <source>Port {} Controller Type</source>
@@ -13731,7 +13846,7 @@ Please check your username and password, and try again.</source>
     </message>
     <message>
         <source>Update Progress</source>
-        <translation>업데이트 진행 상황</translation>
+        <translation>진행 상황 업데이트</translation>
     </message>
     <message>
         <source>Upscales the game&apos;s rendering by the specified multiplier.</source>
@@ -14248,10 +14363,6 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>게임 실행 중 창 크기를 조절하지 못하도록 합니다.</translation>
     </message>
     <message>
-        <source>Prevents the emulator from producing any audible sound.</source>
-        <translation>에뮬레이터에서 가청음을 생성하지 않도록 합니다.</translation>
-    </message>
-    <message>
         <source>Prevents the screen saver from activating and the host from sleeping while emulation is running.</source>
         <translation>에뮬레이션이 실행되는 동안 화면 보호기가 활성화되지 않고 호스트가 절전 모드로 전환되지 않도록 합니다.</translation>
     </message>
@@ -14416,6 +14527,42 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>플레이 시간 초기화</translation>
     </message>
     <message>
+        <source>Brings later polygons closer to the camera, in millionths of depth. Reduces flickering of decals.</source>
+        <translation>나중에 그려지는 폴리곤을 심도의 백만분의 일 단위로 카메라 쪽에 더 가깝게 배치합니다. 데칼의 깜박임을 줄입니다.</translation>
+    </message>
+    <message>
+        <source>Clear Binding</source>
+        <translation>할당 지우기</translation>
+    </message>
+    <message>
+        <source>Controls the volume of sound effects played by the Big Picture UI and achievement notifications.</source>
+        <translation>빅피처 UI와 도전 과제 알림에서 재생되는 효과음의 음량을 조절합니다.</translation>
+    </message>
+    <message>
+        <source>Depth Bias</source>
+        <translation>심도 바이어스</translation>
+    </message>
+    <message>
+        <source>Menu Volume</source>
+        <translation>메뉴 음량</translation>
+    </message>
+    <message>
+        <source>Mute Game Audio</source>
+        <translation>게임 오디오 음소거</translation>
+    </message>
+    <message>
+        <source>Normalize Depth Scale</source>
+        <translation>심도 배율 정규화</translation>
+    </message>
+    <message>
+        <source>Prevents the game from producing any audible sound.</source>
+        <translation>게임에서 소리가 나지 않도록 합니다.</translation>
+    </message>
+    <message>
+        <source>Removes the scale of each object&apos;s transform from depth values. Fixes missing geometry in some games, but breaks others.</source>
+        <translation>심도 값에서 각 오브젝트의 변환에 포함된 배율을 제거합니다. 일부 게임에서 지오메트리가 누락되는 문제를 해결하지만, 다른 게임에서는 문제를 일으킵니다.</translation>
+    </message>
+    <message>
         <source>Reset Settings</source>
         <translation>설정 초기화</translation>
     </message>
@@ -14450,6 +14597,10 @@ Do you want to delete the save state and boot the game anyway?</source>
     <message>
         <source>Runahead/Rewind</source>
         <translation>선행 실행/되감기</translation>
+    </message>
+    <message>
+        <source>Runs the game very slightly faster or slower to match your display&apos;s refresh rate when VSync is on. Turn this off with GSync/FreeSync displays.</source>
+        <translation>VSync가 켜져 있을 때 디스플레이 주사율에 맞춰 게임을 아주 조금 빠르게 또는 느리게 실행합니다. GSync/FreeSync 디스플레이에서는 이 설정을 끄세요.</translation>
     </message>
     <message>
         <source>SDL DualSense Player LED</source>
@@ -14537,7 +14688,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Search Directories</source>
-        <translation>디렉터리 찾기</translation>
+        <translation>검색 디렉터리</translation>
     </message>
     <message>
         <source>Search on redump.info</source>
@@ -14732,6 +14883,10 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>화면 오른쪽 하단에 향상 설정을 표시합니다.</translation>
     </message>
     <message>
+        <source>Shows every frame the game draws, evenly spaced. Only turn this off if your computer can&apos;t keep the game at full speed, and you&apos;re getting stuttering or crackling sound.</source>
+        <translation>게임이 그리는 모든 프레임을 일정한 간격으로 표시합니다. 컴퓨터가 게임을 정상 속도로 실행할 수 없고 화면이 끊기거나 소리가 지직거리는 경우에만 이 설정을 끄세요.</translation>
+    </message>
+    <message>
         <source>Shows information about input and audio latency in the top-right corner of the display.</source>
         <translation>화면 우측 상단에 입력 및 음향 지연 시간에 대한 정보가 표시됩니다.</translation>
     </message>
@@ -14757,7 +14912,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Shows the game you are currently playing as part of your profile in Discord.</source>
-        <translation>현재 디스코드에서 프로필의 일부로 플레이 중인 게임을 표시합니다.</translation>
+        <translation>현재 플레이 중인 게임을 디스코드 프로필에 표시합니다.</translation>
     </message>
     <message>
         <source>Shows the host&apos;s GPU usage in the top-right corner of the display.</source>
@@ -14909,7 +15064,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>The audio backend determines how frames produced by the emulator are submitted to the host.</source>
-        <translation>음향 후단부는 에뮬레이터에서 생성된 프레임이 호스트에 전송되는 방식을 결정합니다.</translation>
+        <translation>음향 백엔드는 에뮬레이터에서 생성된 음향 프레임이 호스트에 전송되는 방식을 결정합니다.</translation>
     </message>
     <message>
         <source>The selected memory card image will be used in shared mode for this slot.</source>
@@ -15064,6 +15219,10 @@ Do you want to {0} anyway?</source>
 그래도 {0}을(를) 하시겠습니까?</translation>
     </message>
     <message>
+        <source>Waits for your display to refresh before showing each frame, which stops tearing. Leave this on with GSync/FreeSync displays too.</source>
+        <translation>디스플레이가 새로 고쳐질 때까지 기다렸다가 각 프레임을 표시하여 티어링을 방지합니다. GSync/FreeSync 디스플레이에서도 이 설정을 켜 두세요.</translation>
+    </message>
+    <message>
         <source>Warning Message Duration</source>
         <translation>경고 메시지 표시 시간</translation>
     </message>
@@ -15081,7 +15240,7 @@ Do you want to {0} anyway?</source>
     </message>
     <message>
         <source>When enabled, DuckStation will assume all achievements are locked and not send any unlock notifications to the server.</source>
-        <translation>활성화하면 DuckStation은 모든 도전 과제가 잠긴 것으로 간주하고 봉인 해제 알림을 서버로 보내지 않습니다.</translation>
+        <translation>활성화하면 DuckStation은 모든 도전 과제가 잠긴 것으로 간주하고 잠금 해제 알림을 서버로 보내지 않습니다.</translation>
     </message>
     <message>
         <source>When enabled, each session will behave as if no achievements have been unlocked.</source>
@@ -15117,7 +15276,7 @@ Do you want to {0} anyway?</source>
     </message>
     <message>
         <source>Yes, {} now and risk memory card corruption.</source>
-        <translation>예, 이제 {}하면 메모리 카드가 손상될 위험이 있습니다.</translation>
+        <translation>예, 메모리 카드 손상 위험을 감수하고 지금 {}합니다.</translation>
     </message>
     <message>
         <source>&quot;Challenge&quot; mode for achievements, including leaderboard tracking. Disables save state, cheats, and slowdown functions.</source>
@@ -15299,7 +15458,7 @@ Do you want to {1} anyway?</source>
     </message>
     <message>
         <source>Resolution scale {0}x is not divisible by downsample scale {1}x, using {2}x instead.</source>
-        <translation>해상도 배율 {0}배는 다운샘플링 배율 {1}배로 나눌 수 없으며 대신 {2}배를 사용합니다.</translation>
+        <translation>해상도 배율 {0}배는 다운샘플링 배율 {1}배로 나누어 떨어지지 않아 대신 {2}배를 사용합니다.</translation>
     </message>
     <message>
         <source>Resolution scale {0}x not supported for adaptive downsampling, using {1}x.</source>
@@ -15443,6 +15602,10 @@ Do you want to {1} anyway?</source>
     <message>
         <source>Disallow in Hardcore Mode</source>
         <translation>하드코어 모드에서 허용 안 함</translation>
+    </message>
+    <message>
+        <source>Force PGXP Preserve Projection Precision</source>
+        <translation>PGXP 투영 정밀도 유지 강제 적용</translation>
     </message>
 </context>
 <context>
@@ -15814,6 +15977,11 @@ Are you sure you want to continue?</source>
         <translation>PGXP CPU 모드 강제 적용</translation>
     </message>
     <message>
+        <source>Normalize PGXP Depth</source>
+        <comment>GameDatabase::Trait</comment>
+        <translation>PGXP 심도 정규화</translation>
+    </message>
+    <message>
         <source>Force Recompiler ICache</source>
         <comment>GameDatabase::Trait</comment>
         <translation>리컴파일러 ICache 강제 적용</translation>
@@ -15890,6 +16058,10 @@ Are you sure you want to continue?</source>
     <message>
         <source>Filter Framebuffer Uploads Minimum Height</source>
         <translation>프레임버퍼 업로드 필터링 최소 높이</translation>
+    </message>
+    <message>
+        <source>PGXP Depth Bias</source>
+        <translation>PGXP 심도 바이어스</translation>
     </message>
     <message>
         <source>Verifying Image</source>
@@ -16763,7 +16935,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Exclusive Fullscreen:</source>
-        <translation>전체 화면 전용 :</translation>
+        <translation>독점 전체 화면 :</translation>
     </message>
     <message>
         <source>Screen Position:</source>
@@ -16814,12 +16986,24 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <translation>깊이 지우기 임계값 초기화</translation>
     </message>
     <message>
+        <source>Depth Bias:</source>
+        <translation>심도 바이어스:</translation>
+    </message>
+    <message>
+        <source>Reset Depth Bias</source>
+        <translation>심도 바이어스 초기화</translation>
+    </message>
+    <message>
         <source>CPU Mode:</source>
         <translation>CPU 모드:</translation>
     </message>
     <message>
         <source>Vertex Cache:</source>
         <translation>버텍스 캐시:</translation>
+    </message>
+    <message>
+        <source>Normalize Depth Scale</source>
+        <translation>심도 배율 정규화</translation>
     </message>
     <message>
         <source>Texture Replacement</source>
@@ -17212,7 +17396,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Smooths out the blockiness of magnified textures on 3D objects by using filtering. &lt;br&gt;Will have a greater effect on higher resolution scales.</source>
-        <translation>필터링을 사용하여 3D 객체의 확대된 텍스처의 블록성을 부드럽게 합니다. &lt;br&gt;해상도가 높을수록 효과적입니다.</translation>
+        <translation>필터링을 사용하여 3D 객체에서 확대된 텍스처의 각진 픽셀을 부드럽게 처리합니다. &lt;br&gt;해상도 배율이 높을수록 효과가 커집니다.</translation>
     </message>
     <message>
         <source>Dithering</source>
@@ -17220,7 +17404,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Controls how dithering is applied in the emulated GPU. True Color disables dithering and produces the nicest looking gradients. Scaled options make the dither pattern less noticeable at higher resolutions. Shader Blending options perform blending in software, and are more accurate but have a &lt;strong&gt;significant&lt;/strong&gt; performance penalty.</source>
-        <translation>에뮬레이션된 GPU에서 디더링이 적용되는 방식을 제어합니다. 트루컬러는 디더링을 비활성화하고 가장 보기 좋은 그라데이션을 생성합니다. 확장된 옵션을 사용하면 더 높은 해상도에서 디더링 패턴이 덜 눈에 띄게 됩니다. 셰이더 블렌딩 옵션은 소프트웨어에서 블렌딩을 수행하며 정확도는 높지만 성능이 &lt;strong&gt;상당히&lt;/strong&gt; 저하됩니다.</translation>
+        <translation>에뮬레이션된 GPU에서 디더링이 적용되는 방식을 제어합니다. 트루컬러는 디더링을 비활성화하고 가장 보기 좋은 그라데이션을 생성합니다. 배율 조정 옵션을 사용하면 더 높은 해상도에서 디더링 패턴이 덜 눈에 띄게 됩니다. 셰이더 블렌딩 옵션은 소프트웨어에서 블렌딩을 수행하며 정확도는 높지만 성능이 &lt;strong&gt;상당히&lt;/strong&gt; 저하됩니다.</translation>
     </message>
     <message>
         <source>FMV Scaling</source>
@@ -17265,7 +17449,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Exclusive Fullscreen Control</source>
-        <translation>전체 화면 전용 제어</translation>
+        <translation>독점 전체 화면 제어</translation>
     </message>
     <message>
         <source>Automatic</source>
@@ -17329,7 +17513,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Dumps textures that have replacements already loaded.</source>
-        <translation>대체 항목이 이미 불러온 텍스처를 덤프합니다.</translation>
+        <translation>대체 텍스처가 이미 불러와진 원본 텍스처를 덤프합니다.</translation>
     </message>
     <message>
         <source>Enables the replacement of background textures in supported games.</source>
@@ -17361,7 +17545,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Smooths out the blockiness of magnified textures on 2D objects by using filtering. This filter only applies to sprites and other 2D elements, such as the HUD.</source>
-        <translation>필터링을 사용하여 2D 객체의 확대된 텍스처의 블록성을 부드럽게 합니다. 이 필터는 스프라이트 및 HUD와 같은 기타 2D 요소에만 적용됩니다.</translation>
+        <translation>필터링을 사용하여 2D 객체에서 확대된 텍스처의 각진 픽셀을 부드럽게 처리합니다. 이 필터는 스프라이트 및 HUD와 같은 기타 2D 요소에만 적용됩니다.</translation>
     </message>
     <message>
         <source>Determines which algorithm is used to convert interlaced frames to progressive for display on your system. Using progressive rendering provides the best quality output, but some games require interlaced rendering.</source>
@@ -17393,7 +17577,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Discards precise geometry when it is found to be offset past the specified threshold. This can help with games that have vertices significantly moved by PGXP, but is still a hack/workaround.</source>
-        <translation>지정된 임계값을 초과하는 오프셋이 발견되면 정확한 형상을 삭제합니다. 이는 PGXP에 의해 상당히 이동된 정점이 있는 게임에 도움이 될 수 있지만 여전히 해킹/해결책입니다.</translation>
+        <translation>지정된 임계값을 초과하는 오프셋이 발견되면 정밀한 지오메트리 정보를 버립니다. PGXP로 정점이 크게 이동하는 게임에 도움이 될 수 있지만 여전히 편법을 이용한 우회책입니다.</translation>
     </message>
     <message>
         <source>Depth Clear Threshold</source>
@@ -17401,7 +17585,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Determines the increase in depth that will result in the depth buffer being cleared. Can help with depth issues in some games, but is still a hack/workaround.</source>
-        <translation>심도 버퍼가 지워지는 심도 증가를 결정합니다. 일부 게임에서 심도 문제를 해결하는 데 도움이 될 수 있지만 여전히 핵/해결책입니다.</translation>
+        <translation>심도 버퍼를 지울 심도 증가량을 결정합니다. 일부 게임의 심도 문제를 해결하는 데 도움이 될 수 있지만, 여전히 편법을 이용한 우회책입니다.</translation>
     </message>
     <message>
         <source>Uses perspective-correct interpolation for texture coordinates, straightening out warped textures. Requires geometry correction enabled.</source>
@@ -17496,12 +17680,24 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <translation>높이가 이 값 이상인 프레임버퍼 업로드만 필터링합니다. 텍스처 데이터가 필터링되지 않도록 하려면 이 값을 늘리세요.</translation>
     </message>
     <message>
+        <source>Depth Bias</source>
+        <translation>심도 바이어스</translation>
+    </message>
+    <message>
+        <source>Brings each polygon closer to the camera than the polygons drawn before it, in millionths of depth. Higher values reduce flickering of decals and shadows, but can cause polygons to show through surfaces in front of them.</source>
+        <translation>각 폴리곤을 그보다 먼저 그려진 폴리곤보다 카메라에 더 가깝게 배치합니다. 단위는 심도의 백만분의 일입니다. 값을 높이면 데칼과 그림자의 깜박임이 줄어들지만, 폴리곤이 앞에 있는 표면을 뚫고 보일 수 있습니다.</translation>
+    </message>
+    <message>
         <source>Uses PGXP for all instructions, not just memory operations. Required for PGXP to correct wobble in some games, but has a high performance cost. Automatic enables it only for games that require it according to the game database.</source>
         <translation>메모리 연산뿐 아니라 모든 명령어에 PGXP를 사용합니다. 일부 게임에서 PGXP로 흔들림을 보정하려면 필요하지만 성능 부담이 큽니다. 자동으로 설정하면 게임 데이터베이스에 따라 필요한 게임에서만 활성화합니다.</translation>
     </message>
     <message>
         <source>Uses screen-space vertex positions to obtain precise positions, instead of tracking memory accesses. Can provide PGXP compatibility for some games, but &lt;strong&gt;generally provides no benefit.&lt;/strong&gt; Automatic enables it only for games that require it according to the game database.</source>
         <translation>메모리 접근을 추적하는 대신 화면 공간의 정점 위치를 사용하여 정밀한 위치를 구합니다. 일부 게임에서 PGXP 호환성을 제공할 수 있지만 &lt;strong&gt;일반적으로는 이점이 없습니다.&lt;/strong&gt; 자동으로 설정하면 게임 데이터베이스에 따라 필요한 게임에서만 활성화합니다.</translation>
+    </message>
+    <message>
+        <source>Removes the scale of each object&apos;s transform from depth values. Fixes missing geometry with the depth buffer in games which shrink the transforms of distant objects, but breaks games which scale models through the transform. The game database will enable this automatically when needed.</source>
+        <translation>심도 값에서 각 오브젝트의 변환에 포함된 배율을 제거합니다. 멀리 있는 오브젝트의 변환 배율을 줄이는 게임에서는 심도 버퍼 사용 시 지오메트리가 누락되는 문제를 해결하지만, 변환을 통해 모델 크기를 조절하는 게임에서는 문제를 일으킵니다. 필요한 경우 게임 데이터베이스에 따라 자동으로 활성화됩니다.</translation>
     </message>
     <message>
         <source>Disables texture emulation in the GPU, forcing all primitives to only show vertex colours.</source>
@@ -17533,7 +17729,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Disable Texture Copies To Self</source>
-        <translation>자신에게 텍스처 복사 비활성화</translation>
+        <translation>텍스처 자체 복사 비활성화</translation>
     </message>
     <message>
         <source>Disables the use of self-copy updates for the VRAM texture. Useful for testing broken graphics drivers. &lt;strong&gt;Only for developer use.&lt;/strong&gt;</source>
@@ -18676,7 +18872,7 @@ Shift 키를 누른 채 클릭하면 여러 할당을 설정할 수 있습니다
     </message>
     <message>
         <source>Renders the display of the simulated console to the main window of the application, over the game list. If checked, the display will render in a separate window.</source>
-        <translation>시뮬레이션된 콘솔의 화면 표시 장치를 게임 목록 위에 있는 앱의 기본 창에 렌더링합니다. 이 옵션을 선택하면 화면 표시 장치가 별도의 창에 렌더링됩니다.</translation>
+        <translation>시뮬레이션된 콘솔의 화면을 앱의 기본 창에서 게임 목록 위에 렌더링합니다. 이 옵션을 선택하면 화면을 별도의 창에 렌더링합니다.</translation>
     </message>
     <message>
         <source>Pauses the emulator when you minimize the window or switch to another application, and unpauses when you switch back.</source>
@@ -18688,7 +18884,7 @@ Shift 키를 누른 채 클릭하면 여러 할당을 설정할 수 있습니다
     </message>
     <message>
         <source>Shows the game you are currently playing as part of your profile in Discord.</source>
-        <translation>현재 디스코드에서 프로필의 일부로 플레이 중인 게임을 표시합니다.</translation>
+        <translation>현재 플레이 중인 게임을 디스코드 프로필에 표시합니다.</translation>
     </message>
     <message>
         <source>Hides the main window of the application while the game is displayed in a separate window.</source>
@@ -18708,7 +18904,7 @@ Shift 키를 누른 채 클릭하면 여러 할당을 설정할 수 있습니다
     </message>
     <message>
         <source>Disables the rounding of windows automatically applied in Windows 11, which may obscure parts of the content.</source>
-        <translation>Windows 11에서 자동으로 적용되는 창 둥글게 처리를 비활성화합니다. 이 기능으로 인해 콘텐츠 일부가 가려질 수 있습니다.</translation>
+        <translation>콘텐츠 일부를 가릴 수 있는 Windows 11의 자동 창 모서리 둥글게 처리를 비활성화합니다.</translation>
     </message>
     <message>
         <source>Calculates the true scaling factor for your display, avoiding the downsampling applied by MacOS.</source>
@@ -20140,7 +20336,7 @@ The saves will not be recoverable.</source>
     </message>
     <message>
         <source>Save was created %1.</source>
-        <translation>%1에 저장되었습니다.</translation>
+        <translation>%1 저장되었습니다.</translation>
     </message>
     <message>
         <source>Confirm Disc Change</source>
@@ -20261,7 +20457,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Open Containing Directory...</source>
-        <translation>포함된 디렉터리 열기...</translation>
+        <translation>파일이 있는 디렉터리 열기...</translation>
     </message>
     <message>
         <source>Browse ISO...</source>
@@ -21359,7 +21555,7 @@ Error: {1}</source>
     </message>
     <message>
         <source>Add Selected Results To Watch List</source>
-        <translation>관심 목록에 선택한 결과 추가</translation>
+        <translation>선택한 결과를 감시 목록에 추가</translation>
     </message>
     <message>
         <source>Simple Cheat Code or Description</source>
@@ -21375,11 +21571,11 @@ Error: {1}</source>
     </message>
     <message>
         <source>Load Watch</source>
-        <translation>관심 목록 불러오기</translation>
+        <translation>감시 목록 불러오기</translation>
     </message>
     <message>
         <source>Save Watch</source>
-        <translation>관심 목록 저장</translation>
+        <translation>감시 목록 저장</translation>
     </message>
     <message>
         <source>Add Manual Address</source>
@@ -22275,10 +22471,6 @@ Error: {1}</source>
         <translation>셰이더 다시 불러오기(&amp;R)</translation>
     </message>
     <message>
-        <source>Post Processing Chain</source>
-        <translation>후처리 체인</translation>
-    </message>
-    <message>
         <source>Add</source>
         <translation>추가</translation>
     </message>
@@ -22318,12 +22510,12 @@ Error: {1}</source>
         <translation>선택된 사전 설정 :</translation>
     </message>
     <message>
-        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;A border overlay is an image that is drawn around the system display. Border overlays are applied after post-processing. You can choose from the border list below, or manually configure a custom border.&lt;/p&gt;&lt;p&gt;Additional preset borders can be added to the &lt;span style=&quot; font-weight:700;&quot;&gt;resources\overlays&lt;/span&gt; folder within in the data directory.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;외곽선 오버레이는 시스템 화면 주위에 그려지는 이미지입니다. 외곽선 오버레이는 후처리 후에 적용됩니다. 아래 외곽선 목록에서 선택하거나 사용자 지정 외곽선을 직접 설정할 수 있습니다.&lt;/p&gt;&lt;p&gt;데이터 디렉터리의 &lt;span style=&quot; font-weight:700;&quot;&gt;resources\overlays&lt;/span&gt; 폴더에 미리 설정된 외곽선을 추가할 수 있습니다.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
-    </message>
-    <message>
         <source>Refresh Overlay List</source>
         <translation>오버레이 목록 새로 고침</translation>
+    </message>
+    <message>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Additional preset borders can be added to the &lt;span style=&quot; font-weight:700;&quot;&gt;resources\overlays&lt;/span&gt; folder within the data directory.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;추가 프리셋 외곽선은 데이터 디렉터리 내의 &lt;span style=&quot; font-weight:700;&quot;&gt;resources\overlays&lt;/span&gt; 폴더에 넣을 수 있습니다.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <source>Custom Configuration</source>
@@ -22474,6 +22666,18 @@ Error: {1}</source>
     <message>
         <source>Border Overlay</source>
         <translation>외곽선 오버레이</translation>
+    </message>
+    <message>
+        <source>Display shaders are applied to the final picture after it has been scaled to fit your screen. Use these for screen effects, such as CRT filters and scanlines.</source>
+        <translation>디스플레이 셰이더는 화면 크기에 맞게 확대 또는 축소된 최종 영상에 적용됩니다. CRT 필터나 스캔라인과 같은 화면 효과에 사용하세요.</translation>
+    </message>
+    <message>
+        <source>Internal shaders are applied to the game&apos;s picture before it is scaled, at the resolution the game is rendered at. Use these for effects that change how the game itself looks, such as SSAO.</source>
+        <translation>내부 셰이더는 게임 영상이 확대 또는 축소되기 전에 게임 렌더링 해상도에서 적용됩니다. SSAO처럼 게임 자체의 모습을 바꾸는 효과에 사용하세요.</translation>
+    </message>
+    <message>
+        <source>A border overlay is an image drawn around the game&apos;s picture, such as a TV or handheld frame. It is drawn on top of everything else, after all shaders have been applied.</source>
+        <translation>외곽선 오버레이는 TV나 휴대용 게임기의 테두리처럼 게임 영상 주변에 그려지는 이미지입니다. 모든 셰이더가 적용된 후 다른 모든 요소 위에 그려집니다.</translation>
     </message>
 </context>
 <context>
@@ -24035,7 +24239,7 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>&lt;strong&gt;BIOS Settings&lt;/strong&gt;&lt;hr&gt;These options control which BIOS and expansion port is used.&lt;br&gt;&lt;br&gt;Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;바이오스 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 사용할 바이오스 및 확장 포트를 제어합니다.&lt;br&gt;&lt;br&gt;추가 정보를 보려면 옵션 위에 마우스를 올려놓고, 이 패널을 스크롤하려면 Shift+휠을 누르세요.</translation>
+        <translation>&lt;strong&gt;바이오스 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 사용할 바이오스 및 확장 포트를 제어합니다.&lt;br&gt;&lt;br&gt;추가 정보를 보려면 옵션 위에 마우스를 올려놓고, 이 패널을 스크롤하려면 Shift 키를 누른 채 마우스 휠을 돌리세요.</translation>
     </message>
     <message>
         <source>Console</source>
@@ -24047,11 +24251,11 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>&lt;strong&gt;Console Settings&lt;/strong&gt;&lt;hr&gt;These options determine the configuration of the simulated console.&lt;br&gt;&lt;br&gt;Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;콘솔 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 시뮬레이션된 콘솔의 구성을 결정합니다.&lt;br&gt;&lt;br&gt;추가 정보를 보려면 옵션 위에 마우스를 올리고, 이 패널을 스크롤하려면 Shift+휠을 누르세요.</translation>
+        <translation>&lt;strong&gt;콘솔 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 시뮬레이션된 콘솔의 구성을 결정합니다.&lt;br&gt;&lt;br&gt;추가 정보를 보려면 옵션 위에 마우스를 올리고, 이 패널을 스크롤하려면 Shift 키를 누른 채 마우스 휠을 돌리세요.</translation>
     </message>
     <message>
         <source>&lt;strong&gt;Emulation Settings&lt;/strong&gt;&lt;hr&gt;These options determine the speed and runahead behavior of the system.&lt;br&gt;&lt;br&gt;Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;에뮬레이션 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 시스템의 속도와 선행 실행 동작을 결정합니다.&lt;br&gt;&lt;br&gt;추가 정보를 보려면 옵션 위에 마우스를 올리고, 이 패널을 스크롤하려면 Shift+휠을 누르세요.</translation>
+        <translation>&lt;strong&gt;에뮬레이션 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 시스템의 속도와 선행 실행 동작을 결정합니다.&lt;br&gt;&lt;br&gt;추가 정보를 보려면 옵션 위에 마우스를 올리고, 이 패널을 스크롤하려면 Shift 키를 누른 채 마우스 휠을 돌리세요.</translation>
     </message>
     <message>
         <source>Patches</source>
@@ -24104,7 +24308,7 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>&lt;strong&gt;Advanced Settings&lt;/strong&gt;&lt;hr&gt;These options control logging and internal behavior of the emulator. Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;고급 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 에뮬레이터의 로깅 및 내부 동작을 제어합니다. 추가 정보를 보려면 옵션 위에 마우스를 올리고, Shift+휠을 눌러 이 패널을 스크롤합니다.</translation>
+        <translation>&lt;strong&gt;고급 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 에뮬레이터의 로깅 및 내부 동작을 제어합니다. 추가 정보를 보려면 옵션 위에 마우스를 올리고, Shift 키를 누른 채 마우스 휠을 돌려 이 패널을 스크롤합니다.</translation>
     </message>
     <message>
         <source>Debugging</source>
@@ -24132,7 +24336,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>&lt;strong&gt;Interface Settings&lt;/strong&gt;&lt;hr&gt;These options control how the emulator looks and behaves.&lt;br&gt;&lt;br&gt;Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;인터페이스 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 에뮬레이터의 모양과 동작을 제어합니다.&lt;br&gt;&lt;br&gt;추가 정보를 보려면 옵션 위에 마우스를 올리고, 이 패널을 스크롤하려면 Shift+휠을 누르세요.</translation>
+        <translation>&lt;strong&gt;인터페이스 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 에뮬레이터의 모양과 동작을 제어합니다.&lt;br&gt;&lt;br&gt;추가 정보를 보려면 옵션 위에 마우스를 올리고, 이 패널을 스크롤하려면 Shift 키를 누른 채 마우스 휠을 돌리세요.</translation>
     </message>
     <message>
         <source>Graphics</source>
@@ -24140,7 +24344,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>&lt;strong&gt;Graphics Settings&lt;/strong&gt;&lt;hr&gt;These options control how the graphics of the emulated console are rendered. Not all options are available for the software renderer. Mouse over each option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;그래픽 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 에뮬레이트된 콘솔의 그래픽이 렌더링되는 방식을 제어합니다. 소프트웨어 렌더러에 모든 옵션을 사용할 수 있는 것은 아닙니다. 추가 정보를 보려면 각 옵션 위에 마우스를 올리고, Shift+휠을 눌러 이 패널을 스크롤합니다.</translation>
+        <translation>&lt;strong&gt;그래픽 설정&lt;/strong&gt;&lt;hr&gt;이 옵션은 에뮬레이트된 콘솔의 그래픽이 렌더링되는 방식을 제어합니다. 소프트웨어 렌더러에 모든 옵션을 사용할 수 있는 것은 아닙니다. 추가 정보를 보려면 각 옵션 위에 마우스를 올리고, Shift 키를 누른 채 마우스 휠을 돌려 이 패널을 스크롤합니다.</translation>
     </message>
     <message>
         <source>Audio</source>
@@ -24215,7 +24419,7 @@ Do you want to continue?</source>
     <name>SetupWizardDialog</name>
     <message>
         <source>DuckStation Setup Wizard</source>
-        <translation>DuckStation 설치 마법사</translation>
+        <translation>DuckStation 설정 마법사</translation>
     </message>
     <message>
         <source>Graphics Setup</source>
@@ -24227,7 +24431,7 @@ Do you want to continue?</source>
     </message>
     <message>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;h1 style=&quot; margin-top:18px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:xx-large; font-weight:700;&quot;&gt;Welcome to DuckStation!&lt;/span&gt;&lt;/h1&gt;&lt;p&gt;This wizard will help guide you through the configuration steps required to use the application. It is recommended if this is your first time installing DuckStation that you view the setup guide at &lt;a href=&quot;https://github.com/stenzek/duckstation#downloading-and-running&quot;&gt;https://github.com/stenzek/duckstation#downloading-and-running&lt;/a&gt;.&lt;/p&gt;&lt;p&gt;By default, DuckStation will connect to the server at &lt;a href=&quot;https://github.com/&quot;&gt;github.com&lt;/a&gt; to check for updates, and if available and confirmed, download update packages from &lt;a href=&quot;https://github.com/&quot;&gt;github.com&lt;/a&gt;. If you do not wish for DuckStation to make any network connections on startup, you should uncheck the Automatic Updates option now. The Automatic Update setting can be changed later at any time in Interface Settings.&lt;/p&gt;&lt;p&gt;Please choose a language and theme to begin.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;h1 style=&quot; margin-top:18px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:xx-large; font-weight:700;&quot;&gt;DuckStation에 오신 것을 환영합니다!&lt;/span&gt;&lt;/h1&gt;&lt;p&gt;이 마법사는 앱을 사용하는 데 필요한 구성 단계를 안내합니다. DuckStation을 처음 설치하는 경우 &lt;a href=&quot;https://github.com/stenzek/duckstation#downloading-and-running&quot;&gt;https://github.com/stenzek/duckstation#downloading-and-running&lt;/a&gt;에서 설치 가이드를 참조하는 것이 좋습니다.&lt;/p&gt;&lt;p&gt;기본적으로 DuckStation은 &lt;a href=&quot;https://github.com/&quot;&gt;github.com&lt;/a&gt;의 서버에 연결하여 업데이트를 확인하고, 사용 가능하고 확인된 경우 &lt;a href=&quot;https://github.com/&quot;&gt;github.com&lt;/a&gt;에서 업데이트 패키지를 내려받기합니다. 시작 시, DuckStation이 네트워크에 연결하지 않도록 하려면 지금 자동 업데이트 옵션을 선택 취소해야 합니다. 자동 업데이트 설정은 나중에 인터페이스 설정에서 언제든지 변경할 수 있습니다.&lt;/p&gt;&lt;p&gt;시작할 언어와 테마를 선택하세요.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;h1 style=" margin-top:18px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;"&gt;&lt;span style=" font-size:xx-large; font-weight:700;"&gt;DuckStation에 오신 것을 환영합니다!&lt;/span&gt;&lt;/h1&gt;&lt;p&gt;이 마법사는 앱을 사용하는 데 필요한 구성 단계를 안내합니다. DuckStation을 처음 설치하는 경우 &lt;a href="https://github.com/stenzek/duckstation#downloading-and-running"&gt;https://github.com/stenzek/duckstation#downloading-and-running&lt;/a&gt;에서 설치 가이드를 참조하는 것이 좋습니다.&lt;/p&gt;&lt;p&gt;기본적으로 DuckStation은 &lt;a href="https://github.com/"&gt;github.com&lt;/a&gt;의 서버에 연결하여 업데이트를 확인하고, 사용 가능하고 확인된 경우 &lt;a href="https://github.com/"&gt;github.com&lt;/a&gt;에서 업데이트 패키지를 내려받습니다. 시작 시, DuckStation이 네트워크에 연결하지 않도록 하려면 지금 자동 업데이트 옵션을 선택 취소해야 합니다. 자동 업데이트 설정은 나중에 인터페이스 설정에서 언제든지 변경할 수 있습니다.&lt;/p&gt;&lt;p&gt;시작할 언어와 테마를 선택하세요.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <source>Language:</source>
@@ -24681,9 +24885,9 @@ Do you wish to continue?</source>
 
 {0} : {1}
 
-게임이 제대로 실행되지 않을 수 있습니다.
+게임이 제대로 실행되지 않을 가능성이 높습니다.
 
-SBI 파일을 추가하는 방법에 대한 지침은 사용 설명서를 확인하세요.
+SBI 파일을 추가하는 방법은 README 파일을 확인하세요.
 
 계속하시겠습니까?</translation>
     </message>
@@ -24733,7 +24937,7 @@ SBI 파일 이름은 디스크 이미지의 이름과 일치해야 합니다.</t
     </message>
     <message>
         <source>Multisample anti-aliasing is enabled, some games may not render correctly.</source>
-        <translation>다중 표본 앤티 앨리어싱이 활성화되어 있으면 일부 게임이 올바르게 렌더링되지 않을 수 있습니다.</translation>
+        <translation>다중 표본 앤티 앨리어싱이 활성화되어 있습니다. 일부 게임이 올바르게 렌더링되지 않을 수 있습니다.</translation>
     </message>
     <message>
         <source>Round upscaled texture coordinates is enabled. This may cause rendering errors.</source>
@@ -24917,8 +25121,8 @@ Using current CD image, this may result in instability.</source>
     <message>
         <source>This save state was created with the following tainted options, and may be unstable.
 You must save to a memory card and reset the game to clear any effects.</source>
-        <translation>이 저장 상태는 다음의 변조된 옵션으로 생성되었으며 불안정할 수 있습니다.
-영향을 모두 없애려면 메모리 카드에 저장한 뒤 게임을 재설정해야 합니다.</translation>
+        <translation>이 저장 상태는 안정성에 영향을 줄 수 있는 다음 옵션으로 생성되었으며 불안정할 수 있습니다.
+영향을 모두 없애려면 메모리 카드에 저장한 뒤 게임을 다시 시작해야 합니다.</translation>
     </message>
     <message>
         <source>Texture filtering disabled.</source>
@@ -25138,7 +25342,7 @@ Using shared card instead.</source>
     </message>
     <message>
         <source>Loaded undo save state created {}.</source>
-        <translation>{}에 생성된 실행 취소 저장 상태를 불러왔습니다.</translation>
+        <translation>{} 생성된 실행 취소 저장 상태를 불러왔습니다.</translation>
     </message>
     <message>
         <source>Using disc-specific memory card &apos;{}&apos; instead of per-game card.</source>
@@ -25150,11 +25354,11 @@ Using shared card instead.</source>
 {0}
 
 This may be due to your GPU not supporting the chosen renderer ({1}), or because your graphics drivers need to be updated.</source>
-        <translation>렌더링 장치 생성 실패 :
+        <translation>렌더링 장치를 생성하지 못했습니다:
 
 {0}
 
-이는 GPU가 선택한 렌더러({1})를 지원하지 않거나 최신의 그래픽 드라이버 업데이트를 진행하지 않아서 일 수 있습니다.</translation>
+GPU가 선택한 렌더러({1})를 지원하지 않거나 그래픽 드라이버를 업데이트해야 하기 때문일 수 있습니다.</translation>
     </message>
     <message>
         <source>No BIOS image found for {} region.

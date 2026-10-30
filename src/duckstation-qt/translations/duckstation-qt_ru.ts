@@ -37,7 +37,7 @@
     </message>
     <message>
         <source>DuckStation Third-Party Notices</source>
-        <translation>Уведомления третьих лиц DuckStation</translation>
+        <translation>Уведомления о сторонних компонентах DuckStation</translation>
     </message>
     <message>
         <source>Missing thirdparty.html file. You should request it from where-ever you obtained DuckStation.</source>
@@ -542,7 +542,7 @@ Error: {}</source>
     </message>
     <message>
         <source>RetroAchievements Login Failed</source>
-        <translation>RetroAchievements Не удалось войти в систему</translation>
+        <translation>Не удалось войти в RetroAchievements</translation>
     </message>
     <message numerus="yes">
         <source>Prefetching achievement badges (%n remaining)...</source>
@@ -1420,7 +1420,7 @@ This session will start in offline mode.</source>
     </message>
     <message>
         <source>Allows you to use the left analog stick to control the d-pad in digital mode, as well as the buttons.</source>
-        <translation>Позволяет использовать левый аналоговый стик для управления d-pad в цифровом режиме, а также кнопки.</translation>
+        <translation>Позволяет использовать левый аналоговый стик для управления крестовиной в цифровом режиме в дополнение к кнопкам крестовины.</translation>
     </message>
     <message>
         <source>Use Right Analog for Shoulder Buttons</source>
@@ -1804,11 +1804,6 @@ This session will start in offline mode.</source>
         <translation>Очистить</translation>
     </message>
     <message>
-        <source>OK</source>
-        <comment>dialog_ok</comment>
-        <translation>Хорошо</translation>
-    </message>
-    <message>
         <source>App Settings</source>
         <comment>action_settings</comment>
         <translation>Настройки приложения</translation>
@@ -1963,7 +1958,7 @@ This session will start in offline mode.</source>
     <message>
         <source>OSD Scale</source>
         <comment>settings_osd_scale</comment>
-        <translation>Масштаб экранного меню</translation>
+        <translation>Масштаб экранных индикаторов</translation>
     </message>
     <message>
         <source>Show Latency Statistics</source>
@@ -2774,11 +2769,6 @@ Do you want to %1$s anyway?</source>
         <translation>Снимок экрана состояния перемотки назад</translation>
     </message>
     <message>
-        <source>Requires Restart</source>
-        <comment>settings_requires_restart</comment>
-        <translation>Требуется перезапуск</translation>
-    </message>
-    <message>
         <source>Edit Menu</source>
         <comment>emulation_menu_edit</comment>
         <translation>Редактировать меню</translation>
@@ -2852,11 +2842,6 @@ Do you want to %1$s anyway?</source>
         <source>Enable Rewinding</source>
         <comment>settings_rewind_enable</comment>
         <translation>Включить перемотку назад</translation>
-    </message>
-    <message>
-        <source>How often a rewind state will be created. Higher frequencies have greater system requirements.</source>
-        <comment>settings_summary_rewind_enable</comment>
-        <translation>Как часто будет создаваться состояние перемотки назад. Более высокие частоты предъявляют более высокие системные требования.</translation>
     </message>
     <message>
         <source>Save Frequency</source>
@@ -4133,6 +4118,86 @@ Do you want to %1$s anyway?</source>
         <translation>Удалить из исключённых путей</translation>
     </message>
     <message>
+        <source>Local Game Storage</source>
+        <comment>game_folders_tab_local_storage</comment>
+        <translation>Локальное хранилище игр</translation>
+    </message>
+    <message>
+        <source>Local game storage is for devices that do not support selecting game folders through the system file picker (Storage Access Framework). Games can be copied here with Add Files, or placed in this folder with a file manager or over USB.</source>
+        <comment>local_game_storage_message</comment>
+        <translation>Локальное хранилище игр предназначено для устройств, на которых нельзя выбирать папки с играми через системное окно выбора файлов (Storage Access Framework). Игры можно скопировать сюда с помощью кнопки «Добавить файлы» или поместить в эту папку через файловый менеджер либо по USB.</translation>
+    </message>
+    <message>
+        <source>Scan Local Game Storage</source>
+        <comment>local_game_storage_scan</comment>
+        <translation>Сканировать локальное хранилище игр</translation>
+    </message>
+    <message>
+        <source>Searches this folder and its subfolders for games.</source>
+        <comment>local_game_storage_scan_summary</comment>
+        <translation>Ищет игры в этой папке и её подпапках.</translation>
+    </message>
+    <message>
+        <source>Location</source>
+        <comment>local_game_storage_location</comment>
+        <translation>Расположение</translation>
+    </message>
+    <message>
+        <source>Add Files</source>
+        <comment>local_game_storage_add_files</comment>
+        <translation>Добавить файлы</translation>
+    </message>
+    <message>
+        <source>Copies the selected files into local game storage. Select a disc image&apos;s .cue file together with its .bin files.</source>
+        <comment>local_game_storage_add_files_summary</comment>
+        <translation>Копирует выбранные файлы в локальное хранилище игр. Выбирайте файл .cue образа диска вместе с соответствующими файлами .bin.</translation>
+    </message>
+    <message>
+        <source>Files</source>
+        <comment>local_game_storage_files</comment>
+        <translation>Файлы</translation>
+    </message>
+    <message>
+        <source>No files are in local game storage.</source>
+        <comment>local_game_storage_empty</comment>
+        <translation>В локальном хранилище игр нет файлов.</translation>
+    </message>
+    <message>
+        <source>Copying %1$s (%2$d of %3$d)…</source>
+        <comment>local_game_storage_copying</comment>
+        <translation>Копирование %1$s (%2$d из %3$d)…</translation>
+    </message>
+    <message>
+        <source>%s already exists in local game storage. Do you want to overwrite it?</source>
+        <comment>local_game_storage_overwrite_confirm</comment>
+        <translation>%s уже существует в локальном хранилище игр. Перезаписать файл?</translation>
+    </message>
+    <message>
+        <source>More file actions</source>
+        <comment>local_game_storage_more_actions</comment>
+        <translation>Другие действия с файлами</translation>
+    </message>
+    <message>
+        <source>Delete File</source>
+        <comment>local_game_storage_delete</comment>
+        <translation>Удалить файл</translation>
+    </message>
+    <message>
+        <source>Are you sure you want to delete %s? This cannot be undone.</source>
+        <comment>local_game_storage_delete_confirm</comment>
+        <translation>Вы уверены, что хотите удалить %s? Это действие нельзя отменить.</translation>
+    </message>
+    <message>
+        <source>On-Screen Messages</source>
+        <comment>settings_category_osd_messages</comment>
+        <translation>Экранные сообщения</translation>
+    </message>
+    <message>
+        <source>On-Screen Overlays</source>
+        <comment>settings_category_osd_overlays</comment>
+        <translation>Экранные наложения</translation>
+    </message>
+    <message>
         <source>Game Display</source>
         <comment>settings_category_game_display</comment>
         <translation>Отображение игры</translation>
@@ -4513,6 +4578,11 @@ Do you want to %1$s anyway?</source>
         <translation>Переключить аналоговый режим</translation>
     </message>
     <message>
+        <source>Toggle Software Rendering</source>
+        <comment>emulation_menu_toggle_software_rendering</comment>
+        <translation>Переключить программную отрисовку</translation>
+    </message>
+    <message>
         <source>Change Disc</source>
         <comment>emulation_menu_change_media</comment>
         <translation>Сменить диск</translation>
@@ -4536,6 +4606,11 @@ Do you want to %1$s anyway?</source>
         <source>Controller Settings</source>
         <comment>emulation_menu_input_settings</comment>
         <translation>Настройки контроллеров</translation>
+    </message>
+    <message>
+        <source>Saves state periodically so you can rewind any mistakes while playing.</source>
+        <comment>settings_summary_rewind_enable</comment>
+        <translation>Периодически сохраняет состояние, чтобы можно было перемотать игру назад и исправить допущенные ошибки.</translation>
     </message>
     <message>
         <source>Unlimited</source>
@@ -6039,6 +6114,16 @@ ${serial}: Серийный номер игры.
         <translation>Настройки CD-ROM</translation>
     </message>
     <message>
+        <source>Switch to Next Disc on Stop</source>
+        <comment>settings_auto_disc_change</comment>
+        <translation>Переход на следующий диск при остановке</translation>
+    </message>
+    <message>
+        <source>Automatically switches to the next disc in the game when the game stops the CD-ROM. Does not work for all games.</source>
+        <comment>settings_summary_auto_disc_change</comment>
+        <translation>Автоматически переключается на следующий диск игры, когда игра останавливает привод CD-ROM. Работает не во всех играх.</translation>
+    </message>
+    <message>
         <source>Downsampling Display Scale</source>
         <comment>settings_downsample_scale</comment>
         <translation>Масштаб отображения с понижением разрешения</translation>
@@ -6047,6 +6132,36 @@ ${serial}: Серийный номер игры.
         <source>Selects the resolution scale that will be applied to the final image. 1x will downsample to the original console resolution.</source>
         <comment>settings_summary_downsample_scale</comment>
         <translation>Выбор масштаба разрешения, который будет применяться к конечному изображению. При значении 1x разрешение будет понижено до исходного разрешения консоли.</translation>
+    </message>
+    <message>
+        <source>Depth Clear Threshold</source>
+        <comment>settings_pgxp_depth_clear_threshold</comment>
+        <translation>Порог очистки глубины</translation>
+    </message>
+    <message>
+        <source>Determines the increase in depth that will result in the depth buffer being cleared. Can help with depth issues in some games, but is still a hack/workaround.</source>
+        <comment>settings_summary_pgxp_depth_clear_threshold</comment>
+        <translation>Определяет увеличение глубины, при котором будет очищен буфер глубины. Может помочь решить проблемы с глубиной в некоторых играх, но всё равно является хаком или обходным решением.</translation>
+    </message>
+    <message>
+        <source>Depth Bias</source>
+        <comment>settings_pgxp_depth_bias</comment>
+        <translation>Смещение глубины</translation>
+    </message>
+    <message>
+        <source>Offsets each polygon towards the camera to reduce flickering decals and shadows. Too high can show hidden surfaces.</source>
+        <comment>settings_summary_pgxp_depth_bias</comment>
+        <translation>Смещает каждый полигон к камере, чтобы уменьшить мерцание декалей и теней. Слишком большое значение может сделать видимыми скрытые поверхности.</translation>
+    </message>
+    <message>
+        <source>Normalize Depth Scale</source>
+        <comment>settings_pgxp_normalize_depth</comment>
+        <translation>Нормализовать масштаб глубины</translation>
+    </message>
+    <message>
+        <source>Fixes missing geometry with the depth buffer in some games, but breaks others.</source>
+        <comment>settings_summary_pgxp_normalize_depth</comment>
+        <translation>Устраняет пропадание геометрии при использовании буфера глубины в некоторых играх, но нарушает работу других.</translation>
     </message>
     <message>
         <source>Skip presenting frames when the image has not changed. Can help performance on very slow devices.</source>
@@ -6793,7 +6908,7 @@ Would you like to import one now?</source>
     <message>
         <source>Adds additional precision to PGXP data post-projection. May improve visuals in some games.</source>
         <comment>settings_summary_pgxp_preserve_proj_fp</comment>
-        <translation>Добавляет дополнительную точность постпроецированию данных PGXP. Может улучшить визуальную составляющую в некоторых играх.</translation>
+        <translation>Повышает точность данных PGXP после проецирования. Может улучшить изображение в некоторых играх.</translation>
     </message>
     <message>
         <source>Uses perspective-correct interpolation for texture coordinates, straightening out warped textures.</source>
@@ -7153,7 +7268,7 @@ Would you like to import one now?</source>
     <message>
         <source>Fine Crop Mode</source>
         <comment>settings_fine_crop_mode</comment>
-        <translation>Режим «Fine Crop»</translation>
+        <translation>Режим точной обрезки</translation>
     </message>
     <message>
         <source>Left Crop</source>
@@ -7628,6 +7743,18 @@ Would you like to import one now?</source>
         <translation>Задержка вывода:</translation>
     </message>
     <message>
+        <source>Menu Volume:</source>
+        <translation>Громкость меню:</translation>
+    </message>
+    <message>
+        <source>Reset Menu Volume</source>
+        <translation>Сбросить громкость меню</translation>
+    </message>
+    <message>
+        <source>Mute Game Audio</source>
+        <translation>Отключить звук игры</translation>
+    </message>
+    <message>
         <source>Stretch Mode:</source>
         <translation>Режим растяжения:</translation>
     </message>
@@ -7663,10 +7790,6 @@ Would you like to import one now?</source>
     <message>
         <source>Reset Output Volume</source>
         <translation>Сбросить громкость звука</translation>
-    </message>
-    <message>
-        <source>Mute All Sound</source>
-        <translation>Отключить весь звук</translation>
     </message>
     <message>
         <source>Mute CD Audio</source>
@@ -7770,10 +7893,6 @@ Would you like to import one now?</source>
         <translation>Громкость перемотки</translation>
     </message>
     <message>
-        <source>Prevents the emulator from producing any audible sound.</source>
-        <translation>Не дает эмулятору воспроизводить слышимый звук.</translation>
-    </message>
-    <message>
         <source>Forcibly mutes both CD-DA and XA audio from the CD-ROM. Can be used to disable background music in some games.</source>
         <translation>Принудительно отключает звук CD-DA и XA с компакт-диска. Может использоваться для отключения фоновой музыки в некоторых играх.</translation>
     </message>
@@ -7806,6 +7925,18 @@ Would you like to import one now?</source>
         <translation>Растяжение времени</translation>
     </message>
     <message>
+        <source>Menu Volume</source>
+        <translation>Громкость меню</translation>
+    </message>
+    <message>
+        <source>Controls the volume of sound effects played by the Big Picture UI and achievement notifications.</source>
+        <translation>Регулирует громкость звуковых эффектов интерфейса Big Picture и уведомлений о достижениях.</translation>
+    </message>
+    <message>
+        <source>Prevents the game from producing any audible sound.</source>
+        <translation>Полностью отключает звук игры.</translation>
+    </message>
+    <message>
         <source>When running outside of 100% speed, adjusts the tempo on audio instead of dropping frames. Produces much nicer fast forward/slowdown audio at a small cost to performance.</source>
         <translation>При работе со скоростью, отличной от 100%, регулирует темп звука вместо пропуска кадров. Производит гораздо более приятный звук с ускоренной перемоткой/замедлением при небольших затратах на производительность.</translation>
     </message>
@@ -7831,7 +7962,7 @@ Would you like to import one now?</source>
     </message>
     <message>
         <source>Controls how wide a window the algorithm searches for the best overlap position when joining consecutive sequences. Larger windows may yield better joins at the cost of increased CPU work.</source>
-        <translation>Определяет ширину окна, в пределах которого алгоритм ищет оптимальное положение перекрытия при соединении последовательных последовательностей. Использование более широких окон может обеспечить более качественное соединение, но при этом увеличится нагрузка на процессор.</translation>
+        <translation>Определяет ширину окна, в пределах которого алгоритм ищет оптимальное положение перекрытия при соединении соседних фрагментов. Более широкие окна могут обеспечить более качественное соединение, но увеличивают нагрузку на процессор.</translation>
     </message>
     <message>
         <source>Stretch Overlap Length</source>
@@ -7839,7 +7970,7 @@ Would you like to import one now?</source>
     </message>
     <message>
         <source>Specifies how long two consecutive sequences are overlapped when mixed back together. Greater overlap can make transitions smoother but increases latency.</source>
-        <translation>Определяет длительность перекрытия двух последовательных последовательностей при их последующем смешивании. Большее перекрытие может сделать переходы более плавными, но увеличивает задержку.</translation>
+        <translation>Определяет длительность перекрытия двух соседних фрагментов при их последующем смешивании. Большее перекрытие может сделать переходы более плавными, но увеличивает задержку.</translation>
     </message>
     <message>
         <source>Enable Quick Seek</source>
@@ -10505,11 +10636,11 @@ This file is approximately 206KB, do you want to download it now?</source>
     </message>
     <message>
         <source>Step Into</source>
-        <translation>Войти в</translation>
+        <translation>Шаг с заходом</translation>
     </message>
     <message>
         <source>&amp;Step Into</source>
-        <translation>&amp;Войти в</translation>
+        <translation>&amp;Шаг с заходом</translation>
     </message>
     <message>
         <source>F11</source>
@@ -10545,11 +10676,11 @@ This file is approximately 206KB, do you want to download it now?</source>
     </message>
     <message>
         <source>Step Out</source>
-        <translation>Выйти из</translation>
+        <translation>Шаг с выходом</translation>
     </message>
     <message>
         <source>Step O&amp;ut</source>
-        <translation>В&amp;ыйти из</translation>
+        <translation>Шаг с в&amp;ыходом</translation>
     </message>
     <message>
         <source>Ctrl+F11</source>
@@ -10707,7 +10838,7 @@ This file can be several gigabytes, so be aware of SSD wear.</source>
     </message>
     <message>
         <source>Failed to add step-out breakpoint, are you in a valid function?</source>
-        <translation>Не удалось добавить точку останова, вы находитесь в допустимой функции?</translation>
+        <translation>Не удалось добавить точку останова для выхода из функции. Вы находитесь в допустимой функции?</translation>
     </message>
     <message numerus="yes">
         <source>&amp;Nop %n Instruction(s)</source>
@@ -11243,20 +11374,20 @@ Clicking Reset will restore the serial back to the value scanned from in the dis
         <translation>Не выбран</translation>
     </message>
     <message>
-        <source>Synchronizes presentation of the console&apos;s frames to the host. Enabling may result in smoother animations, at the cost of increased input lag. &lt;strong&gt;GSync/FreeSync users should enable Optimal Frame Pacing instead.&lt;/strong&gt;</source>
-        <translation>Синхронизация представления кадров консоли хосту. Включение может привести к более плавной анимации за счет увеличения задержки ввода. &lt;strong&gt;Пользователям GSync/FreeSync вместо этого следует включить равномерный вывод кадров.&lt;/strong&gt;</translation>
-    </message>
-    <message>
-        <source>Adjusts the emulation speed so the console&apos;s refresh rate matches the host&apos;s refresh rate when VSync is enabled. This results in the smoothest animations possible, at the cost of potentially increasing the emulation speed by less than 1%. Sync To Host Refresh Rate will not take effect if the console&apos;s refresh rate is too far from the host&apos;s refresh rate. Users with variable refresh rate displays should disable this option.</source>
-        <translation>Настройка скорости эмуляции таким образом, чтобы частота обновления консоли соответствовала частоте обновления хоста, когда включена VSync. Это приводит к максимально плавной анимации за счет потенциального увеличения скорости эмуляции менее чем на 1%. Параметр «Синхронизация с частотой обновления хоста» не вступит в силу, если частота обновления консоли слишком далека от частоты обновления хоста. Пользователям дисплеев с переменной частотой обновления следует отключить эту опцию.</translation>
-    </message>
-    <message>
         <source>Checked</source>
         <translation>Выбран</translation>
     </message>
     <message>
-        <source>Enabling this option will ensure every frame the console renders is displayed to the screen, at a consistent rate, for optimal frame pacing. If you have a GSync/FreeSync display, enable this option. If you are having difficulties maintaining full speed, or are getting audio glitches, try disabling this option.</source>
-        <translation>Включение этой опции гарантирует, что каждый кадр, отрисованный консолью, будет выведен на экран через равные интервалы времени для равномерного вывода кадров. Если у вас дисплей GSync/FreeSync, включите эту опцию. Если у вас возникли трудности с поддержанием полной скорости или возникли сбои со звуком, попробуйте отключить эту опцию.</translation>
+        <source>Waits for your display to refresh before showing each frame. This stops tearing, where the top and bottom of the screen show different frames. &lt;strong&gt;Leave this on if you have a GSync/FreeSync display, or you can still get tearing.&lt;/strong&gt;</source>
+        <translation>Ожидает обновления экрана перед показом каждого кадра. Это предотвращает разрывы изображения, при которых верхняя и нижняя части экрана показывают разные кадры. &lt;strong&gt;Оставьте эту настройку включённой, если у вас экран с GSync/FreeSync, иначе разрывы изображения всё равно могут возникать.&lt;/strong&gt;</translation>
+    </message>
+    <message>
+        <source>Runs the game very slightly faster or slower so its frame rate exactly matches your display&apos;s refresh rate. With VSync on, this gives the smoothest motion, but the game may run up to 1% faster than it should. It has no effect if the two rates are too far apart. &lt;strong&gt;Turn this off if you have a GSync/FreeSync display, since the display already changes its refresh rate to match the game.&lt;/strong&gt;</source>
+        <translation>Немного ускоряет или замедляет игру, чтобы частота кадров в точности совпадала с частотой обновления экрана. При включённой VSync это обеспечивает наиболее плавное движение, но игра может работать чуть быстрее положенного (до 1 %). Не действует, если эти частоты слишком сильно различаются. &lt;strong&gt;Отключите эту настройку, если у вас экран с GSync/FreeSync, поскольку он уже подстраивает частоту обновления под игру.&lt;/strong&gt;</translation>
+    </message>
+    <message>
+        <source>Shows every frame the game draws, evenly spaced, for the smoothest motion. Only turn this off if your computer can&apos;t keep the game at full speed. With it off, an occasional slow frame is less likely to cause stuttering or crackling sound, but motion won&apos;t be as even.</source>
+        <translation>Показывает каждый отрисованный игрой кадр через равные промежутки времени для наиболее плавного движения. Отключайте эту настройку только в том случае, если компьютер не справляется с работой игры на полной скорости. При отключённой настройке отдельные задержки отрисовки кадров реже приводят к рывкам изображения или треску звука, но движение становится менее равномерным.</translation>
     </message>
     <message>
         <source>Reduces input latency by delaying the start of frame until closer to the presentation time. This may cause dropped frames on slower systems with higher frame time variance, if the buffer size is not sufficient.</source>
@@ -12533,10 +12664,6 @@ You cannot undo this action.</source>
         <translation>Режим &quot;Encore&quot;</translation>
     </message>
     <message>
-        <source>Ensures every frame generated is displayed for optimal pacing. Enable for variable refresh displays, such as GSync/FreeSync. Disable if you are having speed or sound issues.</source>
-        <translation>Гарантирует, что каждый сгенерированный кадр отображается с оптимальным темпом. Включите для экранов с переменным обновлением, например GSync/FreeSync. Отключите, если у вас проблемы со скоростью или звуком.</translation>
-    </message>
-    <message>
         <source>Enter Value</source>
         <translation>Введите значение</translation>
     </message>
@@ -13252,11 +13379,6 @@ Please check your username and password, and try again.</source>
         <translation>Переход на следующий диск при остановке</translation>
     </message>
     <message>
-        <source>Synchronizes presentation of the console&apos;s frames to the host. GSync/FreeSync users should enable Optimal Frame Pacing instead.</source>
-        <translatorcomment>#Настройки эмуляции/Управление задержкой -&gt; Вертикальная синхронизация-подсказка</translatorcomment>
-        <translation>Синхронизирует вывод кадров консоли с хостом. Пользователям GSync/FreeSync следует вместо этого включить «Равномерный вывод кадров».</translation>
-    </message>
-    <message>
         <source>Textures Directory</source>
         <translation>Каталог текстур</translation>
     </message>
@@ -13470,11 +13592,6 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>Достижения: </translation>
     </message>
     <message>
-        <source>Adjusts the emulation speed so the console&apos;s refresh rate matches the host when VSync is enabled.</source>
-        <translatorcomment>#Настройки эмуляции/Управление Задержкой/Синхронизация с частотой обновления хоста/Подсказка</translatorcomment>
-        <translation>Настраивает скорость эмуляции так, чтобы частота обновления консоли соответствовала хосту, когда включена VSync.</translation>
-    </message>
-    <message>
         <source>Advanced Display Options</source>
         <translation>Расширенные настройки отображения</translation>
     </message>
@@ -13492,7 +13609,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Always Track Uploads</source>
-        <translation>Всегда отслеживать выгрузку</translation>
+        <translation>Всегда отслеживать загрузку текстур</translation>
     </message>
     <message>
         <source>An error occurred while deleting empty game settings:
@@ -13768,11 +13885,11 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Fine Crop Amount</source>
-        <translation>Величина «Fine Crop»</translation>
+        <translation>Величина точной обрезки</translation>
     </message>
     <message>
         <source>Fine Crop Mode</source>
-        <translation>Режим «Fine Crop»</translation>
+        <translation>Режим точной обрезки</translation>
     </message>
     <message>
         <source>Font</source>
@@ -14138,11 +14255,6 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>Режим мультитапа</translation>
     </message>
     <message>
-        <source>Mute All Sound</source>
-        <translatorcomment>(BigP/Настройки звука/Управление звуком) (wUI/Звук/Управление)</translatorcomment>
-        <translation>Отключить весь звук</translation>
-    </message>
-    <message>
         <source>Mute CD Audio</source>
         <translatorcomment>(BigP/Настройки звука/Управление звуком) (wUI/Звук/Управление)</translatorcomment>
         <translation>Отключить звук CD</translation>
@@ -14414,10 +14526,6 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>Предотвращает изменение размера окна во время работы игры.</translation>
     </message>
     <message>
-        <source>Prevents the emulator from producing any audible sound.</source>
-        <translation>Предотвращает воспроизведение звука эмулятором.</translation>
-    </message>
-    <message>
         <source>Prevents the screen saver from activating and the host from sleeping while emulation is running.</source>
         <translation>Предотвращает запуск заставки и переход компьютера в спящий режим во время работы эмулятора.</translation>
     </message>
@@ -14435,7 +14543,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Push a controller button or axis now.</source>
-        <translation>Теперь нажмите кнопку контроллера или ось.</translation>
+        <translation>Нажмите кнопку контроллера или переместите его ось.</translation>
     </message>
     <message>
         <source>Quick Message Duration</source>
@@ -14679,6 +14787,42 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>Сбросить время игры</translation>
     </message>
     <message>
+        <source>Brings later polygons closer to the camera, in millionths of depth. Reduces flickering of decals.</source>
+        <translation>Приближает отрисованные позже полигоны к камере на величину, заданную в миллионных долях глубины. Уменьшает мерцание декалей.</translation>
+    </message>
+    <message>
+        <source>Clear Binding</source>
+        <translation>Очистить привязку</translation>
+    </message>
+    <message>
+        <source>Controls the volume of sound effects played by the Big Picture UI and achievement notifications.</source>
+        <translation>Регулирует громкость звуковых эффектов интерфейса Big Picture и уведомлений о достижениях.</translation>
+    </message>
+    <message>
+        <source>Depth Bias</source>
+        <translation>Смещение глубины</translation>
+    </message>
+    <message>
+        <source>Menu Volume</source>
+        <translation>Громкость меню</translation>
+    </message>
+    <message>
+        <source>Mute Game Audio</source>
+        <translation>Отключить звук игры</translation>
+    </message>
+    <message>
+        <source>Normalize Depth Scale</source>
+        <translation>Нормализовать масштаб глубины</translation>
+    </message>
+    <message>
+        <source>Prevents the game from producing any audible sound.</source>
+        <translation>Полностью отключает звук игры.</translation>
+    </message>
+    <message>
+        <source>Removes the scale of each object&apos;s transform from depth values. Fixes missing geometry in some games, but breaks others.</source>
+        <translation>Убирает влияние масштаба преобразования каждого объекта на значения глубины. Устраняет пропадание геометрии в некоторых играх, но нарушает работу других.</translation>
+    </message>
+    <message>
         <source>Reset Settings</source>
         <translatorcomment>*Сброс настроек</translatorcomment>
         <translation>Сбросить настройки</translation>
@@ -14730,6 +14874,10 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>Перемотка назад/опережение</translation>
     </message>
     <message>
+        <source>Runs the game very slightly faster or slower to match your display&apos;s refresh rate when VSync is on. Turn this off with GSync/FreeSync displays.</source>
+        <translation>Немного ускоряет или замедляет игру, чтобы частота кадров совпадала с частотой обновления экрана при включённой VSync. Отключите эту настройку для экранов с GSync/FreeSync.</translation>
+    </message>
+    <message>
         <source>SDL DualShock 4 / DualSense Enhanced Mode</source>
         <translatorcomment>Настройки контроллеров</translatorcomment>
         <translation>Расширенный режим SDL для DualShock 4 / DualSense</translation>
@@ -14764,7 +14912,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Saves state periodically so you can rewind any mistakes while playing.</source>
-        <translation>Периодически сохраняет состояние, чтобы вы могли перематывать любые ошибки во время игры.</translation>
+        <translation>Периодически сохраняет состояние, чтобы можно было перемотать игру назад и исправить допущенные ошибки.</translation>
     </message>
     <message>
         <source>Scaling</source>
@@ -14988,6 +15136,10 @@ Do you want to delete the save state and boot the game anyway?</source>
         <translation>Показывает настройки улучшений в правом нижнем углу экрана.</translation>
     </message>
     <message>
+        <source>Shows every frame the game draws, evenly spaced. Only turn this off if your computer can&apos;t keep the game at full speed, and you&apos;re getting stuttering or crackling sound.</source>
+        <translation>Показывает каждый отрисованный игрой кадр через равные промежутки времени. Отключайте эту настройку только в том случае, если компьютер не справляется с работой игры на полной скорости и возникают рывки изображения или треск звука.</translation>
+    </message>
+    <message>
         <source>Shows information about input and audio latency in the top-right corner of the display.</source>
         <translatorcomment>**Отображает (BigP/Настройка/Настройка интерфейса/Экранное меню-Отображение на экране/Подсказка) (wUI/Настройка/Графика/Экранное меню-Отображение на экране/Подсказка)</translatorcomment>
         <translation>Показывает информацию о задержке ввода и звука в правом верхнем углу дисплея.</translation>
@@ -15045,7 +15197,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Skips the presentation/display of frames that are not unique. Can result in worse frame pacing.</source>
-        <translation>Пропускает презентацию/отображение кадров, которые не являются уникальными. Может привести к ухудшению темпа кадров.</translation>
+        <translation>Пропускает вывод кадров, которые не отличаются от предыдущих. Может привести к менее равномерному выводу кадров.</translation>
     </message>
     <message>
         <source>Slow Boot</source>
@@ -15302,7 +15454,7 @@ Do you want to delete the save state and boot the game anyway?</source>
     </message>
     <message>
         <source>Uses perspective-correct interpolation for colors, which can improve visuals in some games.</source>
-        <translation>Использование интерполяции с учетом перспективы для цветов, которые могут улучшить изображение в некоторых играх.</translation>
+        <translation>Использует интерполяцию цветов с учётом перспективы, что может улучшить изображение в некоторых играх.</translation>
     </message>
     <message>
         <source>Uses perspective-correct interpolation for texture coordinates, straightening out warped textures.</source>
@@ -15345,6 +15497,10 @@ Do you want to {0} anyway?</source>
         <translation>ВНИМАНИЕ: ваша игра все еще сохраняется на карту памяти. Если выполнить действие «{0}», это может НЕОБРАТИМО УНИЧТОЖИТЬ ВАШУ КАРТУ ПАМЯТИ. Мы рекомендуем продолжить игру и подождать 5 секунд, пока она не завершит сохранение.
 
 Вы все равно хотите {0}?</translation>
+    </message>
+    <message>
+        <source>Waits for your display to refresh before showing each frame, which stops tearing. Leave this on with GSync/FreeSync displays too.</source>
+        <translation>Ожидает обновления экрана перед показом каждого кадра, предотвращая разрывы изображения. Оставляйте эту настройку включённой и для экранов с GSync/FreeSync.</translation>
     </message>
     <message>
         <source>Warning Message Duration</source>
@@ -15614,7 +15770,7 @@ Do you want to {0} anyway?</source>
     <name>GameCheatCodeChoiceEditorDialog</name>
     <message>
         <source>Cheat Choice Editor</source>
-        <translation>Редактор чит-выборов</translation>
+        <translation>Редактор вариантов чита</translation>
     </message>
     <message>
         <source>Name</source>
@@ -15693,7 +15849,7 @@ Do you want to {0} anyway?</source>
     </message>
     <message>
         <source>Edit Choices...</source>
-        <translation>Изменить выбор...</translation>
+        <translation>Изменить варианты...</translation>
     </message>
     <message>
         <source>Setting Overrides</source>
@@ -15722,6 +15878,10 @@ Do you want to {0} anyway?</source>
     <message>
         <source>Disallow in Hardcore Mode</source>
         <translation>Запретить в режиме &quot;Хардкор&quot;</translation>
+    </message>
+    <message>
+        <source>Force PGXP Preserve Projection Precision</source>
+        <translation>Принудительное сохранение точности проецирования PGXP</translation>
     </message>
 </context>
 <context>
@@ -16150,6 +16310,11 @@ Are you sure you want to continue?</source>
         <translation>Принудительно: Режим процессора PGXP</translation>
     </message>
     <message>
+        <source>Normalize PGXP Depth</source>
+        <comment>GameDatabase::Trait</comment>
+        <translation>Нормализовать глубину PGXP</translation>
+    </message>
+    <message>
         <source>Force Recompiler ICache</source>
         <comment>GameDatabase::Trait</comment>
         <translation>Принудительно: Кэш инструкций перекомпилятора</translation>
@@ -16218,6 +16383,10 @@ Are you sure you want to continue?</source>
     <message>
         <source>Filter Framebuffer Uploads Minimum Height</source>
         <translation>Минимальная высота данных для фильтрации при загрузке в буфер кадра</translation>
+    </message>
+    <message>
+        <source>PGXP Depth Bias</source>
+        <translation>Смещение глубины PGXP</translation>
     </message>
     <message>
         <source>Verifying Image</source>
@@ -17278,15 +17447,15 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Fine Crop Mode:</source>
-        <translation>Режим «Fine Crop»:</translation>
+        <translation>Режим точной обрезки:</translation>
     </message>
     <message>
         <source>Reset Fine Cropping</source>
-        <translation>Сбросить «Fine Crop»</translation>
+        <translation>Сбросить точную обрезку</translation>
     </message>
     <message>
         <source>Fine Crop Size:</source>
-        <translation>Размер «Fine Crop»:</translation>
+        <translation>Размер точной обрезки:</translation>
     </message>
     <message>
         <source>Left:</source>
@@ -17317,12 +17486,24 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <translation>Сбросить порог очистки глубины</translation>
     </message>
     <message>
+        <source>Depth Bias:</source>
+        <translation>Смещение глубины:</translation>
+    </message>
+    <message>
+        <source>Reset Depth Bias</source>
+        <translation>Сбросить смещение глубины</translation>
+    </message>
+    <message>
         <source>CPU Mode:</source>
         <translation>Режим процессора:</translation>
     </message>
     <message>
         <source>Vertex Cache:</source>
         <translation>Кэш вершин:</translation>
+    </message>
+    <message>
+        <source>Normalize Depth Scale</source>
+        <translation>Нормализовать масштаб глубины</translation>
     </message>
     <message>
         <source>Debugging</source>
@@ -17494,7 +17675,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Fine Crop Mode</source>
-        <translation>Режим «Fine Crop»</translation>
+        <translation>Режим точной обрезки</translation>
     </message>
     <message>
         <source>None</source>
@@ -17541,12 +17722,24 @@ Scanning recursively takes more time, but will identify files in subdirectories.
         <translation>Фильтрует только данные, загружаемые в буфер кадра, высота которых не меньше этого значения. Увеличьте это значение, чтобы избежать фильтрации данных текстур.</translation>
     </message>
     <message>
+        <source>Depth Bias</source>
+        <translation>Смещение глубины</translation>
+    </message>
+    <message>
+        <source>Brings each polygon closer to the camera than the polygons drawn before it, in millionths of depth. Higher values reduce flickering of decals and shadows, but can cause polygons to show through surfaces in front of them.</source>
+        <translation>Приближает каждый полигон к камере относительно полигонов, отрисованных до него, на величину, заданную в миллионных долях глубины. Более высокие значения уменьшают мерцание декалей и теней, но могут привести к тому, что полигоны будут видны сквозь находящиеся перед ними поверхности.</translation>
+    </message>
+    <message>
         <source>Uses PGXP for all instructions, not just memory operations. Required for PGXP to correct wobble in some games, but has a high performance cost. Automatic enables it only for games that require it according to the game database.</source>
         <translation>Использует PGXP для всех инструкций, а не только для операций с памятью. Требуется для устранения дрожания с помощью PGXP в некоторых играх, но значительно снижает производительность. В автоматическом режиме включается только для игр, которым это требуется согласно базе данных игр.</translation>
     </message>
     <message>
         <source>Uses screen-space vertex positions to obtain precise positions, instead of tracking memory accesses. Can provide PGXP compatibility for some games, but &lt;strong&gt;generally provides no benefit.&lt;/strong&gt; Automatic enables it only for games that require it according to the game database.</source>
         <translation>Использует положения вершин в экранном пространстве для получения точных координат вместо отслеживания обращений к памяти. Может обеспечить совместимость PGXP с некоторыми играми, но &lt;strong&gt;обычно не даёт преимуществ.&lt;/strong&gt; В автоматическом режиме включается только для игр, которым это требуется согласно базе данных игр.</translation>
+    </message>
+    <message>
+        <source>Removes the scale of each object&apos;s transform from depth values. Fixes missing geometry with the depth buffer in games which shrink the transforms of distant objects, but breaks games which scale models through the transform. The game database will enable this automatically when needed.</source>
+        <translation>Убирает влияние масштаба преобразования каждого объекта на значения глубины. Устраняет пропадание геометрии при использовании буфера глубины в играх, которые уменьшают масштаб преобразований удалённых объектов, но нарушает работу игр, которые масштабируют модели через преобразование. База данных игр автоматически включает эту настройку при необходимости.</translation>
     </message>
     <message>
         <source>Disables texture emulation in the GPU, forcing all primitives to only show vertex colours.</source>
@@ -17574,7 +17767,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Selects the backend to use for rendering the console/game visuals. &lt;br&gt;Depending on your system and hardware, Direct3D 11 and OpenGL hardware backends may be available. &lt;br&gt;The software renderer offers the best compatibility, but is the slowest and does not offer any enhancements.</source>
-        <translation>Выбирает движок, который будет использоваться для отрисовки консоли/игры. &lt;br&gt;В зависимости от вашей системы и аппаратного обеспечения могут быть доступны аппаратные движки Direct3D 11 и OpenGL. &lt;br&gt;Программная отрисовка обеспечивает наилучшую совместимость, но является самым медленным и не предлагает никаких улучшений.</translation>
+        <translation>Выбирает движок для отрисовки изображения консоли или игры. &lt;br&gt;В зависимости от вашей системы и оборудования могут быть доступны аппаратные движки Direct3D 11 и OpenGL. &lt;br&gt;Программный отрисовщик обеспечивает наилучшую совместимость, но работает медленнее всего и не поддерживает улучшения.</translation>
     </message>
     <message>
         <source>Smooths out the blockiness of magnified textures on 3D objects by using filtering. &lt;br&gt;Will have a greater effect on higher resolution scales.</source>
@@ -17874,7 +18067,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Shoot Offscreen</source>
-        <translation>Выстрел за кадром</translation>
+        <translation>Выстрел за пределы экрана</translation>
     </message>
     <message>
         <source>A</source>
@@ -18702,7 +18895,7 @@ Scanning recursively takes more time, but will identify files in subdirectories.
     </message>
     <message>
         <source>Push Button/Axis... [%1]</source>
-        <translation>Нажмите кнопку/ось... [%1]</translation>
+        <translation>Нажмите кнопку или переместите ось... [%1]</translation>
     </message>
     <message>
         <source>%1%</source>
@@ -18736,7 +18929,7 @@ Shift-click to set multiple bindings.</source>
     </message>
     <message>
         <source>Push Button/Axis... [%1]</source>
-        <translation>Нажмите кнопку/Ось... [%1]</translation>
+        <translation>Нажмите кнопку или переместите ось... [%1]</translation>
     </message>
     <message>
         <source>Error</source>
@@ -19640,7 +19833,7 @@ Shift-click to set multiple bindings.</source>
     </message>
     <message>
         <source>View Third-Party Notices...</source>
-        <translation>Просмотреть уведомления третьих лиц...</translation>
+        <translation>Просмотреть уведомления о сторонних компонентах...</translation>
     </message>
     <message>
         <source>Shows copyright and license notices for third-party libraries included with the application.</source>
@@ -20225,7 +20418,7 @@ Shift-click to set multiple bindings.</source>
     </message>
     <message>
         <source>Show Grid Ca&amp;ptions</source>
-        <translation>Показать заголовки &amp;сетки</translation>
+        <translation>Показать &amp;подписи в сетке</translation>
     </message>
     <message>
         <source>&amp;Refresh Grid Covers</source>
@@ -20906,7 +21099,7 @@ This build of DuckStation requires FFmpeg v{}, with library versions:
     </message>
     <message>
         <source>Insufficient free blocks, {} blocks are needed, but only have {}.</source>
-        <translation>Недостаточно свободных блоков, нужны блоки {}, но есть только {}.</translation>
+        <translation>Недостаточно свободных блоков: требуется {}, доступно только {}.</translation>
     </message>
     <message>
         <source>File name must be at maximum {} characters long.</source>
@@ -20962,7 +21155,7 @@ This build of DuckStation requires FFmpeg v{}, with library versions:
     </message>
     <message>
         <source>Insufficient free blocks, needs {} blocks, but only have {}.</source>
-        <translation>Недостаточно свободных блоков, нужны блоки {}, но есть только {}.</translation>
+        <translation>Недостаточно свободных блоков: требуется {}, доступно только {}.</translation>
     </message>
     <message>
         <source>File does not exist, or is empty.</source>
@@ -21305,7 +21498,7 @@ Error: {1}</source>
     </message>
     <message>
         <source>Specifies the directory where save states will be saved.</source>
-        <translation>Указывает каталог, в котором будут сохранённые состояния.</translation>
+        <translation>Указывает каталог, в котором будут сохраняться состояния.</translation>
     </message>
     <message>
         <source>Settings</source>
@@ -21358,7 +21551,7 @@ Error: {1}</source>
     </message>
     <message>
         <source>When playing a multi-disc game and using per-game (title) memory cards, a single memory card will be used for all discs. If unchecked, a separate card will be used for each disc.</source>
-        <translation>При игре на нескольких дисках и использовании карт памяти для каждой игры (название) для всех дисков будет использоваться одна карта памяти. Если флажок снят, для каждого диска будет использоваться отдельная карта.</translation>
+        <translation>При запуске многодисковой игры с отдельными картами памяти по названию игры для всех дисков используется одна карта памяти. Если флажок снят, для каждого диска используется отдельная карта.</translation>
     </message>
     <message>
         <source>Select Memory Card Directory</source>
@@ -22146,7 +22339,7 @@ Error: {1}</source>
     </message>
     <message>
         <source>Switching to {}{} GPU renderer.</source>
-        <translation>Переключение на отрисовку с использованием GPU {}{}.</translation>
+        <translation>Переключение на отрисовщик ГП {}{}.</translation>
     </message>
     <message>
         <source>Widescreen rendering is now enabled, and aspect ratio is set to {}.</source>
@@ -22612,10 +22805,6 @@ Error: {1}</source>
         <translation>&amp;Обновить шейдеры</translation>
     </message>
     <message>
-        <source>Post Processing Chain</source>
-        <translation>Цепочка постобработки</translation>
-    </message>
-    <message>
         <source>Add</source>
         <translation>Добавить</translation>
     </message>
@@ -22655,12 +22844,12 @@ Error: {1}</source>
         <translation>Выбранная предустановка:</translation>
     </message>
     <message>
-        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;A border overlay is an image that is drawn around the system display. Border overlays are applied after post-processing. You can choose from the border list below, or manually configure a custom border.&lt;/p&gt;&lt;p&gt;Additional preset borders can be added to the &lt;span style=&quot; font-weight:700;&quot;&gt;resources\overlays&lt;/span&gt; folder within in the data directory.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Наложение границ - это изображение, которое рисуется вокруг системного дисплея. Наложения границ применяются после постобработки. Вы можете выбрать одну из представленных ниже границ или вручную настроить пользовательскую границу.&lt;/p&gt;&lt;p&gt;Дополнительные предустановленные границы можно добавить в папку &lt;span style=&quot; font-weight:700;&quot;&gt;resources\overlays&lt;/span&gt; в каталоге данных.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
-    </message>
-    <message>
         <source>Refresh Overlay List</source>
         <translation>Обновить список оверлеев</translation>
+    </message>
+    <message>
+        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Additional preset borders can be added to the &lt;span style=&quot; font-weight:700;&quot;&gt;resources\overlays&lt;/span&gt; folder within the data directory.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
+        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Дополнительные готовые рамки можно добавить в папку &lt;span style=&quot; font-weight:700;&quot;&gt;resources\overlays&lt;/span&gt; внутри каталога данных.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
         <source>Custom Configuration</source>
@@ -22811,6 +23000,18 @@ Error: {1}</source>
     <message>
         <source>Border Overlay</source>
         <translation>Наложение границ</translation>
+    </message>
+    <message>
+        <source>Display shaders are applied to the final picture after it has been scaled to fit your screen. Use these for screen effects, such as CRT filters and scanlines.</source>
+        <translation>Шейдеры экрана применяются к итоговому изображению после его масштабирования под размер экрана. Используйте их для экранных эффектов, таких как ЭЛТ-фильтры и строки развёртки.</translation>
+    </message>
+    <message>
+        <source>Internal shaders are applied to the game&apos;s picture before it is scaled, at the resolution the game is rendered at. Use these for effects that change how the game itself looks, such as SSAO.</source>
+        <translation>Внутренние шейдеры применяются к изображению игры до его масштабирования, в разрешении, в котором игра отрисовывается. Используйте их для эффектов, которые меняют внешний вид самой игры, таких как SSAO.</translation>
+    </message>
+    <message>
+        <source>A border overlay is an image drawn around the game&apos;s picture, such as a TV or handheld frame. It is drawn on top of everything else, after all shaders have been applied.</source>
+        <translation>Рамка-наложение — это изображение вокруг игровой картинки, например рамка телевизора или портативной консоли. Оно отрисовывается поверх всего остального после применения всех шейдеров.</translation>
     </message>
 </context>
 <context>
@@ -24339,7 +24540,7 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>&lt;strong&gt;Summary&lt;/strong&gt;&lt;hr&gt;This page shows information about the selected game, and allows you to validate your disc was dumped correctly.</source>
-        <translation>&lt;strong&gt;Сводка&lt;/strong&gt;&lt;hr&gt;На этой странице отображается информация о выбранной игре и позволяет вам проверить правильность дампа вашего диска.</translation>
+        <translation>&lt;strong&gt;Сводка&lt;/strong&gt;&lt;hr&gt;На этой странице отображается информация о выбранной игре. Здесь также можно проверить правильность создания образа вашего диска.</translation>
     </message>
     <message>
         <source>Game List</source>
@@ -24367,11 +24568,11 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>&lt;strong&gt;Console Settings&lt;/strong&gt;&lt;hr&gt;These options determine the configuration of the simulated console.&lt;br&gt;&lt;br&gt;Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;Настройки консоли&lt;/strong&gt;&lt;hr&gt;Эти параметры определяют конфигурацию моделируемой консоли.&lt;br&gt;&lt;br&gt;Наведите указатель мыши на параметр, чтобы получить дополнительную информацию, и нажмите Shift+Wheel, чтобы прокрутить эту панель.</translation>
+        <translation>&lt;strong&gt;Настройки консоли&lt;/strong&gt;&lt;hr&gt;Эти параметры определяют конфигурацию моделируемой консоли.&lt;br&gt;&lt;br&gt;Наведите указатель мыши на параметр, чтобы получить дополнительную информацию, а для прокрутки этой панели вращайте колесо мыши, удерживая Shift.</translation>
     </message>
     <message>
         <source>&lt;strong&gt;Emulation Settings&lt;/strong&gt;&lt;hr&gt;These options determine the speed and runahead behavior of the system.&lt;br&gt;&lt;br&gt;Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;Настройки эмуляции&lt;/strong&gt;&lt;hr&gt;Эти параметры определяют скорость и поведение системы на опережение.&lt;br&gt;&lt;br&gt;Наведите указатель мыши на параметр, чтобы получить дополнительную информацию, и нажмите Shift+колесо, чтобы прокрутить эту панель.</translation>
+        <translation>&lt;strong&gt;Настройки эмуляции&lt;/strong&gt;&lt;hr&gt;Эти параметры определяют скорость и поведение системы на опережение.&lt;br&gt;&lt;br&gt;Наведите указатель мыши на параметр, чтобы получить дополнительную информацию, а для прокрутки этой панели вращайте колесо мыши, удерживая Shift.</translation>
     </message>
     <message>
         <source>Patches</source>
@@ -24425,7 +24626,7 @@ Do you want to create this directory?</source>
     </message>
     <message>
         <source>&lt;strong&gt;Advanced Settings&lt;/strong&gt;&lt;hr&gt;These options control logging and internal behavior of the emulator. Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;Расширенные настройки&lt;/strong&gt;&lt;hr&gt;Эти параметры управляют ведением журнала и внутренним поведением эмулятора. Наведите указатель мыши на параметр, чтобы получить дополнительную информацию, и нажмите Shift+колесо, чтобы прокрутить эту панель.</translation>
+        <translation>&lt;strong&gt;Расширенные настройки&lt;/strong&gt;&lt;hr&gt;Эти параметры управляют ведением журнала и внутренним поведением эмулятора. Наведите указатель мыши на параметр, чтобы получить дополнительную информацию, а для прокрутки этой панели вращайте колесо мыши, удерживая Shift.</translation>
     </message>
     <message>
         <source>Debugging</source>
@@ -24453,7 +24654,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>&lt;strong&gt;Interface Settings&lt;/strong&gt;&lt;hr&gt;These options control how the emulator looks and behaves.&lt;br&gt;&lt;br&gt;Mouse over an option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;Настройки интерфейса&lt;/strong&gt;&lt;hr&gt;Эти параметры управляют внешним видом и поведением эмулятора.&lt;br&gt;&lt;br&gt;Наведите указатель мыши на параметр, чтобы получить дополнительную информацию, и нажмите Shift+Wheel, чтобы прокрутить эту панель.</translation>
+        <translation>&lt;strong&gt;Настройки интерфейса&lt;/strong&gt;&lt;hr&gt;Эти параметры управляют внешним видом и поведением эмулятора.&lt;br&gt;&lt;br&gt;Наведите указатель мыши на параметр, чтобы получить дополнительную информацию, а для прокрутки этой панели вращайте колесо мыши, удерживая Shift.</translation>
     </message>
     <message>
         <source>Graphics</source>
@@ -24461,7 +24662,7 @@ You cannot undo this action.</source>
     </message>
     <message>
         <source>&lt;strong&gt;Graphics Settings&lt;/strong&gt;&lt;hr&gt;These options control how the graphics of the emulated console are rendered. Not all options are available for the software renderer. Mouse over each option for additional information, and Shift+Wheel to scroll this panel.</source>
-        <translation>&lt;strong&gt;Настройки графики&lt;/strong&gt;&lt;hr&gt;Эти параметры управляют отображением графики эмулируемой консоли. Не все параметры доступны для программного средства визуализации. Наведите указатель мыши на каждый параметр, чтобы получить дополнительную информацию, и нажмите Shift+колесо, чтобы прокрутить эту панель.</translation>
+        <translation>&lt;strong&gt;Настройки графики&lt;/strong&gt;&lt;hr&gt;Эти параметры управляют отображением графики эмулируемой консоли. Не все параметры доступны для программного средства визуализации. Наведите указатель мыши на каждый параметр, чтобы получить дополнительную информацию, а для прокрутки этой панели вращайте колесо мыши, удерживая Shift.</translation>
     </message>
     <message>
         <source>Audio</source>
@@ -24904,9 +25105,9 @@ Any changes have been saved, and the wizard will run again next time you start D
         <source>%n BIOS images found. You can install additional BIOS images if desired.</source>
         <comment>BIOS Count</comment>
         <translation>
-            <numerusform>Найден образ BIOS: %n. При желании можно установить дополнительные образы BIOS.</numerusform>
-            <numerusform>Найдено образа BIOS: %n. При желании можно установить дополнительные образы BIOS.</numerusform>
-            <numerusform>Найдено образов BIOS: %n. При желании можно установить дополнительные образы BIOS.</numerusform>
+            <numerusform>Найден %n образ BIOS. При желании можно установить дополнительные образы BIOS.</numerusform>
+            <numerusform>Найдено %n образа BIOS. При желании можно установить дополнительные образы BIOS.</numerusform>
+            <numerusform>Найдено %n образов BIOS. При желании можно установить дополнительные образы BIOS.</numerusform>
         </translation>
     </message>
     <message>
@@ -25559,7 +25760,7 @@ For legal reasons, you must obtain a BIOS from an actual PS1/PS2 unit that you o
     </message>
     <message>
         <source>The texture dumping system can either operate in page mode, or write-tracking mode. Replacements can be loaded from either dump method.</source>
-        <translation>Система дампа текстур может работать либо в страничном режиме, либо в режиме отслеживания записи. Замены можно загрузить любым методом дампа.</translation>
+        <translation>Система дампа текстур может работать в страничном режиме или в режиме отслеживания записи. Можно загружать замены, созданные любым из этих методов дампа.</translation>
     </message>
     <message>
         <source>Write Tracking Options</source>

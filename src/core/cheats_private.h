@@ -83,6 +83,9 @@ public:
     ExtConstantWriteIfMatch16 = 0xA6,
     ExtConstantWriteIfMatchWithRestore16 = 0xA7,
     ExtConstantWriteIfMatchWithRestore8 = 0xA8,
+    ExtBlockWrite = 0xA9,
+    ExtBlockWriteIfMatchWithRestore = 0xAA,
+    ExtBlockWriteIfMatch = 0xAB,
     ExtConstantForceRange8 = 0xF0,
     ExtConstantForceRangeLimits16 = 0xF1,
     ExtConstantForceRangeRollRound16 = 0xF2,
@@ -109,6 +112,12 @@ public:
 
     ExtCompareBitsSet8 = 0xE4,   // Only used inside ExtMultiConditionals
     ExtCompareBitsClear8 = 0xE5, // Only used inside ExtMultiConditionals
+
+    // Internal opcodes, generated from runs of the above by MergeInstructions(). Reserved in user codes.
+    InternalMaskedWrite = 0xFB,             // 30/80/90
+    InternalMatchWrite16 = 0xFC,            // A6
+    InternalMatchWriteWithRestore16 = 0xFD, // A7
+    InternalMatchWriteWithRestore8 = 0xFE,  // A8
   };
 
   union Instruction
@@ -146,9 +155,14 @@ private:
   std::vector<Instruction> instructions;
   std::vector<std::tuple<u32, u8, u8>> option_instruction_values;
 
+  bool DeinterleaveBlockInstructions(Error* error);
+  void MergeInstructions();
   u32 GetNextNonConditionalInstruction(u32 index) const;
 
   static bool IsConditionalInstruction(InstructionCode code);
+  static u32 GetBlockPayloadLength(const Instruction& inst);
+  static u32 GetPayloadLength(const Instruction& inst);
+  static std::tuple<InstructionCode, u32> GetMergeCode(InstructionCode code);
 };
 
 class AssemblyCheatCode final : public CheatCode

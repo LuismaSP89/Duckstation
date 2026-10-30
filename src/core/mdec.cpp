@@ -363,8 +363,10 @@ void MDEC::UpdateStatus()
   s_state.status.parameter_words_remaining = Truncate16((s_state.remaining_halfwords / 2) - 1);
   s_state.status.current_block = (s_state.current_block + 4) % NUM_BLOCKS;
 
-  // we always want data in if it's enabled
-  const bool data_in_request = s_state.enable_dma_in && s_state.data_in_fifo.GetSpace() >= (32 * 2);
+  // only want data in while a command is still expecting parameters
+  const bool data_in_request =
+    (s_state.enable_dma_in && s_state.state != State::Idle &&
+     s_state.data_in_fifo.GetSize() < s_state.remaining_halfwords && s_state.data_in_fifo.GetSpace() >= (32 * 2));
   s_state.status.data_in_request = data_in_request;
   DMA::SetRequest(DMA::Channel::MDECin, data_in_request);
 
@@ -475,7 +477,6 @@ void MDEC::Execute()
 
         s_state.remaining_halfwords = num_words * 2;
         s_state.state = new_state;
-        UpdateStatus();
         continue;
       }
 
@@ -512,7 +513,6 @@ void MDEC::Execute()
 
         HandleSetQuantTableCommand();
         s_state.state = State::Idle;
-        UpdateStatus();
         continue;
       }
 
@@ -523,7 +523,6 @@ void MDEC::Execute()
 
         HandleSetScaleCommand();
         s_state.state = State::Idle;
-        UpdateStatus();
         continue;
       }
 
@@ -537,7 +536,6 @@ void MDEC::Execute()
           goto finished;
 
         s_state.state = State::Idle;
-        UpdateStatus();
         continue;
       }
 

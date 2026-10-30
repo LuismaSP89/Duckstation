@@ -2189,9 +2189,10 @@ bool CPU::UpdateDebugDispatcherFlag()
   const bool has_cop0_breakpoints = dcic.super_master_enable_1 && dcic.super_master_enable_2 &&
                                     dcic.execution_breakpoint_enable && IsCop0ExecutionBreakpointUnmasked();
 
-  const bool use_debug_dispatcher =
-    has_any_breakpoints || has_cop0_breakpoints || s_locals.trace_to_log ||
-    (g_settings.cpu_execution_mode == CPUExecutionMode::Interpreter && g_settings.bios_tty_logging);
+  // Interpreter uses the debug dispatcher while booting to check for the game entry point.
+  const bool use_debug_dispatcher = has_any_breakpoints || has_cop0_breakpoints || s_locals.trace_to_log ||
+                                    (g_settings.cpu_execution_mode == CPUExecutionMode::Interpreter &&
+                                     (g_settings.bios_tty_logging || !System::IsGameStarted()));
   if (use_debug_dispatcher == g_state.using_debug_dispatcher)
     return false;
 
@@ -2679,11 +2680,23 @@ template<PGXPMode pgxp_mode, bool debug>
           LogInstruction(g_state.current_instruction.bits, g_state.current_instruction_pc, true);
 
         // handle all mirrors of the syscall trampoline. will catch 200000A0 etc, but those aren't fetchable anyway
-        const u32 masked_pc = (g_state.current_instruction_pc & KSEG_MASK);
-        if (masked_pc == 0xA0) [[unlikely]]
-          HandleA0Syscall();
-        else if (masked_pc == 0xB0) [[unlikely]]
-          HandleB0Syscall();
+        if (g_settings.bios_tty_logging) [[unlikely]]
+        {
+          const u32 masked_pc = (g_state.current_instruction_pc & KSEG_MASK);
+          if (masked_pc == 0xA0) [[unlikely]]
+            HandleA0Syscall();
+          else if (masked_pc == 0xB0) [[unlikely]]
+            HandleB0Syscall();
+        }
+
+        // interpreter uses the debug dispatcher to check for the entry point until the game starts
+        if (!System::IsGameStarted() &&
+            System::IsGameEntryPoint(g_state.current_instruction_pc, g_state.current_instruction.bits)) [[unlikely]]
+        {
+          System::SetGameStarted();
+          if (UpdateDebugDispatcherFlag())
+            System::InterruptExecution();
+        }
       }
 
 #if 0 // GTE flag test debugging
@@ -3093,6 +3106,27 @@ void CPU::InvalidICacheRange(VirtualMemoryAddress start, VirtualMemoryAddress en
 
     if (address == last_word)
       break;
+  }
+}
+
+void CPU::InvalidateICacheForRAM(PhysicalMemoryAddress address, u32 size)
+{
+  // Tags are virtual addresses, so compare RAM offsets to catch every segment and mirror.
+  // Aliases are a multiple of the cache size apart, so only the lines the range indexes to can hold it.
+  const u32 start = address & g_bus.ram_mask;
+  const u32 end = start + size;
+  const u32 first_line = start / ICACHE_LINE_SIZE;
+  const u32 line_count = std::min((end - 1) / ICACHE_LINE_SIZE - first_line + 1, static_cast<u32>(ICACHE_LINES));
+  for (u32 i = 0; i < line_count; i++)
+  {
+    u32& tag = g_state.icache_tags[(first_line + i) % ICACHE_LINES];
+    const u32 tag_address = tag & ICACHE_TAG_ADDRESS_MASK & KSEG_MASK;
+    if (tag_address >= Bus::RAM_MIRROR_END)
+      continue;
+
+    const u32 line_start = tag_address & g_bus.ram_mask;
+    if (line_start < end && (line_start + ICACHE_LINE_SIZE) > start)
+      tag = ICACHE_INVALID_BITS;
   }
 }
 

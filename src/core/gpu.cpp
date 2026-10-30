@@ -3,6 +3,7 @@
 
 #include "gpu.h"
 #include "bus.h"
+#include "cheats.h"
 #include "core.h"
 #include "cpu_pgxp.h"
 #include "dma.h"
@@ -117,8 +118,9 @@ static bool IsDisplayDisabled();
 static bool IsInterlacedRenderingEnabled();
 
 /// Returns the number of pending GPU ticks.
-TickCount GetPendingCRTCTicks();
-TickCount GetPendingCommandTicks();
+static TickCount GetPendingCRTCTicks();
+static TickCount GetPendingCommandTicks();
+static TickCount GetTicksUntilLine(u32 line);
 
 /// Returns true if a raster scanline or command execution is pending.
 static bool IsCommandCompletionPending();
@@ -149,6 +151,7 @@ static bool DumpVRAMToFile(std::string path, u32 width, u32 height, u32 stride, 
                            Error* error = nullptr);
 
 static void SoftReset();
+static void ResetCRTCTiming(bool was_in_hblank);
 static void ClearDisplay();
 static void FillUpdateDisplayCommand(GPUBackendUpdateDisplayCommand* cmd);
 static void UpdatePartialDisplay();
@@ -159,6 +162,7 @@ static void UpdateCRTCConfig(u16 old_vram_width, u16 old_vram_height);
 static void UpdateCRTCDisplayParameters();
 static void UpdateCRTCDisplayParameters(u16 old_vram_width, u16 old_vram_height);
 static void UpdateCRTCHBlankFlag();
+static bool SetCRTCVBlank(bool vblank);
 
 // Update ticks for this execution slice
 static void UpdateCommandTickEvent();
@@ -328,10 +332,12 @@ struct Locals
 
   GPUSTATReg GPUSTAT = {};
 
-  bool console_is_pal = false;
+  bool force_progressive_scan : 1 = false;
+  bool console_is_pal : 1 = false;
+  bool vblank_end_cheats_enabled : 1 = false;
+
   bool enable_upper_vram = false;
   bool drawing_area_changed = false;
-  bool force_progressive_scan = false;
   bool texture_enable_mask = false;
   bool force_raw_texture = false;
 
@@ -427,6 +433,7 @@ void GPU::Shutdown()
   s_locals.command_tick_event.Deactivate();
   s_locals.crtc_tick_event.Deactivate();
   s_locals.frame_done_event.Deactivate();
+  s_locals.vblank_end_cheats_enabled = false;
 
   StopRecordingGPUDump();
 }
@@ -512,7 +519,8 @@ void GPU::Reset(bool clear_vram)
   s_locals.crtc_state.current_tick_in_scanline = 0;
   s_locals.crtc_state.current_scanline = 0;
   s_locals.crtc_state.in_hblank = false;
-  s_locals.crtc_state.in_vblank = false;
+  s_locals.crtc_state.in_vblank = true; // line 0 is before Y1
+  Timers::SetGate(HBLANK_TIMER_INDEX, true);
   s_locals.crtc_state.interlaced_field = 0;
   s_locals.crtc_state.interlaced_display_field = 0;
   s_locals.crtc_state.scanout_start_row = 0;
@@ -562,8 +570,8 @@ void GPU::SoftReset()
   s_locals.drawing_area_changed = true;
   s_locals.drawing_offset = {};
   std::memset(&s_locals.crtc_state.regs, 0, sizeof(s_locals.crtc_state.regs));
-  s_locals.crtc_state.regs.horizontal_display_range = 0xC60260;
-  s_locals.crtc_state.regs.vertical_display_range = 0x3FC10;
+  s_locals.crtc_state.regs.horizontal_display_range = 0xC00200;
+  s_locals.crtc_state.regs.vertical_display_range = 0x40010;
   s_locals.blitter_state = BlitterState::Idle;
   s_locals.pending_command_ticks = 0;
   s_locals.command_total_words = 0;
@@ -581,6 +589,31 @@ void GPU::SoftReset()
   UpdateCRTCConfig();
   UpdateCommandTickEvent();
   UpdateGPUIdle();
+}
+
+void GPU::ResetCRTCTiming(bool was_in_hblank)
+{
+  // Hardware restarts the video timing at the start of the line before line 0, i.e. the last line of an odd field,
+  // so the next field is even. Blanking is level-triggered: a reset during active display raises the vblank IRQ
+  // immediately, a reset during vblank does not. Same for the hblank timer tick.
+  CRTCState& cs = s_locals.crtc_state;
+  cs.current_scanline = cs.vertical_total - 1;
+  cs.current_tick_in_scanline = 0;
+  cs.fractional_ticks = 0;
+  cs.interlaced_field = 1;
+  cs.interlaced_display_field = 0;
+  s_locals.GPUSTAT.display_line_lsb = false;
+
+  UpdateCRTCHBlankFlag();
+  Timers::SetGate(DOT_TIMER_INDEX, cs.in_hblank);
+  if (!was_in_hblank && Timers::IsUsingExternalClock(HBLANK_TIMER_INDEX))
+    Timers::AddTicks(HBLANK_TIMER_INDEX, 1);
+
+  // Called from a register write, so frame done has to be deferred.
+  if (SetCRTCVBlank(true))
+    s_locals.frame_done_event.Schedule(0);
+
+  RescheduleCRTC();
 }
 
 bool GPU::DoState(StateWrapper& sw)
@@ -1193,6 +1226,7 @@ void GPU::UpdateCRTCConfig(u16 old_vram_width, u16 old_vram_height)
   if (!s_locals.GPUSTAT.vertical_interlace)
     s_locals.GPUSTAT.interlaced_field = 1u;
 
+  const u16 old_vertical_total = cs.vertical_total;
   cs.vertical_total = s_locals.GPUSTAT.pal_mode ? PAL_TOTAL_LINES : NTSC_TOTAL_LINES;
   cs.horizontal_total = s_locals.GPUSTAT.pal_mode ? PAL_TICKS_PER_LINE : NTSC_TICKS_PER_LINE;
   cs.horizontal_active_start = s_locals.GPUSTAT.pal_mode ? PAL_HORIZONTAL_ACTIVE_START : NTSC_HORIZONTAL_ACTIVE_START;
@@ -1258,7 +1292,9 @@ void GPU::UpdateCRTCConfig(u16 old_vram_width, u16 old_vram_height)
   cs.current_tick_in_scanline %= cs.horizontal_total;
   UpdateCRTCHBlankFlag();
 
-  cs.current_scanline %= cs.vertical_total;
+  // The last line stays the last line, so the line before line 0 after GP1(00h) survives a mode change.
+  cs.current_scanline = (cs.current_scanline == old_vertical_total - 1) ? (cs.vertical_total - 1) :
+                                                                          (cs.current_scanline % cs.vertical_total);
 
   System::SetVideoFrameRate(ComputeVerticalFrequency());
 
@@ -1526,27 +1562,25 @@ ALWAYS_INLINE_RELEASE TickCount GPU::GetPendingCommandTicks()
   return SystemTicksToGPUTicks(s_locals.command_tick_event.GetTicksSinceLastExecution());
 }
 
+ALWAYS_INLINE_RELEASE TickCount GPU::GetTicksUntilLine(u32 line)
+{
+  const CRTCState& cs = s_locals.crtc_state;
+  line = line ? line : cs.vertical_total;
+  return static_cast<TickCount>((line > cs.current_scanline) ? (line - cs.current_scanline) :
+                                                               (cs.vertical_total - cs.current_scanline + line));
+}
+
 void GPU::RescheduleCRTC()
 {
   CRTCState& cs = s_locals.crtc_state;
 
   // figure out how many GPU ticks until the next vblank or event
-  TickCount lines_until_event;
-  if (Timers::IsSyncEnabled(HBLANK_TIMER_INDEX))
-  {
-    // when the timer sync is enabled we need to sync at vblank start and end
-    lines_until_event =
-      (cs.current_scanline >= cs.vertical_display_end) ?
-        (cs.vertical_total - cs.current_scanline + cs.vertical_display_start) :
-        ((cs.current_scanline < cs.vertical_display_start) ? (cs.vertical_display_start - cs.current_scanline) :
-                                                             (cs.vertical_display_end - cs.current_scanline));
-  }
-  else
-  {
-    lines_until_event = (cs.current_scanline >= cs.vertical_display_end) ?
-                          (cs.vertical_total - cs.current_scanline + cs.vertical_display_end) :
-                          (cs.vertical_display_end - cs.current_scanline);
-  }
+  // line 0 is reached at the wrap, as in CRTCTickEvent(), and Y1 can be after or before Y2
+  TickCount lines_until_event = GetTicksUntilLine(cs.vertical_display_end);
+
+  // when the timer sync is enabled or vblank end cheats are active we need to sync at vblank start and end
+  if (Timers::IsSyncEnabled(HBLANK_TIMER_INDEX) || s_locals.vblank_end_cheats_enabled)
+    lines_until_event = std::min(lines_until_event, GetTicksUntilLine(cs.vertical_display_start));
   if (Timers::IsExternalIRQEnabled(HBLANK_TIMER_INDEX))
     lines_until_event = std::min(lines_until_event, Timers::GetTicksUntilIRQ(HBLANK_TIMER_INDEX));
 
@@ -1576,6 +1610,22 @@ void GPU::RescheduleCRTC()
   s_locals.crtc_tick_event.Schedule(CRTCTicksToSystemTicks(ticks_until_event, cs.fractional_ticks));
 }
 
+void GPU::SetVBlankEndCheatsEnabled(bool enabled)
+{
+  if (s_locals.vblank_end_cheats_enabled == enabled)
+    return;
+
+  // Can be behind if stopped mid-frame, e.g. at a breakpoint.
+  // Frame done runs from the CRTC event, so it's current there.
+  if (System::IsValid() && !TimingEvents::IsRunningEvents())
+    SynchronizeCRTC();
+
+  // Synchronizing doesn't reschedule if no time has passed.
+  s_locals.vblank_end_cheats_enabled = enabled;
+  if (System::IsValid())
+    RescheduleCRTC();
+}
+
 bool GPU::IsCRTCScanlinePending()
 {
   // TODO: Most of these should be fields, not lines.
@@ -1589,6 +1639,43 @@ ALWAYS_INLINE void GPU::UpdateCRTCHBlankFlag()
   CRTCState& cs = s_locals.crtc_state;
   cs.in_hblank = (cs.current_tick_in_scanline < cs.horizontal_active_start ||
                   cs.current_tick_in_scanline >= cs.horizontal_active_end);
+}
+
+bool GPU::SetCRTCVBlank(bool new_vblank)
+{
+  CRTCState& cs = s_locals.crtc_state;
+  if (cs.in_vblank == new_vblank)
+    return false;
+
+  if (new_vblank)
+  {
+    DEBUG_LOG("Now in v-blank");
+
+    if (s_locals.gpu_dump) [[unlikely]]
+    {
+      s_locals.gpu_dump->WriteVSync(System::GetGlobalTickCounter());
+      if (s_locals.gpu_dump->IsFinished()) [[unlikely]]
+        StopRecordingGPUDump();
+    }
+
+    // flush any pending draws and "scan out" the image
+    System::IncrementFrameNumber();
+    UpdateDisplay(!System::IsRunaheadActive());
+
+    // switch fields early. this is needed so we draw to the correct one.
+    if (s_locals.GPUSTAT.InInterleaved480iMode())
+      cs.interlaced_display_field = cs.interlaced_field ^ 1u;
+    else
+      cs.interlaced_display_field = 0;
+  }
+
+  Timers::SetGate(HBLANK_TIMER_INDEX, new_vblank);
+  InterruptController::SetLineState(InterruptController::IRQ::VBLANK, new_vblank);
+  cs.in_vblank = new_vblank;
+  if (!new_vblank && s_locals.vblank_end_cheats_enabled)
+    Cheats::ApplyVBlankEndCodes();
+
+  return new_vblank;
 }
 
 ALWAYS_INLINE_RELEASE bool GPU::IsCommandCompletionPending()
@@ -1663,46 +1750,18 @@ void GPU::CRTCTickEvent(void*, TickCount ticks)
     DebugAssert(cs.current_scanline <= cs.vertical_total);
     lines_to_draw -= lines_to_draw_this_loop;
 
-    // clear the vblank flag if the beam would pass through the display area
-    if (prev_scanline < cs.vertical_display_start && cs.current_scanline >= cs.vertical_display_end)
-    {
-      Timers::SetGate(HBLANK_TIMER_INDEX, false);
-      InterruptController::SetLineState(InterruptController::IRQ::VBLANK, false);
-      cs.in_vblank = false;
-    }
-
-    const bool new_vblank =
-      cs.current_scanline < cs.vertical_display_start || cs.current_scanline >= cs.vertical_display_end;
-    if (cs.in_vblank != new_vblank)
-    {
-      if (new_vblank)
-      {
-        DEBUG_LOG("Now in v-blank");
-
-        if (s_locals.gpu_dump) [[unlikely]]
-        {
-          s_locals.gpu_dump->WriteVSync(System::GetGlobalTickCounter());
-          if (s_locals.gpu_dump->IsFinished()) [[unlikely]]
-            StopRecordingGPUDump();
-        }
-
-        // flush any pending draws and "scan out" the image
-        // TODO: move present in here I guess
-        System::IncrementFrameNumber();
-        UpdateDisplay(!System::IsRunaheadActive());
-        frame_done = true;
-
-        // switch fields early. this is needed so we draw to the correct one.
-        if (s_locals.GPUSTAT.InInterleaved480iMode())
-          cs.interlaced_display_field = cs.interlaced_field ^ 1u;
-        else
-          cs.interlaced_display_field = 0;
-      }
-
-      Timers::SetGate(HBLANK_TIMER_INDEX, new_vblank);
-      InterruptController::SetLineState(InterruptController::IRQ::VBLANK, new_vblank);
-      cs.in_vblank = new_vblank;
-    }
+    // Vblank starts when the scan reaches Y2 and ends when it reaches Y1, the current line isn't compared against the
+    // range. Line 0 is reached at the wrap. If both are passed, apply them in scan order, Y2 wins on the same line.
+    const u32 start_line = cs.vertical_display_start ? cs.vertical_display_start : cs.vertical_total;
+    const u32 end_line = cs.vertical_display_end ? cs.vertical_display_end : cs.vertical_total;
+    const bool reached_start = (prev_scanline < start_line && cs.current_scanline >= start_line);
+    const bool reached_end = (prev_scanline < end_line && cs.current_scanline >= end_line);
+    if (reached_start && (!reached_end || start_line < end_line))
+      SetCRTCVBlank(false);
+    if (reached_end)
+      frame_done |= SetCRTCVBlank(true);
+    if (reached_start && reached_end && end_line < start_line)
+      SetCRTCVBlank(false);
 
     // past the end of vblank?
     if (cs.current_scanline == cs.vertical_total)
@@ -1711,7 +1770,9 @@ void GPU::CRTCTickEvent(void*, TickCount ticks)
       cs.current_scanline = 0;
       if (s_locals.GPUSTAT.vertical_interlace)
       {
-        cs.interlaced_field ^= 1u;
+        // the 480i display field was latched at vblank start, which may have been before the switch to 480i
+        cs.interlaced_field =
+          s_locals.GPUSTAT.InInterleaved480iMode() ? cs.interlaced_display_field : (cs.interlaced_field ^ 1u);
         s_locals.GPUSTAT.interlaced_field = BoolToUInt8(!ConvertToBoolUnchecked(cs.interlaced_field));
       }
       else
@@ -1732,7 +1793,8 @@ void GPU::CRTCTickEvent(void*, TickCount ticks)
   else
   {
     cs.active_line_lsb = 0;
-    s_locals.GPUSTAT.display_line_lsb = ConvertToBoolUnchecked((cs.regs.Y + cs.current_scanline) & u32(1));
+    s_locals.GPUSTAT.display_line_lsb =
+      !cs.in_vblank && ConvertToBoolUnchecked((cs.regs.Y + cs.current_scanline) & u32(1));
   }
 
   RescheduleCRTC();
@@ -1954,7 +2016,9 @@ void GPU::WriteGP1(u32 value)
       DEBUG_LOG("GP1 reset GPU");
       s_locals.command_tick_event.InvokeEarlyNoReschedule();
       SynchronizeCRTC();
+      const bool was_in_hblank = s_locals.crtc_state.in_hblank;
       SoftReset();
+      ResetCRTCTiming(was_in_hblank);
     }
     break;
 

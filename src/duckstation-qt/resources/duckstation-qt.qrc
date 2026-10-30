@@ -21,6 +21,8 @@
 		<file>icons/debug-pc@2x.png</file>
 		<file>icons/flags/az.png</file>
 		<file>icons/flags/az@2x.png</file>
+		<file>icons/flags/da.png</file>
+		<file>icons/flags/da@2x.png</file>
 		<file>icons/flags/de.png</file>
 		<file>icons/flags/de@2x.png</file>
 		<file>icons/flags/en.png</file>
@@ -43,6 +45,8 @@
 		<file>icons/flags/ko@2x.png</file>
 		<file>icons/flags/nl.png</file>
 		<file>icons/flags/nl@2x.png</file>
+		<file>icons/flags/no.png</file>
+		<file>icons/flags/no@2x.png</file>
 		<file>icons/flags/pl.png</file>
 		<file>icons/flags/pl@2x.png</file>
 		<file>icons/flags/pt-BR.png</file>
@@ -57,6 +61,8 @@
 		<file>icons/flags/tr@2x.png</file>
 		<file>icons/flags/uk.png</file>
 		<file>icons/flags/uk@2x.png</file>
+		<file>icons/flags/vi.png</file>
+		<file>icons/flags/vi@2x.png</file>
 		<file>icons/flags/zh-CN.png</file>
 		<file>icons/flags/zh-CN@2x.png</file>
 		<file>icons/media-record.png</file>
@@ -137,8 +143,8 @@
 		<file>icons/monochrome/svg/folder-settings-line.svg</file>
 		<file>icons/monochrome/svg/fullscreen-line.svg</file>
 		<file>icons/monochrome/svg/function-line.svg</file>
-		<file>icons/monochrome/svg/github.svg</file>
 		<file>icons/monochrome/svg/gamepad-line.svg</file>
+		<file>icons/monochrome/svg/github.svg</file>
 		<file>icons/monochrome/svg/global-line.svg</file>
 		<file>icons/monochrome/svg/guncon-line.svg</file>
 		<file>icons/monochrome/svg/id-card-line.svg</file>

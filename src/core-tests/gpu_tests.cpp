@@ -6,12 +6,14 @@
 #include "core/gpu_sw_rasterizer.h"
 #include "core/interrupt_controller.h"
 #include "core/settings.h"
+#include "core/timers.h"
 #include "core/timing_event.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
+#include <string_view>
 
 namespace {
 
@@ -26,6 +28,7 @@ protected:
     CPU::g_state.pending_ticks = 0;
     TimingEvents::Reset();
     InterruptController::Reset();
+    Timers::Initialize();
     GPU::Initialize();
     GPU::Reset(false);
   }
@@ -33,13 +36,40 @@ protected:
   void TearDown() override
   {
     GPU::Shutdown();
+    Timers::Shutdown();
     g_settings = m_old_settings;
+  }
+
+  static TimingEvent* FindEvent(std::string_view name)
+  {
+    for (TimingEvent* event = *TimingEvents::GetHeadEventPtr(); event; event = event->next)
+    {
+      if (name == event->GetName())
+        return event;
+    }
+    return nullptr;
   }
 
   Settings m_old_settings;
 };
 
 } // namespace
+
+TEST_F(GPUFrontend, VBlankEndCheatsOnlyScheduleWhenEnabled)
+{
+  TimingEvent* const crtc_event = FindEvent("GPU CRTC Tick");
+  ASSERT_NE(crtc_event, nullptr);
+  const TickCount normal_ticks = crtc_event->GetTicksUntilNextExecution();
+
+  // These tests initialize the GPU without a running system, so explicitly update its schedule.
+  GPU::SetVBlankEndCheatsEnabled(true);
+  GPU::RescheduleCRTC();
+  EXPECT_LT(crtc_event->GetTicksUntilNextExecution(), normal_ticks / 8);
+
+  GPU::SetVBlankEndCheatsEnabled(false);
+  GPU::RescheduleCRTC();
+  EXPECT_EQ(crtc_event->GetTicksUntilNextExecution(), normal_ticks);
+}
 
 TEST_F(GPUFrontend, ResetAcknowledgesInterrupt)
 {
@@ -54,6 +84,103 @@ TEST_F(GPUFrontend, ResetAcknowledgesInterrupt)
   InterruptController::WriteRegister(0, ~(1u << 1));
   GPU::WriteRegister(0, 0x1F000000);
   EXPECT_NE(InterruptController::ReadRegister(0) & (1u << 1), 0u);
+}
+
+// Line 0 is in vblank, so timer 1 pausing during vblank doesn't count until the display starts.
+TEST_F(GPUFrontend, Timer1PausedDuringInitialVBlank)
+{
+  Timers::WriteRegister(0x14, 0x0001); // sync enable, pause during vblank
+  Timers::WriteRegister(0x10, 0);
+  CPU::AddPendingTicks(100);
+  EXPECT_EQ(Timers::ReadRegister(0x10), 0u);
+}
+
+// With Y2 moved before Y1 in vblank, the CRTC still has to run when the scan reaches Y1 for timer 1's gate.
+TEST_F(GPUFrontend, ReversedRangeEndsVBlankAtY1)
+{
+  const auto run = [](u32 ticks) {
+    for (u32 i = 0; i < ticks; i++)
+    {
+      CPU::AddPendingTicks(1);
+      if (CPU::GetPendingTicks() >= CPU::g_state.downcount)
+        TimingEvents::RunEvents();
+    }
+  };
+
+  // Count lines up to line 150 while the display is at 200..256, so it stays in vblank.
+  GPU::WriteRegister(4, 0x07000000 | 200 | (256 << 10));
+  Timers::WriteRegister(0x14, 0x0100); // hblank clock
+  u32 ticks = 0;
+  while (Timers::ReadRegister(0x10) < 150)
+  {
+    run(100);
+    ticks += 100;
+  }
+  const u32 ticks_per_line = ticks / 150;
+
+  // Move Y2 to 100, then count hblanks outside vblank for 60 lines, with nothing synchronizing the CRTC.
+  GPU::WriteRegister(4, 0x07000000 | 200 | (100 << 10));
+  Timers::WriteRegister(0x14, 0x0101); // hblank clock, pause during vblank
+  run(ticks_per_line * 60);
+  EXPECT_NEAR(Timers::ReadRegister(0x10), 10, 1);
+}
+
+TEST_F(GPUFrontend, LineParityBitClearDuringVBlank)
+{
+  const auto run = [](u32 ticks) {
+    for (u32 i = 0; i < ticks; i++)
+    {
+      CPU::AddPendingTicks(1);
+      if (CPU::GetPendingTicks() >= CPU::g_state.downcount)
+        TimingEvents::RunEvents();
+    }
+  };
+
+  // 240p, starting at line 0 with the display at lines 16..256. Count lines with timer 1.
+  Timers::WriteRegister(0x14, 0x0100); // hblank clock
+
+  // Lines 0..15 are vblank, so GPUSTAT.31 stays clear.
+  u32 set_reads = 0;
+  while (Timers::ReadRegister(0x10) < 15)
+  {
+    set_reads += GPU::ReadRegister(4) >> 31;
+    run(100);
+  }
+  EXPECT_EQ(set_reads, 0u);
+
+  // It toggles per line once the display starts.
+  while (Timers::ReadRegister(0x10) < 40)
+  {
+    set_reads += GPU::ReadRegister(4) >> 31;
+    run(100);
+  }
+  EXPECT_GT(set_reads, 0u);
+}
+
+// The 480i display field is latched at vblank start, so switching to 480i after that doesn't advance the field at the
+// end of the frame, and the next field after the switch is the odd one.
+TEST_F(GPUFrontend, SwitchTo480iInVBlankKeepsLatchedField)
+{
+  const auto run_lines = [](u32 lines) {
+    const u32 target = Timers::ReadRegister(0x10) + lines;
+    while (Timers::ReadRegister(0x10) < target)
+    {
+      CPU::AddPendingTicks(1);
+      if (CPU::GetPendingTicks() >= CPU::g_state.downcount)
+        TimingEvents::RunEvents();
+    }
+  };
+
+  // Y1 == Y2 stays in vblank, so the frame wraps without the display updating. Count lines with timer 1, past the
+  // first wrap.
+  GPU::WriteRegister(4, 0x07000000 | 100 | (100 << 10));
+  Timers::WriteRegister(0x14, 0x0100); // hblank clock
+  run_lines(263 + 5);
+  ASSERT_NE(GPU::ReadRegister(4) & (1u << 13), 0u);
+
+  GPU::WriteRegister(4, 0x08000024); // 480i
+  run_lines(263);
+  EXPECT_NE(GPU::ReadRegister(4) & (1u << 13), 0u);
 }
 
 TEST_F(GPUFrontend, CommandBufferResetPreservesInterrupt)

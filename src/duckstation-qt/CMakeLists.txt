@@ -185,6 +185,7 @@ set(SRCS
 
 set(TS_FILES
   translations/duckstation-qt_az.ts
+  translations/duckstation-qt_da.ts
   translations/duckstation-qt_de.ts
   translations/duckstation-qt_en.ts
   translations/duckstation-qt_es.ts
@@ -196,12 +197,14 @@ set(TS_FILES
   translations/duckstation-qt_ja.ts
   translations/duckstation-qt_ko.ts
   translations/duckstation-qt_nl.ts
+  translations/duckstation-qt_no.ts
   translations/duckstation-qt_pl.ts
   translations/duckstation-qt_pt-BR.ts
   translations/duckstation-qt_pt-PT.ts
   translations/duckstation-qt_ru.ts
   translations/duckstation-qt_sv.ts
   translations/duckstation-qt_tr.ts
+  translations/duckstation-qt_vi.ts
   translations/duckstation-qt_zh-CN.ts
 )
 
