@@ -3,168 +3,19 @@
 
 // Ports of psxdiag tests that pass on hardware, run through each CPU execution mode.
 
-#include "core/bus.h"
-#include "core/cpu_code_cache.h"
+#include "cpu_test_harness.h"
+
 #include "core/cpu_core.h"
-#include "core/cpu_core_private.h"
-#include "core/dma.h"
-#include "core/interrupt_controller.h"
-#include "core/mips_encoder.h"
-#include "core/pad.h"
-#include "core/settings.h"
-#include "core/sio.h"
-#include "core/spu.h"
-#include "core/system.h"
-#include "core/timers.h"
-#include "core/timing_event.h"
 
-#include "common/error.h"
-
-#include <gtest/gtest.h>
-
-#include <cstring>
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
+#include "common/move_only_function.h"
 
 namespace {
 
+using namespace CPUTestHarness;
 using namespace Mips::Encoder;
 
-// pcsx_debugbreak(), used to get out of the execution loop.
-static constexpr u32 ADDR_EXIT = 0x1F802081u;
-
-static constexpr u32 PROGRAM_BASE = 0x80010000u;
-static constexpr u32 RESULTS_BASE = 0x80100000u;
-static constexpr u32 RAM_TEST_ADDR = 0x80180000u;
-
-/// Builds a program, results are stored to RAM because the recompiler doesn't write registers back when exiting.
-class Program
+class PsxDiag : public ExecutionModeTest
 {
-public:
-  void Emit(u32 inst) { m_code.push_back(inst); }
-
-  void LoadImmediate(Reg reg, u32 value)
-  {
-    Emit(lui(reg, static_cast<u16>(value >> 16)));
-    Emit(ori(reg, reg, static_cast<u16>(value)));
-  }
-
-  /// Stores the register to the next result slot, and returns the slot.
-  u32 StoreResult(Reg reg)
-  {
-    const u32 slot = m_num_results++;
-    Emit(lui(Reg::T9, static_cast<u16>(RESULTS_BASE >> 16)));
-    Emit(sw(reg, static_cast<s16>(slot * sizeof(u32)), Reg::T9));
-    return slot;
-  }
-
-  /// Executes the program the specified number of times, the first run warms up the icache.
-  void Run(u32 runs = 1)
-  {
-    std::vector<u32> code;
-    code.push_back(lui(Reg::AT, static_cast<u16>(ADDR_EXIT >> 16)));
-    code.insert(code.end(), m_code.begin(), m_code.end());
-    code.push_back(sb(Reg::R0, static_cast<s16>(ADDR_EXIT & 0xFFFFu), Reg::AT));
-    code.push_back(nop());
-    code.push_back(nop());
-
-    // Writes to timers 0/1 start the CRTC event, which can't run without a GPU.
-    for (TimingEvent** event = TimingEvents::GetHeadEventPtr(); *event;)
-    {
-      if (std::strcmp((*event)->GetName(), "GPU CRTC Tick") == 0)
-        (*event)->Deactivate();
-      else
-        event = &(*event)->next;
-    }
-
-    // Get rid of the previous program, this also makes the pages it was in writable again.
-    CPU::CodeCache::InvalidateAllRAMBlocks();
-    std::memcpy(&g_bus.ram[PROGRAM_BASE & g_bus.ram_mask], code.data(), code.size() * sizeof(u32));
-    CPU::ClearICache();
-    for (u32 i = 0; i < runs; i++)
-    {
-      CPU::SetPC(PROGRAM_BASE);
-      CPU::Execute();
-    }
-  }
-
-  u32 Result(u32 slot) const { return ReadRAM(RESULTS_BASE + slot * sizeof(u32)); }
-
-  static u32 ReadRAM(u32 address)
-  {
-    u32 value;
-    std::memcpy(&value, &g_bus.ram[address & g_bus.ram_mask], sizeof(value));
-    return value;
-  }
-
-private:
-  std::vector<u32> m_code;
-  u32 m_num_results = 0;
-};
-
-class PsxDiag : public ::testing::TestWithParam<CPUExecutionMode>
-{
-protected:
-  static void SetUpTestSuite()
-  {
-    g_settings.cpu_execution_mode = CPUExecutionMode::Interpreter;
-    g_settings.pcsx_expansion_region_enable = true;
-    g_settings.audio_backend = AudioBackend::Null;
-
-    Error error;
-    ASSERT_TRUE(CPU::CodeCache::ProcessStartup(&error)) << error.GetDescription();
-    ASSERT_TRUE(Bus::AllocateMemory(false, &error)) << error.GetDescription();
-    Bus::Initialize();
-    CPU::Initialize();
-    TimingEvents::Initialize();
-    System::UpdateOverclock();
-    Bus::Reset();
-
-    // Otherwise the interpreter stays on the debug dispatcher waiting for the entry point.
-    System::SetGameStarted();
-    CPU::Reset();
-
-    InterruptController::Reset();
-    Timers::Initialize();
-    DMA::Initialize();
-    SPU::Initialize();
-    SPU::SetAudioOutputMuted(true);
-    Pad::Initialize();
-    SIO::Initialize();
-
-    // The CPU needs something to count down to.
-    s_event = std::make_unique<TimingEvent>("Test Event", 1000000, 1000000, [](void*, TickCount) {}, nullptr);
-    s_event->Activate();
-  }
-
-  static void TearDownTestSuite()
-  {
-    s_event->Deactivate();
-    s_event.reset();
-    SIO::Shutdown();
-    Pad::Shutdown();
-    SPU::Shutdown();
-    SPU::SetAudioOutputMuted(false);
-    DMA::Shutdown();
-    Timers::Shutdown();
-    while (TimingEvent* event = *TimingEvents::GetHeadEventPtr())
-      event->Deactivate();
-    CPU::CodeCache::Shutdown();
-    CPU::Shutdown();
-    Bus::Shutdown();
-    Bus::ReleaseMemory();
-    CPU::CodeCache::ProcessShutdown();
-  }
-
-  void SetUp() override
-  {
-    // The switch itself happens when the CPU is next executed.
-    g_settings.cpu_execution_mode = GetParam();
-  }
-
-  static inline std::unique_ptr<TimingEvent> s_event;
 };
 
 } // namespace
@@ -288,7 +139,7 @@ public:
 
   /// Compares the readback against the expected value, which can depend on a value read before the writes.
   void Check(const WriteTestRegister& reg, const char* what, u32 garbage_mask, u32 old_slot,
-             std::function<u32(u32)> expected)
+             MoveOnlyFunction<u32(u32)> expected)
   {
     m_checks.push_back({&reg, what, Read(), old_slot, garbage_mask, std::move(expected)});
   }
@@ -301,9 +152,9 @@ public:
     Store(&sw, 0, original);
   }
 
-  void Verify(u32 r7) const
+  void Verify(u32 r7)
   {
-    for (const CheckInfo& ci : m_checks)
+    for (CheckInfo& ci : m_checks)
     {
       const u32 old = (ci.old_slot != NO_SLOT) ? Result(ci.old_slot) : 0;
       EXPECT_EQ(Result(ci.got_slot) & ci.garbage_mask, ci.expected(old) & ci.garbage_mask)
@@ -321,7 +172,7 @@ private:
     u32 got_slot;
     u32 old_slot;
     u32 garbage_mask;
-    std::function<u32(u32)> expected;
+    MoveOnlyFunction<u32(u32)> expected;
   };
 
   std::vector<CheckInfo> m_checks;
@@ -559,82 +410,4 @@ TEST_P(PsxDiag, CopMemAccessJmp)
   CPU::g_state.cop0_regs.sr.bits = old_sr;
 }
 
-//////////////////////////////////////////////////////////////////////////
-// Not from psxdiag
-//////////////////////////////////////////////////////////////////////////
-
-TEST_P(PsxDiag, ChoppedManualDMARunsWhileGPUTransferIsSliced)
-{
-  const Settings old_settings = g_settings;
-  g_settings.dma_max_slice_ticks = 32;
-  g_settings.dma_halt_ticks = 16;
-  DMA::Reset();
-
-  // An empty GPU linked list that loops back to itself keeps exhausting its DMA slice without sending GPU commands.
-  const u32 node_address = RAM_TEST_ADDR & g_bus.ram_mask;
-  std::memcpy(&g_bus.ram[node_address], &node_address, sizeof(node_address));
-  DMA::WriteRegister(0x70, 0);
-  DMA::WriteRegister(0x20, node_address);
-  DMA::WriteRegister(0x28, 0x01000401);
-  DMA::SetRequest(DMA::Channel::GPU, true);
-  DMA::SetRequest(DMA::Channel::SPU, true);
-  DMA::WriteRegister(0x70, 0x00080800);
-
-  // A chopped manual transfer is delayed by halting DMA. When the halt ends, the GPU runs first and halts again, which
-  // must not keep the manual transfer waiting until the linked list ends (CDROM reads in Tondemo Crisis).
-  DMA::WriteRegister(0x40, node_address + 0x1000);
-  DMA::WriteRegister(0x44, 16);
-  DMA::WriteRegister(0x48, 0x01100101);
-  EXPECT_NE(DMA::ReadRegister(0x48) & (1u << 24), 0u);
-
-  Program prog;
-  prog.LoadImmediate(Reg::T0, 128);
-  prog.Emit(addiu(Reg::T0, Reg::T0, -1));
-  prog.Emit(bne(Reg::T0, Reg::R0, -8));
-  prog.Emit(nop());
-  prog.Run();
-
-  EXPECT_NE(DMA::ReadRegister(0x28) & (1u << 24), 0u);
-  EXPECT_EQ(DMA::ReadRegister(0x48) & (1u << 24), 0u);
-
-  DMA::Reset();
-  SPU::Reset();
-  g_settings = old_settings;
-}
-
-TEST_P(PsxDiag, DoubleLoadDelayAcrossBlocks)
-{
-  // A second load to the same register discards the first one's value, even when the first one is in a branch delay
-  // slot and the second one starts the next block.
-  for (const bool taken : {false, true})
-  {
-    Program prog;
-    prog.LoadImmediate(Reg::T0, RAM_TEST_ADDR);
-    prog.LoadImmediate(Reg::T2, 0xAAAAAAAAu);
-    prog.Emit(sw(Reg::T2, 0, Reg::T0));
-    prog.LoadImmediate(Reg::T2, 0xBBBBBBBBu);
-    prog.Emit(sw(Reg::T2, 4, Reg::T0));
-    prog.LoadImmediate(Reg::T1, 0x12345678u);
-    prog.LoadImmediate(Reg::A2, taken ? 0x12345678u : 0u);
-
-    // Either way ends up at the instruction after the delay slot.
-    prog.Emit(beq(Reg::A2, Reg::T1, 4));
-    prog.Emit(lw(Reg::T1, 0, Reg::T0));
-    prog.Emit(lw(Reg::T1, 4, Reg::T0));
-    prog.Emit(addu(Reg::A0, Reg::T1, Reg::R0));
-    prog.Emit(addu(Reg::A1, Reg::T1, Reg::R0));
-    const u32 before = prog.StoreResult(Reg::A0);
-    const u32 after = prog.StoreResult(Reg::A1);
-    prog.Run();
-
-    EXPECT_EQ(prog.Result(before), 0x12345678u) << (taken ? "taken" : "not taken");
-    EXPECT_EQ(prog.Result(after), 0xBBBBBBBBu) << (taken ? "taken" : "not taken");
-  }
-}
-
-INSTANTIATE_TEST_SUITE_P(ExecutionModes, PsxDiag,
-                         ::testing::Values(CPUExecutionMode::Interpreter, CPUExecutionMode::CachedInterpreter,
-                                           CPUExecutionMode::Recompiler),
-                         [](const ::testing::TestParamInfo<CPUExecutionMode>& info) {
-                           return std::string(Settings::GetCPUExecutionModeName(info.param));
-                         });
+INSTANTIATE_TEST_SUITE_P(ExecutionModes, PsxDiag, ::testing::ValuesIn(EXECUTION_MODES), GetExecutionModeTestName);

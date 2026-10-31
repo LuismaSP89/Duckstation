@@ -329,6 +329,7 @@ struct Settings : public GPUSettings
   bool bios_tty_logging : 1 = false;
   bool bios_patch_fast_boot : 1 = DEFAULT_FAST_BOOT_VALUE;
   bool bios_fast_forward_boot : 1 = false;
+  bool bios_reset_spu_on_game_start : 1 = false;
 
   bool rewind_enable : 1 = false;
   bool runahead_for_analog_input : 1 = false;
@@ -336,26 +337,6 @@ struct Settings : public GPUSettings
   bool apply_compatibility_settings : 1 = true;
   bool apply_game_settings : 1 = true;
   bool load_devices_from_save_states : 1 = false;
-
-  u16 rewind_save_slots = 10;
-  u8 runahead_frames = 0;
-
-  SaveStateCompressionMode save_state_compression = DEFAULT_SAVE_STATE_COMPRESSION_MODE;
-
-  u8 cdrom_readahead_sectors = DEFAULT_CDROM_READAHEAD_SECTORS;
-  CDROMMechaconVersion cdrom_mechacon_version = DEFAULT_CDROM_MECHACON_VERSION;
-
-  u8 cdrom_read_speedup = 1;
-  u8 cdrom_seek_speedup = 1;
-  u32 cdrom_max_seek_speedup_cycles = DEFAULT_CDROM_MAX_SEEK_SPEEDUP_CYCLES;
-  u32 cdrom_max_read_speedup_cycles = DEFAULT_CDROM_MAX_READ_SPEEDUP_CYCLES;
-
-  DisplayScreenshotFormat display_screenshot_format = DEFAULT_DISPLAY_SCREENSHOT_FORMAT;
-  u8 display_screenshot_quality = DEFAULT_DISPLAY_SCREENSHOT_QUALITY;
-  CaptureFileNameFormat display_screenshot_filename_format = DEFAULT_DISPLAY_SCREENSHOT_FILENAME_FORMAT;
-
-  u8 audio_output_volume = 100;
-  u8 audio_fast_forward_volume = 100;
 
   bool audio_output_muted : 1 = false;
 
@@ -384,6 +365,27 @@ struct Settings : public GPUSettings
   bool achievements_leaderboard_trackers : 1 = true;
   bool achievements_sound_effects : 1 = true;
   bool achievements_prefetch_badges : 1 = DEFAULT_ACHIEVEMENT_BADGE_PREFETCH;
+
+  u16 rewind_save_slots = 10;
+  u8 runahead_frames = 0;
+
+  SaveStateCompressionMode save_state_compression = DEFAULT_SAVE_STATE_COMPRESSION_MODE;
+
+  u8 cdrom_readahead_sectors = DEFAULT_CDROM_READAHEAD_SECTORS;
+  CDROMMechaconVersion cdrom_mechacon_version = DEFAULT_CDROM_MECHACON_VERSION;
+
+  u8 cdrom_read_speedup = 1;
+  u8 cdrom_seek_speedup = 1;
+  u32 cdrom_max_seek_speedup_cycles = DEFAULT_CDROM_MAX_SEEK_SPEEDUP_CYCLES;
+  u32 cdrom_max_read_speedup_cycles = DEFAULT_CDROM_MAX_READ_SPEEDUP_CYCLES;
+
+  DisplayScreenshotFormat display_screenshot_format = DEFAULT_DISPLAY_SCREENSHOT_FORMAT;
+  u8 display_screenshot_quality = DEFAULT_DISPLAY_SCREENSHOT_QUALITY;
+  CaptureFileNameFormat display_screenshot_filename_format = DEFAULT_DISPLAY_SCREENSHOT_FILENAME_FORMAT;
+
+  u8 audio_output_volume = 100;
+  u8 audio_fast_forward_volume = 100;
+
   u8 achievements_notification_duration = DEFAULT_ACHIEVEMENT_NOTIFICATION_TIME;
   u8 achievements_leaderboard_duration = DEFAULT_LEADERBOARD_NOTIFICATION_TIME;
 
@@ -687,7 +689,6 @@ struct Settings : public GPUSettings
   static const char* const CONTROLLER_PORTS_SECTION_NAME;
   static const char* const HOTKEYS_SECTION_NAME;
   static const char* const BORDER_OVERLAY_SECTION_NAME;
-  static const char* const FOLDERS_SECTION_NAME;
   static const char* const DEBUG_WINDOWS_SECTION_NAME;
 };
 
@@ -695,6 +696,7 @@ ALIGN_TO_CACHE_LINE extern Settings g_settings;        // CPU thread copy.
 ALIGN_TO_CACHE_LINE extern GPUSettings g_gpu_settings; // GPU thread copy.
 
 namespace EmuFolders {
+
 extern std::string AppRoot;
 extern std::string DataRoot;
 extern std::string Bios;
@@ -716,6 +718,8 @@ extern std::string Textures;
 extern std::string UserResources;
 extern std::string Videos;
 
+extern const char* const CONFIG_SECTION_NAME;
+
 // Assumes that AppRoot and DataRoot have been initialized.
 void SetDefaults();
 void EnsureFoldersExist();
@@ -730,4 +734,5 @@ std::string GetOverridableResourcePath(std::string_view name);
 
 /// Returns true if the application is running in portable mode.
 bool IsRunningInPortableMode();
+
 } // namespace EmuFolders

@@ -147,8 +147,8 @@ public:
   void shutdownSystem(bool save_state, bool check_safety);
   void resetSystem(bool check_memcard_busy);
   void setSystemPaused(bool paused);
-  void changeDisc(const QString& new_disc_path, bool reset_system, bool check_memcard_busy);
-  void changeDiscFromPlaylist(quint32 index);
+  void changeDisc(const QString& new_disc_path, bool reset_system, bool check_memcard_busy,
+                  quint32 subimage_index = 0);
   void setLidState(bool manual_control, bool manual_state);
   void loadState(const QString& path);
   void loadState(bool global, qint32 slot);
@@ -164,8 +164,9 @@ public:
   void redrawRenderWindow();
   void toggleFullscreen();
   void setFullscreen(bool fullscreen);
-  void setFullscreenWithCompletionHandler(bool fullscreen, std::function<void()> completion_handler);
+  void setFullscreenWithCompletionHandler(bool fullscreen, MoveOnlyFunction<void()> completion_handler);
   void recreateRenderWindow();
+  void updateDisplayWindow();
   void requestDisplaySize(float scale);
   void applyCheat(const QString& name);
   void reloadPostProcessingShaders();
@@ -178,9 +179,9 @@ public:
   void setGDBActiveClients(bool active);
   void setVideoThreadRunIdle(bool active);
   void updateFullscreenUITheme();
-  void runOnCoreThread(const std::function<void()>& callback);
 
 protected:
+  bool event(QEvent* event) override;
   void run() override;
 
 private:
@@ -203,7 +204,7 @@ private:
   void bootOrLoadState(std::string path);
 
   void confirmActionWithSafetyCheck(const QString& action, bool check_achievements, bool cancel_resume_on_accept,
-                                    std::function<void(bool)> callback) const;
+                                    MoveOnlyFunction<void(bool)> callback) const;
 
   QThread* m_ui_thread;
   QEventLoop* m_event_loop = nullptr;
@@ -280,27 +281,6 @@ private:
 
   DeviceList m_devices;
   EffectList m_effects;
-};
-
-class QtAsyncTask : public QObject
-{
-  Q_OBJECT
-
-public:
-  using CompletionCallback = std::function<void()>;
-  using WorkCallback = std::function<CompletionCallback()>;
-
-  ~QtAsyncTask();
-
-  static void create(QObject* owner, WorkCallback callback);
-
-Q_SIGNALS:
-  void completed(QtAsyncTask* self);
-
-private:
-  explicit QtAsyncTask(WorkCallback callback);
-
-  std::variant<WorkCallback, CompletionCallback> m_callback;
 };
 
 extern CoreThread* g_core_thread;
@@ -381,7 +361,7 @@ void UpdateFolderPaths();
 
 /// Downloads the specified URL to the provided path.
 void DownloadFile(QWidget* parent, std::string url, std::string path,
-                  std::function<void(bool result, std::string path, const Error& error)> completion_callback);
+                  MoveOnlyFunction<void(bool result, std::string path, const Error& error)> completion_callback);
 
 /// Thread-safe settings access.
 void QueueSettingsSave();

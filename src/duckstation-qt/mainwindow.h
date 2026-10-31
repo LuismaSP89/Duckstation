@@ -10,6 +10,8 @@
 #include "util/imgui_manager.h"
 #include "util/window_info.h"
 
+#include "common/move_only_function.h"
+
 #include <QtGui/QShortcut>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QMainWindow>
@@ -128,7 +130,6 @@ public:
   QIcon getIconForGame(const QString& path);
   void refreshAchievementProgress();
 
-  void runOnUIThread(const std::function<void()>& func);
   void requestShutdown(bool allow_confirm, bool allow_save_to_state, bool save_state, bool check_safety,
                        bool check_pause, bool exit_fullscreen_ui, bool quit_afterwards);
   void requestExit(bool allow_confirm = true);
@@ -204,7 +205,7 @@ private:
   void openGamePropertiesForCurrentGame(const char* category = nullptr);
   void doControllerSettings(u32 category = 0);
 
-  void openSelectDiscDialog(const QString& title, std::function<void(std::string)> callback);
+  void openSelectDiscDialog(const QString& title, MoveOnlyFunction<void(std::string)> callback);
   void setGameListEntryCoverImage(const GameList::Entry* entry);
   void clearGameListEntryPlayTime(const GameList::Entry* entry);
   void destroySubWindows();
@@ -306,7 +307,6 @@ private:
   void onToolsISOBrowserTriggered();
   void onToolsCoverDownloaderTriggered();
   void onToolsRefreshAchievementDatabaseTriggered();
-  void onToolsMediaCaptureTriggered();
   void onToolsStartMediaCaptureTriggered(bool audio, bool video);
   void onToolsStopMediaCaptureTriggered();
   void onToolsOpenDataDirectoryTriggered();

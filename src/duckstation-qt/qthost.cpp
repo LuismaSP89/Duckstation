@@ -156,8 +156,33 @@ static void CheckDesktopFile();
 #endif
 
 namespace {
+
+/// Posted to run a function on the receiver's thread.
+class FunctionEvent final : public QEvent
+{
+public:
+  explicit FunctionEvent(MoveOnlyFunction<void()> function);
+
+  void run() { m_function(); }
+
+private:
+  MoveOnlyFunction<void()> m_function;
+};
+
+/// Lives on the UI thread, runs posted FunctionEvents.
+class UIThreadFunctionReceiver final : public QObject
+{
+public:
+  using QObject::QObject;
+
+protected:
+  bool event(QEvent* event) override;
+};
+
 struct State
 {
+  UIThreadFunctionReceiver* ui_function_receiver = nullptr;
+  QEvent::Type function_event_type = QEvent::None;
   std::unique_ptr<QTimer> settings_save_timer;
   std::vector<QTranslator*> translators;
   QIcon app_icon;
@@ -177,6 +202,8 @@ struct State
 #ifdef __linux__
   bool wayland_workarounds = false;
 #endif
+
+  std::atomic_bool clipboard_read_done;
 };
 } // namespace
 
@@ -201,7 +228,6 @@ void QtHost::RegisterTypes()
   // Register any standard types we need elsewhere
   qRegisterMetaType<std::optional<WindowInfo>>("std::optional<WindowInfo>()");
   qRegisterMetaType<std::optional<bool>>();
-  qRegisterMetaType<std::function<void()>>("std::function<void()>");
   qRegisterMetaType<std::shared_ptr<SystemBootParameters>>();
   qRegisterMetaType<const GameList::Entry*>();
   qRegisterMetaType<RenderAPI>("RenderAPI");
@@ -211,6 +237,8 @@ void QtHost::RegisterTypes()
   qRegisterMetaType<std::string>("std::string");
   qRegisterMetaType<std::vector<std::pair<std::string, std::string>>>(
     "std::vector<std::pair<std::string, std::string>>");
+
+  s_state.function_event_type = static_cast<QEvent::Type>(QEvent::registerEventType());
 }
 
 bool QtHost::PerformEarlyHardwareChecks()
@@ -797,7 +825,7 @@ QPixmap QtHost::GetAppLogo()
 }
 
 void QtHost::DownloadFile(QWidget* parent, std::string url, std::string path,
-                          std::function<void(bool result, std::string path, const Error& error)> completion_callback)
+                          MoveOnlyFunction<void(bool result, std::string path, const Error& error)> completion_callback)
 {
   INFO_LOG("Download from {}, saving to {}.", url, path);
 
@@ -1270,19 +1298,22 @@ void CoreThread::setFullscreen(bool fullscreen)
   VideoThread::SetFullscreen(fullscreen);
 }
 
-void CoreThread::setFullscreenWithCompletionHandler(bool fullscreen, std::function<void()> completion_handler)
+void CoreThread::setFullscreenWithCompletionHandler(bool fullscreen, MoveOnlyFunction<void()> completion_handler)
 {
   if (!isCurrentThread())
   {
     DebugAssert(QThread::isMainThread());
-    QMetaObject::invokeMethod(this, &CoreThread::setFullscreenWithCompletionHandler, Qt::QueuedConnection, fullscreen,
-                              [completion_handler = std::move(completion_handler)]() mutable {
-                                Host::RunOnUIThread(std::move(completion_handler));
-                              });
-    return;
+    Host::RunOnCoreThread([fullscreen, completion_handler = std::move(completion_handler)]() mutable {
+      VideoThread::SetFullscreenWithCompletionHandler(fullscreen,
+                                                      [completion_handler = std::move(completion_handler)]() mutable {
+                                                        Host::RunOnUIThread(std::move(completion_handler));
+                                                      });
+    });
   }
-
-  VideoThread::SetFullscreenWithCompletionHandler(fullscreen, std::move(completion_handler));
+  else
+  {
+    VideoThread::SetFullscreenWithCompletionHandler(fullscreen, std::move(completion_handler));
+  }
 }
 
 void CoreThread::recreateRenderWindow()
@@ -1396,7 +1427,7 @@ void Host::OnVideoThreadRunIdleChanged(bool is_active)
 }
 
 void CoreThread::confirmActionWithSafetyCheck(const QString& action, bool check_achievements,
-                                              bool cancel_resume_on_accept, std::function<void(bool)> callback) const
+                                              bool cancel_resume_on_accept, MoveOnlyFunction<void(bool)> callback) const
 {
   DebugAssert(isCurrentThread());
   if (!System::IsValid())
@@ -1443,7 +1474,7 @@ void CoreThread::confirmActionWithSafetyCheck(const QString& action, bool check_
       if (cancel_resume_on_accept && !QtHost::IsFullscreenUIStarted())
         lock.cancelResume();
 
-      Host::RunOnCoreThread([result, callback = std::move(callback)]() { callback(result); });
+      Host::RunOnCoreThread([result, callback = std::move(callback)]() mutable { callback(result); });
     });
 }
 
@@ -1501,21 +1532,23 @@ void CoreThread::setSystemPaused(bool paused)
   System::PauseSystem(paused);
 }
 
-void CoreThread::changeDisc(const QString& new_disc_filename, bool reset_system, bool check_memcard_busy)
+void CoreThread::changeDisc(const QString& new_disc_filename, bool reset_system, bool check_memcard_busy,
+                            quint32 subimage_index)
 {
   if (!isCurrentThread())
   {
     QMetaObject::invokeMethod(this, &CoreThread::changeDisc, Qt::QueuedConnection, new_disc_filename, reset_system,
-                              check_memcard_busy);
+                              check_memcard_busy, subimage_index);
     return;
   }
 
   if (check_memcard_busy && System::IsSavingMemoryCards())
   {
-    confirmActionWithSafetyCheck(tr("change disc"), false, false, [new_disc_filename, reset_system](bool result) {
-      if (result)
-        g_core_thread->changeDisc(new_disc_filename, reset_system, false);
-    });
+    confirmActionWithSafetyCheck(tr("change disc"), false, false,
+                                 [new_disc_filename, reset_system, subimage_index](bool result) {
+                                   if (result)
+                                     g_core_thread->changeDisc(new_disc_filename, reset_system, false, subimage_index);
+                                 });
     return;
   }
 
@@ -1523,27 +1556,12 @@ void CoreThread::changeDisc(const QString& new_disc_filename, bool reset_system,
     return;
 
   if (!new_disc_filename.isEmpty())
-    System::InsertMedia(new_disc_filename.toStdString().c_str());
+    System::InsertMedia(new_disc_filename.toStdString().c_str(), subimage_index);
   else
     System::RemoveMedia();
 
   if (reset_system)
     System::ResetSystem();
-}
-
-void CoreThread::changeDiscFromPlaylist(quint32 index)
-{
-  if (!isCurrentThread())
-  {
-    QMetaObject::invokeMethod(this, &CoreThread::changeDiscFromPlaylist, Qt::QueuedConnection, index);
-    return;
-  }
-
-  if (System::IsShutdown())
-    return;
-
-  if (!System::SwitchMediaSubImage(index))
-    errorReported(tr("Error"), tr("Failed to switch to subimage %1").arg(index));
 }
 
 void CoreThread::setLidState(bool manual_control, bool manual_state)
@@ -1692,46 +1710,41 @@ void CoreThread::openGamePropertiesForCurrentGame(const QString& category)
   }
 }
 
-void CoreThread::runOnCoreThread(const std::function<void()>& callback)
+QtHost::FunctionEvent::FunctionEvent(MoveOnlyFunction<void()> function)
+  : QEvent(s_state.function_event_type), m_function(std::move(function))
 {
-  callback();
 }
 
-void Host::RunOnCoreThread(std::function<void()> function, bool block /* = false */)
+bool CoreThread::event(QEvent* event)
 {
-  const bool self = g_core_thread->isCurrentThread();
+  if (event->type() == QtHost::s_state.function_event_type)
+  {
+    static_cast<QtHost::FunctionEvent*>(event)->run();
+    return true;
+  }
 
-  QMetaObject::invokeMethod(g_core_thread, &CoreThread::runOnCoreThread,
-                            (block && !self) ? Qt::BlockingQueuedConnection : Qt::QueuedConnection,
-                            std::move(function));
+  return QThread::event(event);
 }
 
-void Host::RunOnUIThread(std::function<void()> function, bool block /* = false*/)
+bool QtHost::UIThreadFunctionReceiver::event(QEvent* event)
 {
-  // main window always exists, so it's fine to attach it to that.
-  QMetaObject::invokeMethod(g_main_window, &MainWindow::runOnUIThread,
-                            block ? Qt::BlockingQueuedConnection : Qt::QueuedConnection, std::move(function));
+  if (event->type() == s_state.function_event_type)
+  {
+    static_cast<FunctionEvent*>(event)->run();
+    return true;
+  }
+
+  return QObject::event(event);
 }
 
-QtAsyncTask::QtAsyncTask(WorkCallback callback)
+void Host::RunOnCoreThread(MoveOnlyFunction<void()> function)
 {
-  m_callback = std::move(callback);
+  QCoreApplication::postEvent(g_core_thread, new QtHost::FunctionEvent(std::move(function)));
 }
 
-QtAsyncTask::~QtAsyncTask() = default;
-
-void QtAsyncTask::create(QObject* owner, WorkCallback callback)
+void Host::RunOnUIThread(MoveOnlyFunction<void()> function)
 {
-  // NOTE: Must get connected before queuing, because otherwise you risk a race.
-  QtAsyncTask* task = new QtAsyncTask(std::move(callback));
-  connect(task, &QtAsyncTask::completed, owner, [task]() { std::get<CompletionCallback>(task->m_callback)(); });
-  Host::QueueAsyncTask([task]() {
-    task->m_callback = std::get<WorkCallback>(task->m_callback)();
-    Host::RunOnUIThread([task]() {
-      emit task->completed(task);
-      delete task;
-    });
-  });
+  QCoreApplication::postEvent(QtHost::s_state.ui_function_receiver, new QtHost::FunctionEvent(std::move(function)));
 }
 
 void Host::RefreshGameListAsync(bool invalidate_cache)
@@ -2367,7 +2380,7 @@ void Host::ConfirmMessageAsync(std::string_view icon, std::string_view title, st
                               callback = std::move(callback), yes_text = std::string(yes_text),
                               no_text = std::string(no_text), needs_pause]() mutable {
       // Need to reset run idle state _again_ after displaying.
-      auto final_callback = [callback = std::move(callback), needs_pause](bool result) {
+      auto final_callback = [callback = std::move(callback), needs_pause](bool result) mutable {
         FullscreenUI::UpdateRunIdleState();
         if (needs_pause)
         {
@@ -2413,19 +2426,20 @@ void Host::ConfirmMessageAsync(std::string_view icon, std::string_view title, st
       QPushButton* const yes_button = msgbox->addButton(yes_text, QMessageBox::AcceptRole);
       msgbox->addButton(no_text, QMessageBox::RejectRole);
 
-      QObject::connect(msgbox, &QMessageBox::finished, dialog_parent,
-                       [msgbox, yes_button, callback = std::move(callback), lock = std::move(lock), needs_pause]() {
-                         const bool result = (msgbox->clickedButton() == yes_button);
-                         callback(result);
+      QObject::connect(
+        msgbox, &QMessageBox::finished, dialog_parent,
+        [msgbox, yes_button, callback = std::move(callback), lock = std::move(lock), needs_pause]() mutable {
+          const bool result = (msgbox->clickedButton() == yes_button);
+          callback(result);
 
-                         if (needs_pause)
-                         {
-                           Host::RunOnCoreThread([]() {
-                             if (System::IsValid())
-                               System::PauseSystem(false);
-                           });
-                         }
-                       });
+          if (needs_pause)
+          {
+            Host::RunOnCoreThread([]() {
+              if (System::IsValid())
+                System::PauseSystem(false);
+            });
+          }
+        });
       msgbox->open();
     });
   }
@@ -2438,15 +2452,21 @@ void Host::OpenURL(std::string_view url)
 
 std::string Host::GetClipboardText()
 {
-  // Hope this doesn't deadlock...
+  using namespace QtHost;
+
+  // Only called from the video thread for imgui.
+  DebugAssert(VideoThread::IsOnThread());
+
   std::string ret;
-  Host::RunOnUIThread(
-    [&ret]() {
-      QClipboard* clipboard = QGuiApplication::clipboard();
-      if (clipboard)
-        ret = clipboard->text().toStdString();
-    },
-    true);
+  s_state.clipboard_read_done.store(false, std::memory_order_relaxed);
+  Host::RunOnUIThread([&ret]() {
+    QClipboard* clipboard = QGuiApplication::clipboard();
+    if (clipboard)
+      ret = clipboard->text().toStdString();
+    s_state.clipboard_read_done.store(true, std::memory_order_release);
+    s_state.clipboard_read_done.notify_one();
+  });
+  s_state.clipboard_read_done.wait(false, std::memory_order_acquire);
   return ret;
 }
 
@@ -3580,6 +3600,9 @@ int main(int argc, char* argv[])
 
   // Type registration has to happen after hardware checks, clang emits ptest instructions otherwise.
   RegisterTypes();
+
+  // Owned by the application, so it's around for as long as there's an event loop to run functions.
+  s_state.ui_function_receiver = new UIThreadFunctionReceiver(&app);
 
   std::shared_ptr<SystemBootParameters> autoboot;
   if (!ParseCommandLineParametersAndInitializeConfig(app, autoboot))

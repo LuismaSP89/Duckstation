@@ -70,8 +70,7 @@ private:
   std::string m_binding_section;
   std::string m_binding_key;
   std::string m_display_name;
-  std::vector<InputBindingKey> m_new_bindings;
-  std::vector<std::pair<InputBindingKey, std::pair<float, float>>> m_value_ranges;
+  std::string m_capture_binding;
   float m_time_remaining = 0.0f;
   InputBindingInfo::Type m_binding_type = InputBindingInfo::Type::Unknown;
 };
@@ -446,106 +445,56 @@ void FullscreenUI::InputBindingDialog::Start(SettingsInterface* bsi, InputBindin
                                              std::string_view section, std::string_view key,
                                              std::string_view display_name)
 {
-  if (m_binding_type != InputBindingInfo::Type::Unknown)
-    InputManager::RemoveHook();
-
   m_binding_type = type;
   m_binding_section = section;
   m_binding_key = key;
   m_display_name = display_name;
-  m_new_bindings = {};
-  m_value_ranges = {};
+  m_capture_binding = {};
   m_time_remaining = INPUT_BINDING_TIMEOUT_SECONDS;
-  SetTitleAndOpen(FSUI_ICONSTR(ICON_FA_GAMEPAD, "Set Input Binding"));
+  SetTitleAndOpen("##input_binding_dialog");
 
+  // A capture started for another binding is replaced.
   const bool game_settings = IsEditingGameSettings(bsi);
-
-  auto input_hook = [this, game_settings](InputBindingKey key, float value) -> InputInterceptHook::CallbackResult {
-    // holding the settings lock here will protect the input binding list
-    const auto lock = Core::GetSettingsLock();
-
-    // shouldn't happen, just in case
-    if (m_binding_type == InputBindingInfo::Type::Unknown)
-      return InputInterceptHook::CallbackResult::RemoveHookAndContinueProcessingEvent;
-
-    // ignore sensors for now
-    if (key.source_subtype == InputSubclass::ControllerSensor)
-      return InputInterceptHook::CallbackResult::StopProcessingEvent;
-
-    float initial_value;
-    float min_value;
-    InputInterceptHook::CallbackResult default_action = InputInterceptHook::CallbackResult::StopProcessingEvent;
-    const auto it = std::find_if(m_value_ranges.begin(), m_value_ranges.end(),
-                                 [key](const auto& it) { return it.first.bits == key.bits; });
-
-    if (it != m_value_ranges.end())
-    {
-      initial_value = it->second.first;
-      min_value = it->second.second = std::min(it->second.second, value);
-    }
-    else
-    {
-      // if this is a button, set an initial value of zero, since we won't get any event for the initial state
-      initial_value = min_value = (key.source_subtype == InputSubclass::ControllerButton) ? 0.0f : value;
-      m_value_ranges.emplace_back(key, std::make_pair(initial_value, min_value));
-
-      // forward the event to imgui if it's a new key and a release, because this is what triggered the binding to
-      // start if we don't do this, imgui thinks the activate button is held down
-      default_action = (value == 0.0f) ? InputInterceptHook::CallbackResult::ContinueProcessingEvent :
-                                         InputInterceptHook::CallbackResult::StopProcessingEvent;
-    }
-
-    DEV_LOG("Binding input event: key={} value={:.2f} initial_value={:.2f} min_value={:.2f}",
-            InputManager::ConvertInputBindingKeyToString(m_binding_type, key), value, initial_value, min_value);
-
-    const float abs_value = std::abs(value);
-    const float delta_from_initial = std::abs(std::abs(initial_value) - abs_value);
-    const bool reverse_threshold = (key.source_subtype == InputSubclass::ControllerAxis &&
-                                    std::abs(initial_value) > 0.5f && std::abs(initial_value - min_value) > 0.1f);
-
-    for (InputBindingKey& other_key : m_new_bindings)
-    {
-      // if this key is in our new binding list, it's a "release", and we're done
-      if (other_key.MaskDirection() == key.MaskDirection())
+  Host::RunOnCoreThread([this, game_settings]() {
+    InputManager::StartBindingCapture([this, game_settings](std::span<const InputBindingKey> keys, bool completed) {
+      if (!completed)
       {
-        if (delta_from_initial <= 0.25f)
+        // show the binding as it's built up
+        const auto lock = Core::GetSettingsLock();
+        if (m_binding_type != InputBindingInfo::Type::Unknown)
         {
-          // did we go the full range?
-          if (reverse_threshold && initial_value > 0.5f && min_value <= -0.5f)
-            other_key.modifier = InputModifier::FullAxis;
+          VideoThread::RunOnThread([this, binding = InputManager::ConvertInputBindingKeysToString(
+                                            m_binding_type, keys.data(), keys.size())]() mutable {
+            InputManager::PrettifyInputBinding(binding, true, &GetControllerIconMapping);
+            m_capture_binding = binding.view();
+          });
+        }
 
+        return;
+      }
+
+      {
+        // holding the settings lock here will protect the input binding list
+        const auto lock = Core::GetSettingsLock();
+
+        // shouldn't happen, just in case
+        if (m_binding_type != InputBindingInfo::Type::Unknown)
+        {
           SettingsInterface* bsi = GetEditingSettingsInterface(game_settings);
           const SmallString new_binding =
-            InputManager::ConvertInputBindingKeysToString(m_binding_type, m_new_bindings.data(), m_new_bindings.size());
+            InputManager::ConvertInputBindingKeysToString(m_binding_type, keys.data(), keys.size());
           bsi->SetStringValue(m_binding_section.c_str(), m_binding_key.c_str(), new_binding.c_str());
           SetSettingsChanged(bsi);
 
           // don't try to process any more
           m_binding_type = InputBindingInfo::Type::Unknown;
           VideoThread::RunOnThread([this]() { StartClose(); });
-
-          return InputInterceptHook::CallbackResult::RemoveHookAndStopProcessingEvent;
         }
-
-        // otherwise, keep waiting
-        return default_action;
       }
-    }
 
-    // new binding, add it to the list, but wait for a decent distance first, and then wait for release
-    if (delta_from_initial >= 0.5f)
-    {
-      InputBindingKey key_to_add = key;
-      key_to_add.modifier = (value < 0.0f) ? InputModifier::Negate : InputModifier::None;
-      key_to_add.invert = reverse_threshold;
-      m_new_bindings.push_back(key_to_add);
-    }
-
-    return default_action;
-  };
-
-  Host::RunOnCoreThread(
-    [input_hook = std::move(input_hook)]() mutable { InputManager::SetHook(std::move(input_hook)); });
+      InputManager::StopBindingCapture();
+    });
+  });
 }
 
 void FullscreenUI::InputBindingDialog::ClearState()
@@ -553,14 +502,13 @@ void FullscreenUI::InputBindingDialog::ClearState()
   PopupDialog::ClearState();
 
   if (m_binding_type != InputBindingInfo::Type::Unknown)
-    Host::RunOnCoreThread(&InputManager::RemoveHook);
+    Host::RunOnCoreThread(&InputManager::StopBindingCapture);
 
   m_binding_type = InputBindingInfo::Type::Unknown;
   m_binding_section = {};
   m_binding_key = {};
   m_display_name = {};
-  m_new_bindings = {};
-  m_value_ranges = {};
+  m_capture_binding = {};
 }
 
 void FullscreenUI::InputBindingDialog::Draw()
@@ -576,7 +524,7 @@ void FullscreenUI::InputBindingDialog::Draw()
       // allow the dialog to fade out, but stop receiving any more events
       m_time_remaining = 0.0f;
       m_binding_type = InputBindingInfo::Type::Unknown;
-      Host::RunOnCoreThread(&InputManager::RemoveHook);
+      Host::RunOnCoreThread(&InputManager::StopBindingCapture);
       StartClose();
     }
   }
@@ -588,11 +536,28 @@ void FullscreenUI::InputBindingDialog::Draw()
     return;
   }
 
-  ImGui::TextWrapped(
-    "%s", SmallString::from_format(FSUI_FSTR("Setting {} binding {}."), m_binding_section, m_display_name).c_str());
-  ImGui::TextUnformatted(FSUI_CSTR("Push a controller button or axis now."));
-  ImGui::NewLine();
-  ImGui::TextUnformatted(SmallString::from_format(FSUI_FSTR("Timing out in {:.0f} seconds..."), m_time_remaining));
+  const float width = ImGui::GetContentRegionAvail().x;
+  ImGui::PushFont(nullptr, 0.0f, UIStyle.BoldFontWeight);
+  ImGui::TextAligned(
+    0.5f, width, "%s",
+    SmallString::from_format(FSUI_FSTR("Setting {} binding {}."), m_binding_section, m_display_name).c_str());
+  ImGui::PopFont();
+  ImGui::Dummy(LayoutScale(0.0f, 10.0f));
+
+  if (!m_capture_binding.empty())
+    ImGui::TextAligned(0.5f, width, m_capture_binding.c_str());
+  else
+    ImGui::TextAligned(0.5f, width, FSUI_CSTR("Push a controller button or axis now."));
+
+  ImGui::Dummy(LayoutScale(0.0f, 10.0f));
+
+  ImGui::PushFont(nullptr, UIStyle.MediumLargeFontSize, -1.0f);
+  ImGui::TextAligned(
+    0.5f, width, "%s",
+    TinyString::from_format(FSUI_FSTR("Timing out in {}..."),
+                            Host::FormatTimespan(std::max(static_cast<int>(std::ceil(m_time_remaining)), 1), true))
+      .c_str());
+  ImGui::PopFont();
 
   EndRender();
 }
@@ -2943,6 +2908,11 @@ void FullscreenUI::DrawGameListSettingsPage()
                     GameList::SETTING_KEY_SORT_COLUMN, GameList::DEFAULT_SORT_COLUMN, &GameList::ParseColumnName,
                     &GameList::GetColumnName, &GameList::GetColumnDisplayName, GameList::Column::MaxCount, true, false,
                     &FullscreenUI::ReloadGameListSettings);
+    DrawEnumSetting(bsi, FSUI_ICONVSTR(ICON_FA_IMAGE, "List Icons"),
+                    FSUI_VSTR("Determines the image shown next to each game in the list view."),
+                    GameList::UI_SECTION_NAME, GameList::SETTING_KEY_ICON_SOURCE, GameList::DEFAULT_ICON_SOURCE,
+                    &GameList::ParseIconSourceName, &GameList::GetIconSourceName, &GameList::GetIconSourceDisplayName,
+                    GameList::IconSource::MaxCount, true, false, &FullscreenUI::ReloadGameListSettings);
     settings_changed |= DrawToggleSetting(
       bsi, FSUI_ICONVSTR(ICON_FA_ARROW_DOWN_Z_A, "Sort Reversed"),
       FSUI_VSTR("Reverses the game list sort order from the default (usually ascending to descending)."),
@@ -3054,7 +3024,7 @@ void FullscreenUI::DrawGameListSettingsPage()
 
   MenuHeading(FSUI_VSTR("Cover Settings"));
   {
-    DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER, "Covers Directory"), Settings::FOLDERS_SECTION_NAME, "Covers",
+    DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER, "Covers Directory"), EmuFolders::CONFIG_SECTION_NAME, "Covers",
                       EmuFolders::Covers);
     if (MenuButton(FSUI_ICONVSTR(ICON_FA_DOWNLOAD, "Download Covers"),
                    FSUI_VSTR("Downloads covers from a user-specified URL template.")))
@@ -3281,7 +3251,7 @@ void FullscreenUI::DrawBIOSSettingsPage()
     }
   }
 
-  MenuHeading(FSUI_VSTR("Options"));
+  MenuHeading(FSUI_VSTR("BIOS Images"));
 
   if (MenuButton(FSUI_ICONVSTR(ICON_FA_FILE_IMPORT, "Install BIOS"),
                  FSUI_VSTR("Copies a BIOS image to the configured global BIOS directory.")))
@@ -3292,9 +3262,15 @@ void FullscreenUI::DrawBIOSSettingsPage()
   DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER, "BIOS Directory"), Settings::BIOS_SECTION_NAME,
                     "SearchDirectory", EmuFolders::Bios);
 
+  MenuHeading(FSUI_VSTR("Options"));
+
   DrawToggleSetting(bsi, FSUI_ICONVSTR(ICON_FA_SCROLL, "Enable TTY Logging"),
                     FSUI_VSTR("Logs BIOS calls to printf(). Not all games contain debugging messages."),
                     Settings::BIOS_SECTION_NAME, "TTYLogging", false);
+  DrawToggleSetting(bsi, FSUI_ICONVSTR(ICON_FA_VOLUME_XMARK, "Reset SPU On Game Start"),
+                    FSUI_VSTR("Resets the SPU when the game starts, removing leftover BIOS reverb echoes in games that "
+                              "do not initialize it. Has no effect when fast booting."),
+                    Settings::BIOS_SECTION_NAME, "ResetSPUOnGameStart", false);
 
   EndMenuButtons();
 }
@@ -4495,7 +4471,7 @@ void FullscreenUI::DrawMemoryCardSettingsPage()
   DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER_OPEN, "Memory Card Directory"),
                     Settings::MEMORY_CARDS_SECTION_NAME, "Directory", EmuFolders::MemoryCards);
 
-  DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER_OPEN, "Save State Directory"), Settings::FOLDERS_SECTION_NAME,
+  DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER_OPEN, "Save State Directory"), EmuFolders::CONFIG_SECTION_NAME,
                     "SaveStates", EmuFolders::SaveStates);
 
   MenuHeading(FSUI_VSTR("Settings"));
@@ -5048,7 +5024,7 @@ void FullscreenUI::DrawGraphicsSettingsPage()
                   "ScreenshotFileNameFormat", Settings::DEFAULT_DISPLAY_SCREENSHOT_FILENAME_FORMAT,
                   &Settings::ParseCaptureFileNameFormat, &Settings::GetCaptureFileNameFormatName,
                   &Settings::GetCaptureFileNameFormatDisplayName, CaptureFileNameFormat::Count);
-  DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER, "Screenshot Directory"), Settings::FOLDERS_SECTION_NAME,
+  DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER, "Screenshot Directory"), EmuFolders::CONFIG_SECTION_NAME,
                     "Screenshots", EmuFolders::Screenshots);
 
   MenuHeading(FSUI_VSTR("Texture Replacements"));
@@ -5096,7 +5072,7 @@ void FullscreenUI::DrawGraphicsSettingsPage()
                               "replacement backgrounds to match/load."),
                     Settings::HACKS_SECTION_NAME, "UseOldMDECRoutines", false);
 
-  DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER, "Textures Directory"), Settings::FOLDERS_SECTION_NAME,
+  DrawFolderSetting(bsi, FSUI_ICONVSTR(ICON_FA_FOLDER, "Textures Directory"), EmuFolders::CONFIG_SECTION_NAME,
                     "Textures", EmuFolders::Textures);
 
   EndMenuButtons();

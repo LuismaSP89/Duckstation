@@ -36,6 +36,7 @@
 
 #include "util/cd_image.h"
 #include "util/gpu_device.h"
+#include "util/http_cache.h"
 #include "util/media_capture.h"
 #include "util/translation.h"
 
@@ -43,6 +44,7 @@
 #include "common/error.h"
 #include "common/file_system.h"
 #include "common/log.h"
+#include "common/path.h"
 #include "common/string_util.h"
 
 #include <QtCore/QDeadlineTimer>
@@ -535,13 +537,13 @@ void MainWindow::updateGameListRelatedActions()
   m_ui.menuSortBy->setDisabled(disable);
   m_ui.actionMergeDiscSets->setDisabled(disable);
   m_ui.actionShowLocalizedTitles->setDisabled(disable);
-  m_ui.actionShowGameIcons->setDisabled(disable || !game_list);
-  m_ui.actionAnimateGameIcons->setDisabled(disable || !game_list || !m_ui.actionShowGameIcons->isChecked());
+  m_ui.menuGameListIcons->setDisabled(disable || !game_list);
+  m_ui.actionAnimateGameIcons->setDisabled(disable || !game_list ||
+                                           !m_game_list_widget->getModel()->hasMemoryCardIcons());
   m_ui.actionGridViewShowTitles->setDisabled(disable || !game_grid);
   m_ui.actionViewZoomIn->setDisabled(disable);
   m_ui.actionViewZoomOut->setDisabled(disable);
   m_ui.actionGridViewRefreshCovers->setDisabled(disable || !game_grid);
-  m_ui.actionPreferAchievementGameIcons->setDisabled(disable || !game_list);
   m_ui.actionChangeGameListBackground->setDisabled(disable);
   m_ui.actionClearGameListBackground->setDisabled(disable || !has_background);
 }
@@ -736,7 +738,7 @@ void MainWindow::onStartFileActionTriggered()
   startFileOrChangeDisc(filename);
 }
 
-void MainWindow::openSelectDiscDialog(const QString& title, std::function<void(std::string)> callback)
+void MainWindow::openSelectDiscDialog(const QString& title, MoveOnlyFunction<void(std::string)> callback)
 {
   std::vector<std::pair<std::string, std::string>> devices = CDImage::GetDeviceList();
   if (devices.empty())
@@ -1273,7 +1275,7 @@ bool MainWindow::openResumeStateDialog(const std::string& path, std::string save
   }
 
   // Prefer using the supplied path in case it's been moved.
-  std::string media_path = path.empty() ? std::string(std::move(ssi->media_path)) : std::string(path);
+  std::string media_path = path.empty() ? ssi->GetBootPath() : std::string(path);
 
   QDialogButtonBox* const bbox = new QDialogButtonBox(Qt::Horizontal, dlg);
 
@@ -1435,34 +1437,51 @@ void MainWindow::onChangeDiscMenuAboutToShow()
   if (!s_locals.system_valid)
     return;
 
-  // NOTE: This is terrible and a race condition. But nobody should be using m3u files anyway.
-  if (System::HasMediaSubImages())
-  {
-    const u32 count = System::GetMediaSubImageCount();
-    const u32 current = System::GetMediaSubImageIndex();
-    for (u32 i = 0; i < count; i++)
-    {
-      QAction* action = m_ui.menuChangeDisc->addAction(QString::fromStdString(System::GetMediaSubImageTitle(i)));
-      action->setCheckable(true);
-      action->setChecked(i == current);
-      connect(action, &QAction::triggered, [i]() { g_core_thread->changeDiscFromPlaylist(i); });
-    }
-  }
-  else if (const GameDatabase::Entry* entry = System::GetGameDatabaseEntry(); entry && entry->disc_set)
-  {
-    auto lock = GameList::GetLock();
-    GameList::EnsureLoaded(lock);
-    for (const auto& [title, glentry] :
-         GameList::GetEntriesInDiscSet(entry->disc_set, m_game_list_widget->getModel()->getShowLocalizedTitles()))
-    {
-      QAction* action = m_ui.menuChangeDisc->addAction(QtUtils::StringViewToQString(title));
-      QString path = QString::fromStdString(glentry->path);
-      action->setCheckable(true);
-      action->setChecked(path == s_locals.current_game_path);
-      connect(action, &QAction::triggered,
-              [path = std::move(path)]() { g_core_thread->changeDisc(path, false, true); });
-    }
-  }
+  // The media state is owned by the core thread, so the list has to be queried there.
+  Host::RunOnCoreThread([localized_titles = m_game_list_widget->getModel()->getShowLocalizedTitles()]() {
+    if (!System::IsValid())
+      return;
+
+    std::vector<MediaChangeEntry> entries = System::GetMediaChangeList(localized_titles);
+    if (entries.empty())
+      return;
+
+    Host::RunOnUIThread([entries = std::move(entries)]() {
+      if (!g_main_window)
+        return;
+
+      for (const MediaChangeEntry& entry : entries)
+      {
+        // Infrequently used and the menu is already delayed by the core thread round trip, so load icons inline.
+        QIcon icon;
+        if (HTTPCache::IsHTTPURL(entry.icon_path))
+        {
+          // Only check the cache, the game list will have downloaded it if it's available.
+          if (const HTTPCache::LookupResult result = HTTPCache::Lookup(entry.icon_path, nullptr))
+          {
+            QPixmap pm;
+            if (pm.loadFromData(result->data(), static_cast<int>(result->size()),
+                                TinyString(Path::GetExtension(HTTPCache::GetURLFilename(entry.icon_path))).c_str()))
+            {
+              icon = QIcon(pm);
+            }
+          }
+        }
+        else if (!entry.icon_path.empty() && !HTTPCache::IsHTTPURL(entry.icon_path))
+        {
+          icon = QIcon(QString::fromStdString(entry.icon_path));
+        }
+
+        QAction* action = g_main_window->m_ui.menuChangeDisc->addAction(icon, QString::fromStdString(entry.title));
+        action->setCheckable(true);
+        action->setChecked(entry.is_current);
+        QObject::connect(action, &QAction::triggered,
+                         [path = QString::fromStdString(entry.path), subimage_index = entry.subimage_index]() {
+                           g_core_thread->changeDisc(path, false, true, subimage_index);
+                         });
+      }
+    });
+  });
 }
 
 void MainWindow::onLoadStateMenuAboutToShow()
@@ -1949,10 +1968,9 @@ void MainWindow::setupAdditionalUi()
   group->addAction(m_ui.actionViewSystemDisplay);
   group->addAction(m_ui.actionViewSystemLog);
 
-  m_game_list_widget =
-    new GameListWidget(m_ui.mainContainer, m_ui.actionViewGameList, m_ui.actionViewGameGrid, m_ui.actionMergeDiscSets,
-                       m_ui.actionShowGameIcons, m_ui.actionAnimateGameIcons, m_ui.actionPreferAchievementGameIcons,
-                       m_ui.actionGridViewShowTitles, m_ui.actionShowLocalizedTitles);
+  m_game_list_widget = new GameListWidget(m_ui.mainContainer, m_ui.actionViewGameList, m_ui.actionViewGameGrid,
+                                          m_ui.actionMergeDiscSets, m_ui.menuGameListIcons, m_ui.actionAnimateGameIcons,
+                                          m_ui.actionGridViewShowTitles, m_ui.actionShowLocalizedTitles);
   m_ui.mainContainer->addWidget(m_game_list_widget);
 
   m_status_progress_widget = new QProgressBar(m_ui.statusBar);
@@ -2678,7 +2696,8 @@ void MainWindow::connectSignals()
           &MainWindow::onToolsRefreshAchievementDatabaseTriggered);
   connect(m_ui.actionToolsRefreshAchievementProgress, &QAction::triggered, g_main_window,
           &MainWindow::refreshAchievementProgress);
-  connect(m_ui.actionMediaCapture, &QAction::triggered, this, &MainWindow::onToolsMediaCaptureTriggered);
+  connect(m_ui.actionMediaCapture, &QAction::triggered, this,
+          [this]() { m_ui.menuMediaCapture->popup(QCursor::pos()); });
   connect(m_ui.actionStartMediaCapture, &QAction::triggered, this,
           [this]() { onToolsStartMediaCaptureTriggered(true, true); });
   connect(m_ui.actionCaptureAudioOnly, &QAction::triggered, this,
@@ -2696,10 +2715,8 @@ void MainWindow::connectSignals()
   connect(m_ui.actionMergeDiscSets, &QAction::triggered, m_game_list_widget, &GameListWidget::setMergeDiscSets);
   connect(m_ui.actionShowLocalizedTitles, &QAction::triggered, m_game_list_widget,
           &GameListWidget::setShowLocalizedTitles);
-  connect(m_ui.actionShowGameIcons, &QAction::triggered, m_game_list_widget, &GameListWidget::setShowGameIcons);
+  connect(m_game_list_widget, &GameListWidget::iconSourceChanged, this, &MainWindow::updateGameListRelatedActions);
   connect(m_ui.actionAnimateGameIcons, &QAction::triggered, m_game_list_widget, &GameListWidget::setAnimateGameIcons);
-  connect(m_ui.actionPreferAchievementGameIcons, &QAction::triggered, m_game_list_widget,
-          &GameListWidget::setPreferAchievementGameIcons);
   connect(m_ui.actionGridViewShowTitles, &QAction::triggered, m_game_list_widget, &GameListWidget::setShowCoverTitles);
   connect(m_ui.actionGridViewShowTitles, &QAction::triggered, m_game_list_widget, &GameListWidget::setShowCoverTitles);
   connect(m_ui.actionViewZoomIn, &QAction::triggered, this, &MainWindow::onViewZoomInActionTriggered);
@@ -3182,11 +3199,6 @@ QIcon MainWindow::getIconForGame(const QString& path)
   return m_game_list_widget->getModel()->getIconForGame(path);
 }
 
-void MainWindow::runOnUIThread(const std::function<void()>& func)
-{
-  func();
-}
-
 void MainWindow::requestShutdown(bool allow_confirm, bool allow_save_to_state, bool save_state, bool check_safety,
                                  bool check_pause, bool exit_fullscreen_ui, bool quit_afterwards)
 {
@@ -3525,11 +3537,6 @@ void MainWindow::refreshAchievementProgress()
         g_main_window->m_game_list_widget->getModel()->invalidateColumn(GameListModel::Column_Achievements);
       };
     });
-}
-
-void MainWindow::onToolsMediaCaptureTriggered()
-{
-  m_ui.menuMediaCapture->popup(QCursor::pos());
 }
 
 void MainWindow::onToolsStartMediaCaptureTriggered(bool audio, bool video)

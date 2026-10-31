@@ -8,13 +8,15 @@
 
 #include "util/image.h"
 
+#include "common/move_only_function.h"
+
 #include <array>
 #include <ctime>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace Threading {
 class ThreadHandle;
@@ -54,7 +56,7 @@ struct SystemBootParameters
   std::string path;
   std::string save_state;
   std::string override_exe;
-  u32 media_playlist_index = 0;
+  u32 media_subimage_index = 0;
 
   std::optional<bool> override_fast_boot;
   std::optional<bool> override_fullscreen;
@@ -80,9 +82,22 @@ struct ExtendedSaveStateInfo
   std::string title;
   std::string serial;
   std::string media_path;
+  std::string exe_override;
   std::time_t timestamp;
 
   Image screenshot;
+
+  /// Returns the path to boot to load this state: the disc, or the executable when no disc was inserted.
+  ALWAYS_INLINE const std::string& GetBootPath() const { return media_path.empty() ? exe_override : media_path; }
+};
+
+struct MediaChangeEntry
+{
+  std::string title;
+  std::string path;
+  std::string icon_path;
+  u32 subimage_index;
+  bool is_current;
 };
 
 namespace System {
@@ -267,9 +282,6 @@ void SetGameStarted();
 void ChangeExeOverrideAndReset(std::string path);
 bool ChangeGPUDump(std::string new_path);
 
-/// Returns a path to the game icon, if any.
-std::string GetGameIconPath(bool allow_achievements_badge);
-
 /// Returns the time elapsed in the current play session.
 u64 GetSessionPlayedTime();
 
@@ -314,7 +326,7 @@ size_t GetMaxMemorySaveStateSize(bool enable_8mb_ram, bool pgxp, bool enable_tex
 /// Loads state from the specified path.
 std::optional<bool> LoadState(const char* path, Error* error, bool save_undo_state, bool force_update_display);
 bool SaveState(std::string path, Error* error, bool backup_existing_save, bool ignore_memcard_busy,
-               std::function<void(bool, const Error& error)> completion_callback = {});
+               MoveOnlyFunction<void(bool, const Error& error)> completion_callback = {});
 bool SaveResumeState(Error* error);
 
 /// Saves/load state to/from slot.
@@ -360,25 +372,16 @@ bool DumpVRAM(std::string path, Error* error);
 /// Dumps sound RAM to a file.
 bool DumpSPURAM(std::string path, Error* error);
 
-bool InsertMedia(const char* path);
+/// Inserts the specified disc image, switching to the specified subimage for multi-disc images (e.g. m3u).
+/// If the path is the same as the current media, only the subimage is switched.
+bool InsertMedia(const char* path, u32 subimage_index = 0);
 void RemoveMedia();
 
-/// Returns true if this is a multi-subimage image (e.g. m3u).
-bool HasMediaSubImages();
+/// Returns the list of discs that the current media can be changed to, i.e. the subimages for multi-disc images,
+/// otherwise the other discs in the game list from the same disc set. Must be called on the core thread.
+std::vector<MediaChangeEntry> GetMediaChangeList(bool localized_titles);
 
-/// Returns the number of entries in the media/disc playlist.
-u32 GetMediaSubImageCount();
-
-/// Returns the current image from the media/disc playlist.
-u32 GetMediaSubImageIndex();
-
-/// Returns the path to the specified playlist index.
-std::string GetMediaSubImageTitle(u32 index);
-
-/// Switches to the specified media/disc playlist index.
-bool SwitchMediaSubImage(u32 index);
-
-/// Switches to the previous/next disc in the disc set, if any.
+/// Switches to the previous/next subimage or disc in the disc set, if any.
 bool SwitchToPreviousDisc(bool display_osd_message);
 bool SwitchToNextDisc(bool display_osd_message);
 

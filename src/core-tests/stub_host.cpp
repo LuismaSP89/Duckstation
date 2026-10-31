@@ -228,12 +228,12 @@ void Host::PumpMessagesOnCoreThread()
 {
 }
 
-void Host::RunOnCoreThread(std::function<void()> function, bool block /* = false */)
+void Host::RunOnCoreThread(MoveOnlyFunction<void()> function)
 {
   function();
 }
 
-void Host::RunOnUIThread(std::function<void()> function, bool block /* = false */)
+void Host::RunOnUIThread(MoveOnlyFunction<void()> function)
 {
   function();
 }

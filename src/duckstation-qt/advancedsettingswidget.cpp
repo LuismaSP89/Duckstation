@@ -49,7 +49,12 @@ AdvancedSettingsWidget::AdvancedSettingsWidget(SettingsWindow* dialog, QWidget* 
   connect(m_ui.logToFile, &QCheckBox::checkStateChanged, this, &AdvancedSettingsWidget::onAnyLogSinksChanged);
   onAnyLogSinksChanged(); // initialize enabled/disabled state of checkboxes
 
-  connect(m_ui.logChannels, &QAbstractButton::clicked, this, &AdvancedSettingsWidget::onLogChannelsButtonClicked);
+  QMenu* const log_channels_menu = QtUtils::NewPopupMenu(m_ui.logChannels, false);
+  connect(log_channels_menu, &QMenu::aboutToShow, this, [log_channels_menu]() {
+    log_channels_menu->clear();
+    LogWindow::populateFilterMenu(log_channels_menu);
+  });
+  m_ui.logChannels->setMenu(log_channels_menu);
 
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.showDebugMenu, Settings::INTERFACE_SECTION_NAME,
                                                "ShowDebugMenu", false);
@@ -62,10 +67,11 @@ AdvancedSettingsWidget::AdvancedSettingsWidget(SettingsWindow* dialog, QWidget* 
 
   SettingWidgetBinder::BindWidgetToFolderSetting(
     sif, m_ui.cacheDirectory, m_ui.cacheDirectoryBrowse, tr("Select Cache Directory"), m_ui.cacheDirectoryOpen,
-    m_ui.cacheDirectoryReset, Settings::FOLDERS_SECTION_NAME, "Cache", Path::Combine(EmuFolders::DataRoot, "cache"));
-  SettingWidgetBinder::BindWidgetToFolderSetting(
-    sif, m_ui.coversDirectory, m_ui.coversDirectoryBrowse, tr("Select Covers Directory"), m_ui.coversDirectoryOpen,
-    m_ui.coversDirectoryReset, Settings::FOLDERS_SECTION_NAME, "Covers", Path::Combine(EmuFolders::DataRoot, "covers"));
+    m_ui.cacheDirectoryReset, EmuFolders::CONFIG_SECTION_NAME, "Cache", Path::Combine(EmuFolders::DataRoot, "cache"));
+  SettingWidgetBinder::BindWidgetToFolderSetting(sif, m_ui.coversDirectory, m_ui.coversDirectoryBrowse,
+                                                 tr("Select Covers Directory"), m_ui.coversDirectoryOpen,
+                                                 m_ui.coversDirectoryReset, EmuFolders::CONFIG_SECTION_NAME, "Covers",
+                                                 Path::Combine(EmuFolders::DataRoot, "covers"));
 
   connect(m_ui.refreshWebCache, &QAbstractButton::clicked, this, &AdvancedSettingsWidget::refreshWebCacheSize);
   connect(m_ui.clearWebCache, &QAbstractButton::clicked, this, &AdvancedSettingsWidget::onClearWebCacheClicked);
@@ -120,13 +126,6 @@ AdvancedSettingsWidget::AdvancedSettingsWidget(SettingsWindow* dialog, QWidget* 
 }
 
 AdvancedSettingsWidget::~AdvancedSettingsWidget() = default;
-
-void AdvancedSettingsWidget::onLogChannelsButtonClicked()
-{
-  QMenu* const menu = QtUtils::NewPopupMenu(this);
-  LogWindow::populateFilterMenu(menu);
-  menu->popup(QCursor::pos());
-}
 
 void AdvancedSettingsWidget::onAnyLogSinksChanged()
 {
