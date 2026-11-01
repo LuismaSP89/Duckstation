@@ -25,6 +25,13 @@ void ProcessShutdown();
 /// Runs the system.
 [[noreturn]] void Execute();
 
+/// Sets up the lookup tables for the current RAM size and PIO device, call on system initialization.
+/// The allocation is kept between systems, and only reallocated if the size changes.
+void Initialize();
+
+/// Updates the lookup tables after the RAM size or PIO device changes, and flushes the code cache.
+void ReallocateLUTs();
+
 /// Flushes the code cache, forcing all blocks to be recompiled.
 void Reset();
 
@@ -36,5 +43,8 @@ void InvalidateBlocksWithPageIndex(u32 page_index);
 
 /// Invalidates all blocks in the cache.
 void InvalidateAllRAMBlocks();
+
+/// Allows code in a RAM range without blocks to be compiled again, after it becomes mapped.
+void ResetRAMDispatchRange(PhysicalMemoryAddress start, PhysicalMemoryAddress end);
 
 } // namespace CPU::CodeCache

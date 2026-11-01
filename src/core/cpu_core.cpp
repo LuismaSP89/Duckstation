@@ -532,26 +532,23 @@ ALWAYS_INLINE_RELEASE void CPU::WriteRegDelayed(Reg rd, u32 value)
 
 ALWAYS_INLINE_RELEASE bool CPU::IsCop0ExecutionBreakpointUnmasked()
 {
-  static constexpr const u32 code_address_ranges[][2] = {
-    // KUSEG
-    {Bus::RAM_BASE, Bus::RAM_BASE | Bus::RAM_8MB_MASK},
-    {Bus::BIOS_BASE, Bus::BIOS_BASE | Bus::BIOS_MASK},
-
-    // KSEG0
-    {0x80000000u | Bus::RAM_BASE, 0x80000000u | Bus::RAM_BASE | Bus::RAM_8MB_MASK},
-    {0x80000000u | Bus::BIOS_BASE, 0x80000000u | Bus::BIOS_BASE | Bus::BIOS_MASK},
-
-    // KSEG1
-    {0xA0000000u | Bus::RAM_BASE, 0xA0000000u | Bus::RAM_BASE | Bus::RAM_8MB_MASK},
-    {0xA0000000u | Bus::BIOS_BASE, 0xA0000000u | Bus::BIOS_BASE | Bus::BIOS_MASK},
+  static constexpr auto range_matches_masked_address = [](u32 address, u32 address_mask, u32 range_start,
+                                                          u32 range_size) {
+    const u32 variable_bits = range_size - 1;
+    const u32 fixed_mask = address_mask & ~variable_bits;
+    return ((address ^ range_start) & fixed_mask) == 0;
   };
 
+  // 2MB RAM keeps the original 8MB range, expanded RAM also covers mirrors up to 16MB.
+  const u32 ram_range_size = (g_bus.ram_size > Bus::RAM_DEFAULT_SIZE) ? Bus::RAM_MAX_SIZE : 0x800000u;
   const u32 bpc = g_state.cop0_regs.BPC;
   const u32 bpcm = g_state.cop0_regs.BPCM;
-  const u32 masked_bpc = bpc & bpcm;
-  for (const auto& [range_start, range_end] : code_address_ranges)
+  for (const u32 region : {0x00000000u /* KUSEG*/, 0x80000000u /* KSEG0 */, 0xA0000000u /* KSEG1 */})
   {
-    if (masked_bpc >= (range_start & bpcm) && masked_bpc <= (range_end & bpcm))
+    if (range_matches_masked_address(bpc, bpcm, region | Bus::RAM_BASE, ram_range_size))
+      return true;
+
+    if (range_matches_masked_address(bpc, bpcm, region | Bus::BIOS_BASE, Bus::BIOS_SIZE))
       return true;
   }
 
@@ -979,7 +976,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SLL(inst, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SLL(inst, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -990,7 +990,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SRL(inst, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SRL(inst, rtVal);
+          }
         }
         break;
 
@@ -1001,7 +1004,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SRA(inst, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SRA(inst, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1011,7 +1017,10 @@ restart_instruction:
           const u32 shamt = ReadReg(inst.r.rs) & UINT32_C(0x1F);
           const u32 rdVal = rtVal << shamt;
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SLLV(inst, shamt, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SLLV(inst, shamt, rtVal);
+          }
 
           WriteReg(inst.r.rd, rdVal);
         }
@@ -1025,7 +1034,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SRLV(inst, shamt, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SRLV(inst, shamt, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1037,7 +1049,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SRAV(inst, shamt, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SRAV(inst, shamt, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1049,7 +1064,10 @@ restart_instruction:
           WriteReg(inst.r.rd, new_value);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_AND_(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_AND_(inst, rsVal, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1061,7 +1079,10 @@ restart_instruction:
           WriteReg(inst.r.rd, new_value);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_OR_(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_OR_(inst, rsVal, rtVal);
+          }
           else if constexpr (pgxp_mode >= PGXPMode::Memory)
             PGXP::TryMove(inst.r.rd, inst.r.rs, inst.r.rt);
         }
@@ -1075,7 +1096,10 @@ restart_instruction:
           WriteReg(inst.r.rd, new_value);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_XOR_(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_XOR_(inst, rsVal, rtVal);
+          }
           else if constexpr (pgxp_mode >= PGXPMode::Memory)
             PGXP::TryMove(inst.r.rd, inst.r.rs, inst.r.rt);
         }
@@ -1089,7 +1113,10 @@ restart_instruction:
           WriteReg(inst.r.rd, new_value);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_NOR(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_NOR(inst, rsVal, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1107,7 +1134,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode == PGXPMode::CPU)
-            PGXP::CPU_ADD(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_ADD(inst, rsVal, rtVal);
+          }
           else if constexpr (pgxp_mode >= PGXPMode::Memory)
             PGXP::TryMove(inst.r.rd, inst.r.rs, inst.r.rt);
         }
@@ -1121,7 +1151,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_ADD(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_ADD(inst, rsVal, rtVal);
+          }
           else if constexpr (pgxp_mode >= PGXPMode::Memory)
             PGXP::TryMove(inst.r.rd, inst.r.rs, inst.r.rt);
         }
@@ -1141,7 +1174,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SUB(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SUB(inst, rsVal, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1153,7 +1189,10 @@ restart_instruction:
           WriteReg(inst.r.rd, rdVal);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SUB(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SUB(inst, rsVal, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1165,7 +1204,10 @@ restart_instruction:
           WriteReg(inst.r.rd, result);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SLT(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SLT(inst, rsVal, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1177,7 +1219,10 @@ restart_instruction:
           WriteReg(inst.r.rd, result);
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_SLTU(inst, rsVal, rtVal);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_SLTU(inst, rsVal, rtVal);
+          }
         }
         END_INSTRUCTION()
 
@@ -1189,7 +1234,10 @@ restart_instruction:
           StallUntilMulDivComplete();
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_MOVE(static_cast<u32>(inst.r.rd.GetValue()), static_cast<u32>(Reg::hi), value);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_MOVE(static_cast<u32>(inst.r.rd.GetValue()), static_cast<u32>(Reg::hi), value);
+          }
         }
         END_INSTRUCTION()
 
@@ -1213,7 +1261,10 @@ restart_instruction:
           StallUntilMulDivComplete();
 
           if constexpr (pgxp_mode >= PGXPMode::CPU)
-            PGXP::CPU_MOVE(static_cast<u32>(inst.r.rd.GetValue()), static_cast<u32>(Reg::lo), value);
+          {
+            if (inst.r.rd != Reg::zero) [[likely]]
+              PGXP::CPU_MOVE(static_cast<u32>(inst.r.rd.GetValue()), static_cast<u32>(Reg::lo), value);
+          }
         }
         END_INSTRUCTION()
 
@@ -1378,7 +1429,10 @@ restart_instruction:
       WriteReg(inst.i.rt, value);
 
       if constexpr (pgxp_mode >= PGXPMode::CPU)
-        PGXP::CPU_LUI(inst);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_LUI(inst);
+      }
     }
     END_INSTRUCTION()
 
@@ -1389,7 +1443,10 @@ restart_instruction:
       WriteReg(inst.i.rt, new_value);
 
       if constexpr (pgxp_mode >= PGXPMode::CPU)
-        PGXP::CPU_ANDI(inst, rsVal);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_ANDI(inst, rsVal);
+      }
     }
     END_INSTRUCTION()
 
@@ -1401,9 +1458,12 @@ restart_instruction:
       WriteReg(inst.i.rt, rtVal);
 
       if constexpr (pgxp_mode >= PGXPMode::CPU)
-        PGXP::CPU_ORI(inst, rsVal);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_ORI(inst, rsVal);
+      }
       else if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::TryMoveImm(inst.r.rd, inst.r.rs, imm);
+        PGXP::TryMoveImm(inst.i.rt, inst.i.rs, imm);
     }
     END_INSTRUCTION()
 
@@ -1415,9 +1475,12 @@ restart_instruction:
       WriteReg(inst.i.rt, new_value);
 
       if constexpr (pgxp_mode >= PGXPMode::CPU)
-        PGXP::CPU_XORI(inst, rsVal);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_XORI(inst, rsVal);
+      }
       else if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::TryMoveImm(inst.r.rd, inst.r.rs, imm);
+        PGXP::TryMoveImm(inst.i.rt, inst.i.rs, imm);
     }
     END_INSTRUCTION()
 
@@ -1435,9 +1498,12 @@ restart_instruction:
       WriteReg(inst.i.rt, rtVal);
 
       if constexpr (pgxp_mode >= PGXPMode::CPU)
-        PGXP::CPU_ADDI(inst, rsVal);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_ADDI(inst, rsVal);
+      }
       else if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::TryMoveImm(inst.r.rd, inst.r.rs, imm);
+        PGXP::TryMoveImm(inst.i.rt, inst.i.rs, imm);
     }
     END_INSTRUCTION()
 
@@ -1449,9 +1515,12 @@ restart_instruction:
       WriteReg(inst.i.rt, rtVal);
 
       if constexpr (pgxp_mode >= PGXPMode::CPU)
-        PGXP::CPU_ADDI(inst, rsVal);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_ADDI(inst, rsVal);
+      }
       else if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::TryMoveImm(inst.r.rd, inst.r.rs, imm);
+        PGXP::TryMoveImm(inst.i.rt, inst.i.rs, imm);
     }
     END_INSTRUCTION()
 
@@ -1462,7 +1531,10 @@ restart_instruction:
       WriteReg(inst.i.rt, result);
 
       if constexpr (pgxp_mode >= PGXPMode::CPU)
-        PGXP::CPU_SLTI(inst, rsVal);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_SLTI(inst, rsVal);
+      }
     }
     END_INSTRUCTION()
 
@@ -1473,7 +1545,10 @@ restart_instruction:
       WriteReg(inst.i.rt, result);
 
       if constexpr (pgxp_mode >= PGXPMode::CPU)
-        PGXP::CPU_SLTIU(inst, rsVal);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_SLTIU(inst, rsVal);
+      }
     }
     END_INSTRUCTION()
 
@@ -1495,7 +1570,10 @@ restart_instruction:
       WriteRegDelayed(inst.i.rt, sxvalue);
 
       if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::CPU_LBx(inst, addr, sxvalue);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_LBx(inst, addr, sxvalue);
+      }
     }
     END_INSTRUCTION()
 
@@ -1516,7 +1594,10 @@ restart_instruction:
       WriteRegDelayed(inst.i.rt, sxvalue);
 
       if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::CPU_LH(inst, addr, sxvalue);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_LH(inst, addr, sxvalue);
+      }
     }
     END_INSTRUCTION()
 
@@ -1536,7 +1617,10 @@ restart_instruction:
       WriteRegDelayed(inst.i.rt, value);
 
       if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::CPU_LW(inst, addr, value);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_LW(inst, addr, value);
+      }
     }
     END_INSTRUCTION()
 
@@ -1557,7 +1641,10 @@ restart_instruction:
       WriteRegDelayed(inst.i.rt, zxvalue);
 
       if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::CPU_LBx(inst, addr, zxvalue);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_LBx(inst, addr, zxvalue);
+      }
     }
     END_INSTRUCTION()
 
@@ -1578,7 +1665,10 @@ restart_instruction:
       WriteRegDelayed(inst.i.rt, zxvalue);
 
       if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::CPU_LHU(inst, addr, zxvalue);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_LHU(inst, addr, zxvalue);
+      }
     }
     END_INSTRUCTION()
 
@@ -1600,7 +1690,10 @@ restart_instruction:
       // Bypasses load delay. No need to check the old value since this is the delay slot or it's not relevant.
       const u32 existing_value = (inst.i.rt == g_state.load_delay_reg) ? g_state.load_delay_value : ReadReg(inst.i.rt);
       if constexpr (pgxp_mode >= PGXPMode::Memory)
-        PGXP::CPU_LWx(inst, addr, existing_value);
+      {
+        if (inst.i.rt != Reg::zero) [[likely]]
+          PGXP::CPU_LWx(inst, addr, existing_value);
+      }
 
       const u8 shift = (Truncate8(addr) & u8(3)) * u8(8);
       u32 new_value;
@@ -1797,7 +1890,10 @@ restart_instruction:
               WriteRegDelayed(inst.r.rt, *value);
 
               if constexpr (pgxp_mode == PGXPMode::CPU)
-                PGXP::CPU_MFC0(inst, *value);
+              {
+                if (inst.r.rt != Reg::zero) [[likely]]
+                  PGXP::CPU_MFC0(inst, *value);
+              }
             }
             else
             {
@@ -1891,7 +1987,7 @@ restart_instruction:
             }
 
             if constexpr (pgxp_mode == PGXPMode::CPU)
-              PGXP::CPU_MTC0(inst, value, orig_value);
+              PGXP::CPU_MTC0(inst, orig_value);
           }
           break;
 
@@ -1954,7 +2050,10 @@ restart_instruction:
             WriteRegDelayed(inst.r.rt, value);
 
             if constexpr (pgxp_mode >= PGXPMode::Memory)
-              PGXP::CPU_MFC2(inst, value);
+            {
+              if (inst.r.rt != Reg::zero) [[likely]]
+                PGXP::CPU_MFC2(inst, value);
+            }
           }
           break;
 
@@ -1976,7 +2075,10 @@ restart_instruction:
             WriteRegDelayed(inst.r.rt, value);
 
             if constexpr (pgxp_mode >= PGXPMode::Memory)
-              PGXP::CPU_MFC2(inst, value);
+            {
+              if (inst.r.rt != Reg::zero) [[likely]]
+                PGXP::CPU_MFC2(inst, value);
+            }
           }
           break;
 
@@ -2944,9 +3046,10 @@ ALWAYS_INLINE_RELEASE bool CPU::DoInstructionRead(PhysicalMemoryAddress address,
   // We can shortcut around VirtualAddressToPhysical() here because we're never going to be
   // calling with an out-of-range address.
   DebugAssert(VirtualAddressToPhysical(address) == (address & KSEG_MASK));
+  const VirtualMemoryAddress fetch_address = address;
   address &= KSEG_MASK;
 
-  if (address < RAM_MIRROR_END)
+  if (address < g_bus.ram_mapped_size)
   {
     std::memcpy(data, &g_bus.ram[address & g_bus.ram_mask], sizeof(u32) * word_count);
     if constexpr (add_ticks)
@@ -2972,11 +3075,9 @@ ALWAYS_INLINE_RELEASE bool CPU::DoInstructionRead(PhysicalMemoryAddress address,
   }
   else [[unlikely]]
   {
+    // EPC is the virtual address that was fetched, bus errors don't change BadVaddr.
     if (raise_exceptions)
-    {
-      g_state.cop0_regs.BadVaddr = address;
-      RaiseException(Cop0Registers::CAUSE::MakeValueForException(Exception::IBE, false, false, 0), address);
-    }
+      RaiseException(Cop0Registers::CAUSE::MakeValueForException(Exception::IBE, false, false, 0), fetch_address);
 
     std::memset(data, 0, sizeof(u32) * word_count);
     return false;
@@ -2990,7 +3091,7 @@ TickCount CPU::GetInstructionReadTicks(VirtualMemoryAddress address)
   DebugAssert(VirtualAddressToPhysical(address) == (address & KSEG_MASK));
   address &= KSEG_MASK;
 
-  if (address < RAM_MIRROR_END)
+  if (address < g_bus.ram_mapped_size)
   {
     return RAM_READ_TICKS;
   }
@@ -3011,7 +3112,7 @@ TickCount CPU::GetICacheFillTicks(VirtualMemoryAddress address)
   DebugAssert(VirtualAddressToPhysical(address) == (address & KSEG_MASK));
   address &= KSEG_MASK;
 
-  if (address < RAM_MIRROR_END)
+  if (address < g_bus.ram_mapped_size)
   {
     return 1 * ((ICACHE_LINE_SIZE - (address & (ICACHE_LINE_SIZE - 1))) / sizeof(u32));
   }
@@ -3045,37 +3146,46 @@ void CPU::CheckAndUpdateICacheTags(u32 line_count)
   g_state.pending_ticks += ticks;
 }
 
-u32 CPU::FillICache(VirtualMemoryAddress address)
+bool CPU::FillICache(VirtualMemoryAddress address, u32* instruction)
 {
   const u32 line = GetICacheLine(address);
   const u32 line_word_offset = GetICacheLineWordOffset(address);
   u32* const line_data = g_state.icache_data.data() + (line * ICACHE_WORDS_PER_LINE);
   u32* const offset_line_data = line_data + line_word_offset;
   u32 line_tag;
+  bool result;
   switch (line_word_offset)
   {
     case 0:
-      DoInstructionRead<true, true, 4, false>(address & ~(ICACHE_LINE_SIZE - 1u), offset_line_data);
+      result = DoInstructionRead<true, true, 4, true>(address & ~(ICACHE_LINE_SIZE - 1u), offset_line_data);
       line_tag = GetICacheTagForAddress(address);
       break;
     case 1:
-      DoInstructionRead<true, true, 3, false>(address & (~(ICACHE_LINE_SIZE - 1u) | 0x4), offset_line_data);
+      result = DoInstructionRead<true, true, 3, true>(address & (~(ICACHE_LINE_SIZE - 1u) | 0x4), offset_line_data);
       line_tag = GetICacheTagForAddress(address) | 0x1;
       break;
     case 2:
-      DoInstructionRead<true, true, 2, false>(address & (~(ICACHE_LINE_SIZE - 1u) | 0x8), offset_line_data);
+      result = DoInstructionRead<true, true, 2, true>(address & (~(ICACHE_LINE_SIZE - 1u) | 0x8), offset_line_data);
       line_tag = GetICacheTagForAddress(address) | 0x3;
       break;
     case 3:
-      DoInstructionRead<true, true, 1, false>(address & (~(ICACHE_LINE_SIZE - 1u) | 0xC), offset_line_data);
+      result = DoInstructionRead<true, true, 1, true>(address & (~(ICACHE_LINE_SIZE - 1u) | 0xC), offset_line_data);
       line_tag = GetICacheTagForAddress(address) | 0x7;
       break;
 
       DefaultCaseIsUnreachable();
   }
 
+  // Unmapped fetches raise a bus error. The line data was overwritten, so it can't stay valid for the old tag either.
+  if (!result) [[unlikely]]
+  {
+    g_state.icache_tags[line] = ICACHE_INVALID_BITS;
+    return false;
+  }
+
   g_state.icache_tags[line] = line_tag;
-  return offset_line_data[0];
+  *instruction = offset_line_data[0];
+  return true;
 }
 
 void CPU::ClearICache()
@@ -3117,11 +3227,12 @@ void CPU::InvalidateICacheForRAM(PhysicalMemoryAddress address, u32 size)
   const u32 end = start + size;
   const u32 first_line = start / ICACHE_LINE_SIZE;
   const u32 line_count = std::min((end - 1) / ICACHE_LINE_SIZE - first_line + 1, static_cast<u32>(ICACHE_LINES));
+  const u32 ram_mapped_size = g_bus.ram_mapped_size;
   for (u32 i = 0; i < line_count; i++)
   {
     u32& tag = g_state.icache_tags[(first_line + i) % ICACHE_LINES];
     const u32 tag_address = tag & ICACHE_TAG_ADDRESS_MASK & KSEG_MASK;
-    if (tag_address >= Bus::RAM_MIRROR_END)
+    if (tag_address >= ram_mapped_size)
       continue;
 
     const u32 line_start = tag_address & g_bus.ram_mask;
@@ -3158,8 +3269,8 @@ ALWAYS_INLINE_RELEASE bool CPU::FetchInstruction()
 #else
       if (CompareICacheTag(address))
         g_state.next_instruction.bits = ReadICache(address);
-      else
-        g_state.next_instruction.bits = FillICache(address);
+      else if (!FillICache(address, &g_state.next_instruction.bits)) [[unlikely]]
+        return false;
 #endif
     }
     break;
@@ -3346,7 +3457,7 @@ ALWAYS_INLINE bool CPU::DoSafeMemoryAccess(VirtualMemoryAddress address, u32& va
     break;
   }
 
-  if (address < RAM_MIRROR_END)
+  if (address < g_bus.ram_mapped_size)
   {
     const u32 offset = address & g_bus.ram_mask;
     if constexpr (type == MemoryAccessType::Read)
@@ -3521,7 +3632,7 @@ bool CPU::SafeReadMemoryBytes(VirtualMemoryAddress addr, void* data, u32 length)
   using namespace Bus;
 
   const u32 seg = (addr >> 29);
-  if ((seg != 0 && seg != 4 && seg != 5) || (((addr + length) & KSEG_MASK) >= RAM_MIRROR_END) ||
+  if ((seg != 0 && seg != 4 && seg != 5) || (((addr + length) & KSEG_MASK) >= g_bus.ram_mapped_size) ||
       (((addr & g_bus.ram_mask) + length) > g_bus.ram_size))
   {
     u8* ptr = static_cast<u8*>(data);
@@ -3545,7 +3656,7 @@ bool CPU::SafeWriteMemoryBytes(VirtualMemoryAddress addr, const void* data, u32 
   using namespace Bus;
 
   const u32 seg = (addr >> 29);
-  if ((seg != 0 && seg != 4 && seg != 5) || (((addr + length) & KSEG_MASK) >= RAM_MIRROR_END) ||
+  if ((seg != 0 && seg != 4 && seg != 5) || (((addr & KSEG_MASK) + length) >= g_bus.ram_mapped_size) ||
       (((addr & g_bus.ram_mask) + length) > g_bus.ram_size))
   {
     const u8* ptr = static_cast<const u8*>(data);
@@ -3574,7 +3685,7 @@ bool CPU::SafeZeroMemoryBytes(VirtualMemoryAddress addr, u32 length)
   using namespace Bus;
 
   const u32 seg = (addr >> 29);
-  if ((seg != 0 && seg != 4 && seg != 5) || (((addr + length) & KSEG_MASK) >= RAM_MIRROR_END) ||
+  if ((seg != 0 && seg != 4 && seg != 5) || (((addr & KSEG_MASK) + length) >= g_bus.ram_mapped_size) ||
       (((addr & g_bus.ram_mask) + length) > g_bus.ram_size))
   {
     while ((addr & 3u) != 0 && length > 0)
@@ -3619,7 +3730,7 @@ void* CPU::GetDirectReadMemoryPointer(VirtualMemoryAddress address, MemoryAccess
     return nullptr;
 
   const PhysicalMemoryAddress paddr = VirtualAddressToPhysical(address);
-  if (paddr < RAM_MIRROR_END)
+  if (paddr < g_bus.ram_mapped_size)
   {
     if (read_ticks)
       *read_ticks = RAM_READ_TICKS;
@@ -3656,7 +3767,7 @@ void* CPU::GetDirectWriteMemoryPointer(VirtualMemoryAddress address, MemoryAcces
 
   const PhysicalMemoryAddress paddr = address & KSEG_MASK;
 
-  if (paddr < RAM_MIRROR_END)
+  if (paddr < g_bus.ram_mapped_size)
     return &g_bus.ram[paddr & g_bus.ram_mask];
 
   if ((paddr & SCRATCHPAD_ADDR_MASK) == SCRATCHPAD_ADDR)

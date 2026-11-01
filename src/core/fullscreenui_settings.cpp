@@ -167,6 +167,11 @@ static void DrawIntListSetting(SettingsInterface* bsi, std::string_view title, s
 static void DrawIntRangeSetting(SettingsInterface* bsi, std::string_view title, std::string_view summary,
                                 const char* section, const char* key, int default_value, int min_value, int max_value,
                                 const char* format = "%d", bool enabled = true);
+static void DrawIntRangeSetting(SettingsInterface* bsi, std::string_view title, std::string_view summary,
+                                const char* section, const char* key, int default_value, int min_value, int max_value,
+                                SmallString (*format_function)(const void* param, int value),
+                                const void* format_function_param = nullptr, bool enabled = true,
+                                void (*changed_callback)() = nullptr);
 static void DrawIntSpinBoxSetting(SettingsInterface* bsi, std::string_view title, std::string_view summary,
                                   const char* section, const char* key, int default_value, int min_value, int max_value,
                                   int step_value, const char* format = "%d", bool enabled = true);
@@ -821,11 +826,22 @@ void FullscreenUI::DrawIntRangeSetting(SettingsInterface* bsi, std::string_view 
                                        const char* section, const char* key, int default_value, int min_value,
                                        int max_value, const char* format /* = "%d" */, bool enabled /* = true */)
 {
+  DrawIntRangeSetting(
+    bsi, title, summary, section, key, default_value, min_value, max_value,
+    [](const void* param, int value) { return SmallString::from_sprintf(static_cast<const char*>(param), value); },
+    format, enabled, nullptr);
+}
+
+void FullscreenUI::DrawIntRangeSetting(SettingsInterface* bsi, std::string_view title, std::string_view summary,
+                                       const char* section, const char* key, int default_value, int min_value,
+                                       int max_value, SmallString (*format_function)(const void* param, int value),
+                                       const void* format_function_param, bool enabled, void (*changed_callback)())
+{
   const bool game_settings = IsEditingGameSettings(bsi);
   const std::optional<int> value =
     bsi->GetOptionalIntValue(section, key, game_settings ? std::nullopt : std::optional<int>(default_value));
-  SmallString sstr =
-    value.has_value() ? SmallString::from_sprintf(format, value.value()) : SmallString(FSUI_VSTR("Use Global Setting"));
+  SmallString sstr = value.has_value() ? format_function(format_function_param, value.value()) :
+                                         SmallString(FSUI_VSTR("Use Global Setting"));
 
   const bool pressed = MenuActionButton(title, summary, sstr, false, enabled);
 
@@ -847,16 +863,16 @@ void FullscreenUI::DrawIntRangeSetting(SettingsInterface* bsi, std::string_view 
   ImGui::Text("%s: ", FSUI_CSTR("Value Range"));
   ImGui::PopFont();
   ImGui::SameLine();
-  ImGui::Text(format, min_value);
+  ImGui::TextUnformatted(format_function(format_function_param, min_value).c_str());
   ImGui::SameLine();
   ImGui::TextUnformatted(" - ");
   ImGui::SameLine();
-  ImGui::Text(format, max_value);
+  ImGui::TextUnformatted(format_function(format_function_param, max_value).c_str());
   ImGui::PushFont(UIStyle.Font, UIStyle.MediumLargeFontSize, UIStyle.BoldFontWeight);
   ImGui::Text("%s: ", FSUI_CSTR("Default Value"));
   ImGui::PopFont();
   ImGui::SameLine();
-  ImGui::Text(format, default_value);
+  ImGui::TextUnformatted(format_function(format_function_param, default_value).c_str());
   ImGui::PopFont();
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + LayoutScale(10.0f));
 
@@ -870,7 +886,10 @@ void FullscreenUI::DrawIntRangeSetting(SettingsInterface* bsi, std::string_view 
 
   ImGui::SetNextItemWidth(ImGui::GetCurrentWindow()->WorkRect.GetWidth());
   s32 dlg_value = static_cast<s32>(value.value_or(default_value));
-  if (ImGui::SliderInt("##value", &dlg_value, min_value, max_value, format, ImGuiSliderFlags_NoInput))
+
+  if (ImGui::SliderInt("##value", &dlg_value, min_value, max_value,
+                       format_function(format_function_param, dlg_value).c_str(),
+                       ImGuiSliderFlags_NoInput | ImGuiSliderFlags_NoFormat))
   {
     if (IsEditingGameSettings(bsi) && dlg_value == default_value)
       bsi->DeleteValue(section, key);
@@ -878,6 +897,9 @@ void FullscreenUI::DrawIntRangeSetting(SettingsInterface* bsi, std::string_view 
       bsi->SetIntValue(section, key, dlg_value);
 
     SetSettingsChanged(bsi);
+
+    if (changed_callback)
+      changed_callback();
   }
 
   ImGui::PopStyleVar(4);
@@ -3377,10 +3399,17 @@ void FullscreenUI::DrawConsoleSettingsPage()
                     FSUI_VSTR("Fast forwards through memory card access, both loading and saving. Can reduce waiting "
                               "times in games that frequently access memory cards."),
                     Settings::MEMORY_CARDS_SECTION_NAME, "FastForwardAccess", false);
+  DrawEnumSetting(bsi, FSUI_ICONVSTR(ICON_FA_MEMORY, "Installed RAM"),
+                  FSUI_VSTR("Changes the amount of RAM installed in the emulated console."), Settings::CPU_SECTION_NAME,
+                  "RAMSize", Settings::DEFAULT_CPU_RAM_SIZE, &Settings::ParseCPURAMSize, &Settings::GetCPURAMSizeName,
+                  &Settings::GetCPURAMSizeDisplayName, CPURAMSize::Count);
   DrawToggleSetting(
-    bsi, FSUI_ICONVSTR(ICON_FA_MEMORY, "Enable 8MB RAM"),
-    FSUI_VSTR("Enables an additional 6MB of RAM to obtain a total of 2+6 = 8MB, usually present on dev consoles."),
-    Settings::CONSOLE_SECTION_NAME, "Enable8MBRAM", false);
+    bsi, FSUI_ICONVSTR(ICON_FA_MAXIMIZE, "Force Full RAM Mapping"),
+    FSUI_VSTR("Maps all installed RAM, regardless of the size configured by the BIOS or game. Needed for 16MB with "
+              "retail BIOSes."),
+    Settings::CPU_SECTION_NAME, "ForceFullRAMMapping", false,
+    Settings::ParseCPURAMSize(GetEffectiveTinyStringSetting(bsi, Settings::CPU_SECTION_NAME, "RAMSize"))
+        .value_or(Settings::DEFAULT_CPU_RAM_SIZE) != Settings::DEFAULT_CPU_RAM_SIZE);
 
   MenuHeading(FSUI_VSTR("CPU Emulation"));
 
@@ -3712,7 +3741,9 @@ void FullscreenUI::DrawEmulationSettingsPage()
     const u32 multisamples = GetEffectiveUIntSetting(bsi, Settings::GPU_SECTION_NAME, "Multisamples", 1);
     const bool use_software_renderer =
       GetEffectiveBoolSetting(bsi, Settings::GPU_SECTION_NAME, "UseSoftwareRendererForMemoryStates", false);
-    const bool enable_8mb_ram = GetEffectiveBoolSetting(bsi, Settings::CONSOLE_SECTION_NAME, "Enable8MBRAM", false);
+    const CPURAMSize ram_size =
+      Settings::ParseCPURAMSize(GetEffectiveTinyStringSetting(bsi, Settings::CPU_SECTION_NAME, "RAMSize"))
+        .value_or(Settings::DEFAULT_CPU_RAM_SIZE);
     const bool enable_texture_cache =
       GetEffectiveBoolSetting(bsi, Settings::GPU_SECTION_NAME, "EnableTextureCache", false);
     const float rewind_frequency =
@@ -3724,7 +3755,7 @@ void FullscreenUI::DrawEmulationSettingsPage()
 
     u64 ram_usage, vram_usage;
     System::CalculateRewindMemoryUsage(rewind_save_slots, resolution_scale, multisamples, use_software_renderer,
-                                       enable_8mb_ram, enable_texture_cache, &ram_usage, &vram_usage);
+                                       ram_size, enable_texture_cache, &ram_usage, &vram_usage);
     if (vram_usage > 0)
     {
       rewind_summary.format(
@@ -5126,6 +5157,19 @@ void FullscreenUI::DrawPostProcessingSettingsPage()
   reload_pending |= DrawToggleSetting(bsi, FSUI_ICONVSTR(ICON_FA_WAND_MAGIC_SPARKLES, "Enable Post Processing"),
                                       FSUI_VSTR("If not enabled, the current post processing chain will be ignored."),
                                       PostProcessing::Config::DISPLAY_CHAIN_SECTION_NAME, "Enabled", false);
+
+  // The chain reads the subframe count, so it has to be reloaded when it changes.
+  DrawIntRangeSetting(
+    bsi, FSUI_ICONVSTR(ICON_FA_LAYER_GROUP, "Subframes"),
+    FSUI_VSTR("Presents extra frames for effects such as black frame insertion."), section, "SubframeCount",
+    PostProcessing::Config::DEFAULT_SUBFRAME_COUNT, -1, PostProcessing::Config::MAX_SUBFRAME_COUNT,
+    [](const void*, int value) {
+      SmallString ret;
+      return (value < 0) ? SmallString(FSUI_VSTR("Automatic")) :
+                           ((value == 0) ? SmallString(FSUI_VSTR("Disabled")) :
+                                           TRANSLATE_PLURAL_SSTR("FullscreenUI", "%n Frames", "Subframe count", value));
+    },
+    nullptr, true, queue_reload);
 
   if (MenuButton(FSUI_ICONVSTR(ICON_FA_ARROWS_ROTATE, "Reload Shaders"),
                  FSUI_VSTR("Reloads the shaders from disk, applying any changes."),

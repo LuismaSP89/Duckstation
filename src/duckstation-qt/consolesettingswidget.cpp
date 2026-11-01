@@ -16,7 +16,7 @@
 
 #include "moc_consolesettingswidget.cpp"
 
-static constexpr const int CDROM_SPEEDUP_VALUES[] = {1, 2, 3, 4, 5, 6, 0};
+static constexpr const u8 CDROM_SPEEDUP_VALUES[] = {1, 2, 3, 4, 5, 6, 0};
 
 ConsoleSettingsWidget::ConsoleSettingsWidget(SettingsWindow* dialog, QWidget* parent)
   : QWidget(parent), m_dialog(dialog)
@@ -42,12 +42,26 @@ ConsoleSettingsWidget::ConsoleSettingsWidget(SettingsWindow* dialog, QWidget* pa
                                                Settings::DEFAULT_FAST_BOOT_VALUE);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.fastForwardBoot, Settings::BIOS_SECTION_NAME,
                                                "FastForwardBoot", false);
-  SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.enable8MBRAM, Settings::CONSOLE_SECTION_NAME, "Enable8MBRAM",
-                                               false);
+  SettingWidgetBinder::BindWidgetToEnumSetting(
+    sif, m_ui.ramSize, Settings::CPU_SECTION_NAME, "RAMSize", &Settings::ParseCPURAMSize, &Settings::GetCPURAMSizeName,
+    &Settings::GetCPURAMSizeDisplayName, Settings::DEFAULT_CPU_RAM_SIZE, CPURAMSize::Count, +[](CPURAMSize size) {
+      static constexpr const char* icons[] = {
+        ":/icons/monochrome/svg/emulation-line.svg", // 2MB - Retail
+        ":/icons/monochrome/svg/arcade-line.svg",    // 4MB - Arcade
+        ":/icons/monochrome/svg/code-box-line.svg",  // 8MB - Dev Console
+        ":/icons/monochrome/svg/tools-line.svg",     // 16MB - Mods
+      };
+      static_assert(std::size(icons) == static_cast<size_t>(CPURAMSize::Count));
+      return QIcon(QString::fromLatin1(icons[static_cast<size_t>(size)]));
+    });
+  SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.forceFullRAMMapping, Settings::CPU_SECTION_NAME,
+                                               "ForceFullRAMMapping", false);
   SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.fastForwardMemoryCardAccess,
                                                Settings::MEMORY_CARDS_SECTION_NAME, "FastForwardAccess", false);
   connect(m_ui.fastBoot, &QCheckBox::checkStateChanged, this, &ConsoleSettingsWidget::onFastBootChanged);
   onFastBootChanged();
+  connect(m_ui.ramSize, &QComboBox::currentIndexChanged, this, &ConsoleSettingsWidget::onRAMSizeChanged);
+  onRAMSizeChanged();
 
   SettingWidgetBinder::BindWidgetToEnumSetting(sif, m_ui.cpuExecutionMode, Settings::CPU_SECTION_NAME, "ExecutionMode",
                                                &Settings::ParseCPUExecutionMode, &Settings::GetCPUExecutionModeName,
@@ -80,14 +94,16 @@ ConsoleSettingsWidget::ConsoleSettingsWidget(SettingsWindow* dialog, QWidget* pa
   }
 
   SettingWidgetBinder::BindWidgetToIntSetting(sif, m_ui.cdromSeekSpeedup, Settings::CDROM_SECTION_NAME, "SeekSpeedup",
-                                              1, CDROM_SPEEDUP_VALUES);
+                                              1, std::span<const u8>(CDROM_SPEEDUP_VALUES));
   SettingWidgetBinder::BindWidgetToIntSetting(sif, m_ui.cdromReadSpeedup, Settings::CDROM_SECTION_NAME, "ReadSpeedup",
-                                              1, CDROM_SPEEDUP_VALUES);
+                                              1, std::span<const u8>(CDROM_SPEEDUP_VALUES));
 
-  dialog->registerWidgetHelp(m_ui.region, tr("Region"), tr("Auto-Detect"),
+  dialog->registerWidgetHelp(m_ui.region, tr("Region"),
+                             QString::fromUtf8(Settings::GetConsoleRegionDisplayName(Settings::DEFAULT_CONSOLE_REGION)),
                              tr("Determines the emulated hardware type."));
   dialog->registerWidgetHelp(
-    m_ui.forceVideoTiming, tr("Frame Rate"), tr("Auto-Detect"),
+    m_ui.forceVideoTiming, tr("Frame Rate"),
+    QString::fromUtf8(Settings::GetForceVideoTimingDisplayName(Settings::DEFAULT_FORCE_VIDEO_TIMING_MODE)),
     tr("Utilizes the chosen frame timing regardless of the active region. This feature can be used to force PAL games "
        "to run at 60Hz and NTSC games to run at 50Hz. For most games which have a speed tied to the framerate, this "
        "will result in the game running approximately 17% faster or slower. For variable frame rate games, it may not "
@@ -100,15 +116,20 @@ ConsoleSettingsWidget::ConsoleSettingsWidget(SettingsWindow* dialog, QWidget* pa
   m_dialog->registerWidgetHelp(m_ui.fastForwardMemoryCardAccess, tr("Fast Forward Memory Card Access"), tr("Unchecked"),
                                tr("Fast forwards through memory card access, both loading and saving. Can reduce "
                                   "waiting times in games that frequently access memory cards."));
-  dialog->registerWidgetHelp(
-    m_ui.enable8MBRAM, tr("Enable 8MB RAM (Dev Console)"), tr("Unchecked"),
-    tr("Enables an additional 6MB of RAM to obtain a total of 2+6 = 8MB, usually present on dev consoles. Games have "
-       "to use a larger heap size for "
-       "this additional RAM to be usable. Titles which rely on memory mirrors may break, so it should only be used "
-       "with compatible mods."));
+  dialog->registerWidgetHelp(m_ui.ramSize, tr("Installed RAM"),
+                             QString::fromUtf8(Settings::GetCPURAMSizeDisplayName(Settings::DEFAULT_CPU_RAM_SIZE)),
+                             tr("Changes the amount of RAM installed in the emulated console. Games have to use a "
+                                "larger heap size for expanded RAM to be usable. Titles which rely on memory mirrors "
+                                "may break, so it should only be used with compatible mods."));
+  dialog->registerWidgetHelp(m_ui.forceFullRAMMapping, tr("Force Full RAM Mapping"), tr("Unchecked"),
+                             tr("Maps all installed RAM, regardless of the size configured by the BIOS or game. Retail "
+                                "BIOSes only map 8MB, so this is needed for 16MB to be usable without a patched BIOS. "
+                                "Only has an effect when expanded RAM is installed."));
 
-  dialog->registerWidgetHelp(m_ui.cpuExecutionMode, tr("Execution Mode"), tr("Recompiler (Fastest)"),
-                             tr("Determines how the emulated CPU executes instructions."));
+  dialog->registerWidgetHelp(
+    m_ui.cpuExecutionMode, tr("Execution Mode"),
+    QString::fromUtf8(Settings::GetCPUExecutionModeDisplayName(Settings::DEFAULT_CPU_EXECUTION_MODE)),
+    tr("Determines how the emulated CPU executes instructions."));
   dialog->registerWidgetHelp(m_ui.enableCPUClockSpeedControl,
                              tr("Enable Clock Speed Control (Overclocking/Underclocking)"), tr("Unchecked"),
                              tr("When this option is chosen, the clock speed set below will be used."));
@@ -175,6 +196,15 @@ void ConsoleSettingsWidget::onFastBootChanged()
   const bool fast_boot_enabled =
     m_dialog->getEffectiveBoolValue(Settings::BIOS_SECTION_NAME, "PatchFastBoot", Settings::DEFAULT_FAST_BOOT_VALUE);
   m_ui.fastForwardBoot->setEnabled(fast_boot_enabled);
+}
+
+void ConsoleSettingsWidget::onRAMSizeChanged()
+{
+  const CPURAMSize ram_size = Settings::ParseCPURAMSize(m_dialog->getEffectiveStringValue(
+                                                          Settings::CPU_SECTION_NAME, "RAMSize",
+                                                          Settings::GetCPURAMSizeName(Settings::DEFAULT_CPU_RAM_SIZE)))
+                                .value_or(Settings::DEFAULT_CPU_RAM_SIZE);
+  m_ui.forceFullRAMMapping->setEnabled(ram_size != Settings::DEFAULT_CPU_RAM_SIZE);
 }
 
 void ConsoleSettingsWidget::updateRecompilerICacheEnabled()

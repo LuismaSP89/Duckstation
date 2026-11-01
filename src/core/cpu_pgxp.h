@@ -6,6 +6,21 @@
 
 namespace CPU::PGXP {
 
+/// PGXPValue::flags
+enum : u32
+{
+  VALID_X = (1u << 0),
+  VALID_Y = (1u << 1),
+  VALID_Z = (1u << 2),
+  VALID_LOWZ = (1u << 16),      // Valid Z from the low part of a 32-bit value.
+  VALID_HIGHZ = (1u << 17),     // Valid Z from the high part of a 32-bit value.
+  VALID_TAINTED_Z = (1u << 31), // X/Y has been changed, Z may not be accurate.
+
+  VALID_XY = (VALID_X | VALID_Y),
+  VALID_XYZ = (VALID_X | VALID_Y | VALID_Z),
+  VALID_ALL = (VALID_X | VALID_Y | VALID_Z),
+};
+
 /// State management.
 void Initialize();
 void Reset();
@@ -15,7 +30,7 @@ void Shutdown();
 bool ShouldSavePGXPState();
 
 /// Returns memory usage to serialize additional PGXP state.
-size_t GetStateSize(bool enable_8mb_memory);
+size_t GetStateSize(CPURAMSize ram_size);
 
 /// Save/load additional PGXP state.
 void DoState(StateWrapper& sw);
@@ -74,7 +89,7 @@ void CPU_SLLV(Instruction instr, u32 rsVal, u32 rtVal);
 void CPU_SRLV(Instruction instr, u32 rsVal, u32 rtVal);
 void CPU_SRAV(Instruction instr, u32 rsVal, u32 rtVal);
 void CPU_MFC0(Instruction instr, u32 rdVal);
-void CPU_MTC0(Instruction instr, u32 rdVal, u32 rtVal);
+void CPU_MTC0(Instruction instr, u32 rtVal);
 
 // Utility functions.
 
@@ -86,7 +101,9 @@ ALWAYS_INLINE u32 PackMoveArgs(Reg rd, Reg rs)
 ALWAYS_INLINE void TryMove(Reg rd, Reg rs, Reg rt)
 {
   u32 src;
-  if (rs == Reg::zero)
+  if (rd == Reg::zero)
+    return;
+  else if (rs == Reg::zero)
     src = static_cast<u32>(rt);
   else if (rt == Reg::zero)
     src = static_cast<u32>(rs);
@@ -98,7 +115,7 @@ ALWAYS_INLINE void TryMove(Reg rd, Reg rs, Reg rt)
 
 ALWAYS_INLINE void TryMoveImm(Reg rd, Reg rs, u32 imm)
 {
-  if (imm == 0)
+  if (imm == 0 && rd != Reg::zero)
   {
     const u32 src = static_cast<u32>(rs);
     CPU_MOVE(static_cast<u32>(rd), src, g_state.regs.r[src]);
