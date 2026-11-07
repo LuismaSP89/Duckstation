@@ -23,9 +23,22 @@
 #include "util/window_info.h"
 
 #include "common/log.h"
+#include "common/threading.h"
 #include "common/time_helpers.h"
 
 LOG_CHANNEL(Host);
+
+const Threading::ThreadHandle& Host::GetCoreThreadHandle()
+{
+  static const Threading::ThreadHandle handle;
+  return handle;
+}
+
+bool Host::IsOnCoreThread()
+{
+  // Tests drive the core components directly from the test thread.
+  return true;
+}
 
 void Host::OnSettingsReloaded()
 {
@@ -162,7 +175,7 @@ void Host::OnSystemStarting()
 }
 
 void Host::OnSystemStarted(const std::string& disc_path, const std::string& game_serial, const std::string& game_name,
-                           GameHash game_hash)
+                           GameHash game_hash, const std::string& exe_override)
 {
 }
 
@@ -200,7 +213,7 @@ void Host::OnPerformanceCountersUpdated(const GPUBackend* gpu_backend)
 }
 
 void Host::OnSystemGameChanged(const std::string& disc_path, const std::string& game_serial,
-                               const std::string& game_name, GameHash hash)
+                               const std::string& game_name, GameHash hash, const std::string& exe_override)
 {
 }
 
@@ -234,6 +247,11 @@ void Host::RunOnCoreThread(MoveOnlyFunction<void()> function)
 }
 
 void Host::RunOnUIThread(MoveOnlyFunction<void()> function)
+{
+  function();
+}
+
+void Host::QueueAsyncTask(MoveOnlyFunction<void()> function)
 {
   function();
 }

@@ -299,6 +299,9 @@ if(APPLE)
   function(add_metal_sources target sources library_name metal_std)
     set(air_files)
     set(compile_flags -std=${metal_std} -ffast-math)
+    if(CMAKE_OSX_DEPLOYMENT_TARGET)
+      list(APPEND compile_flags -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET})
+    endif()
 
     foreach(source IN LISTS sources)
       get_filename_component(source_name ${source} NAME)
@@ -329,10 +332,10 @@ if(APPLE)
       set_source_files_properties(${metallib_path} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     else()
       set(RESOURCES_DIRECTORY "$<TARGET_FILE_DIR:${target}>/resources")
-      add_custom_command(TARGET duckstation-qt POST_BUILD
+      add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${RESOURCES_DIRECTORY}"
       )
-      add_custom_command(TARGET duckstation-qt POST_BUILD
+      add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${metallib_path}" "${RESOURCES_DIRECTORY}/${metallib_filename}"
       )
     endif()

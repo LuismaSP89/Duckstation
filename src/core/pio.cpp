@@ -49,6 +49,7 @@ private:
   static constexpr u32 SECTOR_SIZE = 256;
   static constexpr u32 SECTOR_COUNT = TOTAL_SIZE / SECTOR_SIZE;
   static constexpr TickCount PROGRAM_TIMER_CYCLES = 5080; // ~150us
+  static constexpr std::array<u8, 2> FLASH_ID = {0x1F, 0xA4}; // Atmel AT29C040A
 
   enum : u8
   {
@@ -61,6 +62,7 @@ private:
     // 5 byte commands
     FLASH_CMD_WRITE_SECTOR_WITHOUT_SDP = 0x20,
     FLASH_CMD_ALT_ENTER_ID_MODE = 0x60,
+    FLASH_CMD_CHIP_ERASE = 0x10,
   };
 
   u8* SectorPtr(u32 sector);
@@ -92,19 +94,19 @@ u8 PIO::Flash::Read(u32 offset)
 {
   if (m_flash_id_mode) [[unlikely]]
   {
-    // Atmel AT29C040A
-    static constexpr std::array<u8, 2> flash_id = {0x1F, 0xA4};
-    return flash_id[offset & 1];
+    return FLASH_ID[offset & 1];
   }
 
   // WARNING_LOG("FLASH READ 0x{:X} 0x{:X} @ {}", offset, g_exp1_rom[offset], System::GetGlobalTickCounter());
 
   if (m_write_enable && !CheckForProgramTimeout()) [[unlikely]]
   {
-    m_write_toggle_result ^= 0x40;
-    WARNING_LOG("read while programming 0x{:02X}", m_write_toggle_result);
+    // Reading ends the byte load. Return status: toggled bit 6, and inverted bit 7 of the data (DATA polling).
+    const u8 toggle = m_write_toggle_result ^ 0x40;
     EndProgramming();
-    return m_write_toggle_result | 0x80;
+    const u8 status = toggle | (~((offset >= TOTAL_SIZE) ? 0xFFu : m_data[offset]) & 0x80);
+    WARNING_LOG("read while programming 0x{:02X}", status);
+    return status;
   }
 
   return (offset >= TOTAL_SIZE) ? 0xFFu : m_data[offset];
@@ -112,8 +114,20 @@ u8 PIO::Flash::Read(u32 offset)
 
 void PIO::Flash::CodeRead(u32 offset, u32* words, u32 word_count)
 {
-  DebugAssert((offset + (word_count * sizeof(u32))) < TOTAL_SIZE);
+  DebugAssert((offset + (word_count * sizeof(u32))) <= TOTAL_SIZE);
   std::memcpy(words, m_data.data() + offset, word_count * sizeof(u32));
+
+  // Chip outputs ID/status instead of array data. Must not end programming like Read(), the debugger uses this too.
+  const bool programming = (m_write_enable && System::GetGlobalTickCounter() < m_program_write_timeout);
+  if (m_flash_id_mode || programming) [[unlikely]]
+  {
+    u8* const bytes = reinterpret_cast<u8*>(words);
+    for (u32 i = 0; i < (word_count * sizeof(u32)); i++)
+    {
+      bytes[i] = m_flash_id_mode ? FLASH_ID[(offset + i) & 1] :
+                                   static_cast<u8>((m_write_toggle_result ^ 0x40) | (~bytes[i] & 0x80));
+    }
+  }
 }
 
 void PIO::Flash::PushCommandByte(u8 value)
@@ -165,11 +179,18 @@ void PIO::Flash::Write(u32 offset, u8 value)
           DEV_LOG("Flash Alt Enter ID mode");
           m_flash_id_mode = true;
         }
-        if (value == FLASH_CMD_WRITE_SECTOR_WITHOUT_SDP)
+        else if (value == FLASH_CMD_WRITE_SECTOR_WITHOUT_SDP)
         {
           DEV_LOG("Flash Write sector WITHOUT SDP");
           m_write_enable = true;
           m_program_write_timeout = std::numeric_limits<GlobalTicks>::max();
+        }
+        else if (value == FLASH_CMD_CHIP_ERASE)
+        {
+          DEV_LOG("Flash chip erase");
+          std::memset(m_data.data(), 0xFF, m_data.size());
+          m_max_data_address = TOTAL_SIZE;
+          m_image_modified = true;
         }
         else
         {
@@ -196,6 +217,15 @@ void PIO::Flash::ProgramWrite(u32 offset, u8 value)
   {
     DEV_LOG("Writing to flash sector {} (offset 0x{:06X})", sector_address, sector_address * SECTOR_SIZE);
     m_sector_address = sector_address;
+
+    // Bytes not loaded during the page write read back as FFh, and they can be loaded in any order.
+    // Kinda cheating, the page would normally be buffered, but the flash isn't readable during programming anyway.
+    u8* sector = SectorPtr(sector_address);
+    for (u32 i = 0; i < SECTOR_SIZE; i++)
+    {
+      m_image_modified |= (sector[i] != 0xFF);
+      sector[i] = 0xFF;
+    }
 
     const u32 sector_data_end = (sector_address * SECTOR_SIZE) + SECTOR_SIZE;
     if (sector_data_end > m_max_data_address)
@@ -232,32 +262,6 @@ bool PIO::Flash::CheckForProgramTimeout()
     return false;
 
   WARNING_LOG("Flash program timeout at byte {}", m_write_position);
-
-  // kinda cheating here, the sector would normally get buffered and then written
-  // but the flash isn't supposed to be readable during programming anyway...
-  if (m_write_position > 0)
-  {
-    const u32 bytes_to_erase = SECTOR_SIZE - m_write_position;
-    if (bytes_to_erase > 0)
-    {
-      WARNING_LOG("Erasing {} unwritten bytes in sector {} (0x{:05X})", bytes_to_erase, m_write_position,
-                  m_sector_address * SECTOR_SIZE);
-
-      u8* sector = SectorPtr(m_sector_address) + m_write_position;
-      bool image_modified = false;
-      for (u32 i = 0; i < bytes_to_erase; i++)
-      {
-        image_modified |= (sector[i] != 0xFF);
-        sector[i] = 0xFF;
-      }
-      m_image_modified |= image_modified;
-    }
-  }
-  else
-  {
-    WARNING_LOG("No sector address set, skipping programming.");
-  }
-
   EndProgramming();
   return true;
 }
@@ -307,7 +311,7 @@ bool PIO::Flash::LoadImage(const char* path, Error* error)
 
   const u32 padding_size = TOTAL_SIZE - read_size;
   if (padding_size > 0)
-    std::memset(m_data.data() + read_size, 0, padding_size);
+    std::memset(m_data.data() + read_size, 0xFF, padding_size);
 
   m_max_data_address = read_size;
   return true;
@@ -538,7 +542,7 @@ public:
   void WriteHandler(u32 offset, u8 value) override;
 
 private:
-  ALWAYS_INLINE u32 GetFlashUpperBank() const { return m_memory_map.sram_bank ? (384 * 1024) : (256 * 1024); }
+  ALWAYS_INLINE u32 GetFlashUpperBank() const { return m_memory_map.flash_bank ? (384 * 1024) : (256 * 1024); }
 
   union MemoryMappingRegister
   {
@@ -677,11 +681,12 @@ u8 PIO::XplorerCart::ReadHandler(u32 offset)
 
 void PIO::XplorerCart::CodeReadHandler(u32 offset, u32* words, u32 word_count)
 {
-  if ((offset + word_count) <= 0x40000)
+  const u32 end_offset = offset + (word_count * sizeof(u32));
+  if (end_offset <= 0x40000)
   {
     m_flash.CodeRead(offset, words, word_count);
   }
-  else if (offset >= 0x40000 && (offset + word_count) <= 0x60000)
+  else if (offset >= 0x40000 && end_offset <= 0x60000)
   {
     // second 256KB of flash or SRAM
     const u32 bank_offset = offset - 0x40000;
@@ -692,7 +697,7 @@ void PIO::XplorerCart::CodeReadHandler(u32 offset, u32* words, u32 word_count)
     }
     else
     {
-      m_flash.CodeRead(bank_offset, words, word_count * sizeof(u32));
+      m_flash.CodeRead(bank_offset | GetFlashUpperBank(), words, word_count);
     }
   }
   else if (offset < 0x60000) [[unlikely]]
@@ -707,9 +712,9 @@ void PIO::XplorerCart::CodeReadHandler(u32 offset, u32* words, u32 word_count)
       offset += words_from_first * sizeof(u32);
     }
 
-    const u32 words_from_second = std::min(0x60000 - offset, word_count);
+    const u32 words_from_second = std::min<u32>((0x60000 - offset) / sizeof(u32), word_count);
     const u32 second_bank_offset = offset - 0x40000;
-    if (m_memory_map.sram_bank)
+    if (m_memory_map.sram_select)
     {
       std::memcpy(words, &m_sram[second_bank_offset], words_from_second * sizeof(u32));
     }
@@ -738,17 +743,16 @@ void PIO::XplorerCart::WriteHandler(u32 offset, u8 value)
   else if (offset < 0x60000)
   {
     const u32 bank_offset = offset - 0x40000;
-    if (m_memory_map.sram_bank)
+    if (m_memory_map.sram_select)
     {
       m_sram[bank_offset] = value;
     }
     else
     {
-      const u32 flash_offset = m_memory_map.sram_bank ? (384 * 1024) : (256 * 1024);
-      m_flash.Write(flash_offset + bank_offset, value);
+      m_flash.Write(bank_offset | GetFlashUpperBank(), value);
     }
   }
-  else if (offset == 0x60001)
+  else if (offset >= 0x60000 && offset < 0x70000 && (offset & 0x07) == 1)
   {
     DEV_LOG("Memory map <- 0x{:02X}", value);
     m_memory_map.bits = value;

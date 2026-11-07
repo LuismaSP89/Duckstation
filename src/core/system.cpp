@@ -631,16 +631,14 @@ void System::ChangeExeOverrideAndReset(std::string path)
   {
     s_state.exe_override = {};
     s_state.boot_mode = BootMode::FullBoot;
+    Host::OnSystemGameChanged(s_state.running_game_path, s_state.running_game_serial, s_state.running_game_title,
+                              s_state.running_game_hash, s_state.exe_override);
     ResetSystem();
     return;
   }
 
   // Did we boot the executable, or override it?
-  if (!s_state.exe_override.empty() && s_state.running_game_path == s_state.exe_override)
-  {
-    // Update the running game too.
-    UpdateRunningGame(path, nullptr, false);
-  }
+  const bool booted_exe = (!s_state.exe_override.empty() && s_state.running_game_path == s_state.exe_override);
 
   // Achievements hardcode mode should be disabled.
   Achievements::DisableHardcoreMode(true, false);
@@ -648,6 +646,17 @@ void System::ChangeExeOverrideAndReset(std::string path)
   // Boot mode also needs to be changed if we're now overridding.
   s_state.boot_mode = IsPsfPath(path) ? BootMode::BootPSF : BootMode::BootEXE;
   s_state.exe_override = std::move(path);
+
+  // Update the running game too if we booted the executable, otherwise only the override changed.
+  if (booted_exe)
+  {
+    UpdateRunningGame(s_state.exe_override, nullptr, false);
+  }
+  else
+  {
+    Host::OnSystemGameChanged(s_state.running_game_path, s_state.running_game_serial, s_state.running_game_title,
+                              s_state.running_game_hash, s_state.exe_override);
+  }
 
   ResetSystem();
 }
@@ -1964,7 +1973,7 @@ System::BootResult System::BootSystem(SystemBootParameters parameters, Error* er
     GDBServer::Initialize(g_settings.gdb_server_port);
 
   Host::OnSystemStarted(s_state.running_game_path, s_state.running_game_serial, s_state.running_game_title,
-                        s_state.running_game_hash);
+                        s_state.running_game_hash, s_state.exe_override);
 
   if (parameters.load_image_to_ram || g_settings.cdrom_load_image_to_ram)
     CDROM::PrecacheMedia();
@@ -3194,7 +3203,8 @@ bool System::LoadStateFromBuffer(const SaveStateBuffer& buffer, Error* error, bo
 
   // Restore the exe override, so that resetting sideloads the same executable.
   // Older states don't record it, so they keep whichever override is active.
-  if (buffer.version >= 94 && s_state.exe_override != buffer.exe_override)
+  const bool exe_override_changed = (buffer.version >= 94 && s_state.exe_override != buffer.exe_override);
+  if (exe_override_changed)
   {
     s_state.exe_override = buffer.exe_override;
     if (!s_state.exe_override.empty())
@@ -3203,11 +3213,15 @@ bool System::LoadStateFromBuffer(const SaveStateBuffer& buffer, Error* error, bo
       s_state.boot_mode = BootMode::FullBoot;
   }
 
-  if (buffer.media_path.empty())
+  // State has no disc, so the running game is the executable, if any.
+  if (buffer.media_path.empty() && (CDROM::RemoveMedia(false) || s_state.running_game_path != s_state.exe_override))
   {
-    // State has no disc, so the running game is the executable, if any.
-    if (CDROM::RemoveMedia(false) || s_state.running_game_path != s_state.exe_override)
-      UpdateRunningGame(s_state.exe_override, nullptr, false);
+    UpdateRunningGame(s_state.exe_override, nullptr, false);
+  }
+  else if (exe_override_changed)
+  {
+    Host::OnSystemGameChanged(s_state.running_game_path, s_state.running_game_serial, s_state.running_game_title,
+                              s_state.running_game_hash, s_state.exe_override);
   }
 
   ClearMemorySaveStates(false, false);
@@ -3485,6 +3499,7 @@ bool System::SaveState(std::string path, Error* error, bool backup_existing_save
     VERBOSE_LOG("Saving state took {:.2f} msec", lsave_timer.GetTimeMilliseconds());
 
     s_state.outstanding_save_state_tasks.fetch_sub(1, std::memory_order_acq_rel);
+    s_state.outstanding_save_state_tasks.notify_all();
     if (completion_callback)
       completion_callback(result, lerror);
   });
@@ -3601,8 +3616,9 @@ void System::SaveStateToSlot(bool global, s32 slot)
 
 void System::FlushSaveStates()
 {
-  while (s_state.outstanding_save_state_tasks.load(std::memory_order_acquire) > 0)
-    Host::WaitForAllAsyncTasks();
+  u32 outstanding;
+  while ((outstanding = s_state.outstanding_save_state_tasks.load(std::memory_order_acquire)) > 0)
+    s_state.outstanding_save_state_tasks.wait(outstanding, std::memory_order_acquire);
 }
 
 bool System::SaveStateToBuffer(SaveStateBuffer* buffer, Error* error, u32 screenshot_size /* = 256 */)
@@ -4614,7 +4630,7 @@ void System::UpdateRunningGame(const std::string& path, CDImage* image, bool boo
                                 s_state.running_game_hash);
 
     Host::OnSystemGameChanged(s_state.running_game_path, s_state.running_game_serial, s_state.running_game_title,
-                              s_state.running_game_hash);
+                              s_state.running_game_hash, s_state.exe_override);
   }
 }
 
@@ -4876,7 +4892,7 @@ void System::CheckForSettingsChanges(const Settings& old_settings)
     }
     else if (g_settings.audio_stream_parameters != old_settings.audio_stream_parameters)
     {
-      SPU::GetOutputStream().UpdateParameters(g_settings.audio_stream_parameters);
+      SPU::CreateOutputStream();
     }
 
     if (g_settings.emulation_speed != old_settings.emulation_speed)
@@ -4940,8 +4956,7 @@ void System::CheckForSettingsChanges(const Settings& old_settings)
 
     // CPU side GPU settings
     if (g_settings.display_deinterlacing_mode != old_settings.display_deinterlacing_mode ||
-        g_settings.gpu_fifo_size != old_settings.gpu_fifo_size ||
-        g_settings.gpu_max_run_ahead != old_settings.gpu_max_run_ahead ||
+        g_settings.gpu_max_run_ahead_cycles != old_settings.gpu_max_run_ahead_cycles ||
         g_settings.gpu_force_video_timing != old_settings.gpu_force_video_timing ||
         g_settings.gpu_disable_textures != old_settings.gpu_disable_textures ||
         g_settings.gpu_disable_vertex_lighting != old_settings.gpu_disable_vertex_lighting ||

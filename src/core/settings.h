@@ -98,11 +98,9 @@ struct GPUSettings
   bool gpu_pgxp_color_correction : 1 = false;
   bool gpu_pgxp_vertex_cache : 1 = false;
   bool gpu_pgxp_cpu : 1 = false;
-  bool gpu_pgxp_preserve_proj_fp : 1 = false;
   bool gpu_pgxp_depth_buffer : 1 = false;
   bool gpu_pgxp_disable_2d : 1 = false;
   bool gpu_pgxp_transparent_depth : 1 = false;
-  bool gpu_pgxp_normalize_depth : 1 = false;
 
   bool display_optimal_frame_pacing : 1 = DEFAULT_OPTIMAL_FRAME_PACING;
   bool display_pre_frame_sleep : 1 = false;
@@ -283,10 +281,9 @@ struct Settings : public GPUSettings
   u32 cpu_overclock_numerator = 1;
   u32 cpu_overclock_denominator = 1;
 
-  TickCount dma_max_slice_ticks = DEFAULT_DMA_MAX_SLICE_TICKS;
-  TickCount dma_halt_ticks = DEFAULT_DMA_HALT_TICKS;
-  u32 gpu_fifo_size = DEFAULT_GPU_FIFO_SIZE;
-  TickCount gpu_max_run_ahead = DEFAULT_GPU_MAX_RUN_AHEAD;
+  TickCount dma_max_slice_cycles = DEFAULT_DMA_MAX_SLICE_CYCLES;
+  TickCount dma_halt_cycles = DEFAULT_DMA_HALT_CYCLES;
+  TickCount gpu_max_run_ahead_cycles = DEFAULT_GPU_MAX_RUN_AHEAD_CYCLES;
 
   ConsoleRegion region = DEFAULT_CONSOLE_REGION;
   ForceVideoTimingMode gpu_force_video_timing = DEFAULT_FORCE_VIDEO_TIMING_MODE;
@@ -353,6 +350,8 @@ struct Settings : public GPUSettings
   bool enable_discord_presence : 1 = false;
   bool export_shared_memory : 1 = false;
   bool gpu_dump_fast_replay_mode : 1 = false;
+  bool gpu_pgxp_preserve_proj_fp : 1 = false;
+  bool gpu_pgxp_normalize_depth : 1 = false;
 
   // achievements
   bool achievements_enabled : 1 = false;
@@ -392,6 +391,8 @@ struct Settings : public GPUSettings
 
   SettingOverrideMode gpu_pgxp_vertex_cache_mode = SettingOverrideMode::Automatic;
   SettingOverrideMode gpu_pgxp_cpu_mode = SettingOverrideMode::Automatic;
+  SettingOverrideMode gpu_pgxp_preserve_proj_fp_mode = SettingOverrideMode::Automatic;
+  GPUPGXPDepthNormalizationMode gpu_pgxp_normalize_depth_mode = GPUPGXPDepthNormalizationMode::Automatic;
 
   float emulation_speed = 1.0f;
   float fast_forward_speed = 0.0f;
@@ -450,10 +451,9 @@ struct Settings : public GPUSettings
 
   enum : u32
   {
-    DEFAULT_DMA_MAX_SLICE_TICKS = 1000,
-    DEFAULT_DMA_HALT_TICKS = 100,
-    DEFAULT_GPU_FIFO_SIZE = 16,
-    DEFAULT_GPU_MAX_RUN_AHEAD = 128,
+    DEFAULT_DMA_MAX_SLICE_CYCLES = 200,
+    DEFAULT_DMA_HALT_CYCLES = 100,
+    DEFAULT_GPU_MAX_RUN_AHEAD_CYCLES = 512, // Next power of 2 above the longest polygon setup, so setups need no event.
   };
 
   void Load(const SettingsInterface& si, const SettingsInterface& controller_si);
@@ -517,6 +517,10 @@ struct Settings : public GPUSettings
   static std::optional<GPULineDetectMode> ParseLineDetectModeName(std::string_view str);
   static const char* GetLineDetectModeName(GPULineDetectMode filter);
   static const char* GetLineDetectModeDisplayName(GPULineDetectMode filter);
+
+  static std::optional<GPUPGXPDepthNormalizationMode> ParsePGXPDepthNormalizationModeName(std::string_view str);
+  static const char* GetPGXPDepthNormalizationModeName(GPUPGXPDepthNormalizationMode mode);
+  static const char* GetPGXPDepthNormalizationModeDisplayName(GPUPGXPDepthNormalizationMode mode);
 
   static std::optional<GPUDownsampleMode> ParseDownsampleModeName(std::string_view str);
   static const char* GetDownsampleModeName(GPUDownsampleMode mode);

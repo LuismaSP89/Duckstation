@@ -32,8 +32,10 @@
 
 #include <QtCore/QPointer>
 #include <QtCore/QSignalBlocker>
+#include <QtGui/QClipboard>
 #include <QtGui/QCursor>
 #include <QtGui/QFontDatabase>
+#include <QtGui/QGuiApplication>
 #include <QtWidgets/QAbstractScrollArea>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QInputDialog>
@@ -61,11 +63,12 @@ DebuggerWindow::DebuggerWindow(QWidget* parent /* = nullptr */)
   {
     m_game_serial = QtHost::GetCurrentGameSerial();
     loadGameSettings(false);
+    loadSymbols(QtHost::GetCurrentGamePath(), QtHost::GetCurrentExeOverride());
 
     if (QtHost::IsSystemPaused())
       onSystemPaused();
     else
-      onSystemStarted();
+      setUIEnabled(false, true);
   }
   else
   {
@@ -75,36 +78,51 @@ DebuggerWindow::DebuggerWindow(QWidget* parent /* = nullptr */)
 
 DebuggerWindow::~DebuggerWindow() = default;
 
-void DebuggerWindow::onSystemStarted()
+void DebuggerWindow::onSystemStarted(const QString& path, const QString& serial, const QString& title, GameHash hash,
+                                     const QString& exe_override)
 {
-  if (const QString& serial = QtHost::GetCurrentGameSerial(); m_game_serial != serial)
+  Q_UNUSED(serial);
+  Q_UNUSED(title);
+  Q_UNUSED(hash);
+
+  if (m_game_serial != serial)
   {
     m_game_serial = serial;
     loadGameSettings(true);
   }
 
+  // Boot doesn't send systemGameChanged.
+  loadSymbols(path, exe_override);
   setUIEnabled(false, true);
+
+  // RAM size and region pointers aren't valid until the system has started.
+  setMemoryViewRegion(std::exchange(m_active_memory_region, Bus::MemoryRegion::Count));
 }
 
 void DebuggerWindow::onSystemDestroyed()
 {
   m_game_serial.clear();
+  loadGameSettings(false);
+  m_symbols.clear();
+  updateSymbolUI();
   refreshBreakpointList({});
   m_call_stack_model->clear();
   m_threads_model->clear();
   setUIEnabled(false, false);
 }
 
-void DebuggerWindow::onSystemGameChanged(const QString& path, const QString& serial, const QString& title)
+void DebuggerWindow::onSystemGameChanged(const QString& path, const QString& serial, const QString& title,
+                                         GameHash hash, const QString& exe_override)
 {
-  Q_UNUSED(path);
   Q_UNUSED(title);
+  Q_UNUSED(hash);
 
-  if (m_game_serial == serial)
-    return;
-
-  m_game_serial = serial;
-  loadGameSettings(true);
+  if (m_game_serial != serial)
+  {
+    m_game_serial = serial;
+    loadGameSettings(true);
+  }
+  loadSymbols(path, exe_override);
 }
 
 void DebuggerWindow::onSystemPaused()
@@ -125,6 +143,121 @@ void DebuggerWindow::onSystemResumed()
 void DebuggerWindow::reportMessage(const QString& message)
 {
   m_ui.statusbar->showMessage(message, 0);
+}
+
+bool DebuggerWindow::loadSymbolsFile(std::string path, Error* error)
+{
+  SymbolFile::SymbolList symbols;
+  if (!SymbolFile::Load(path.c_str(), &symbols, error))
+    return false;
+  if (symbols.empty())
+  {
+    Error::SetStringView(error, "File does not contain usable symbols.");
+    return false;
+  }
+
+  // Cache physical addresses so cached and uncached code use the same labels.
+  for (SymbolFile::Symbol& symbol : symbols)
+  {
+    if (CPU::GetSegmentForAddress(symbol.address) != CPU::Segment::KSEG2)
+      symbol.address = CPU::VirtualAddressToPhysical(symbol.address);
+  }
+
+  SymbolFile::SortSymbols(&symbols);
+  m_symbols = std::move(symbols);
+  m_symbol_path = std::move(path);
+  updateSymbolUI();
+  reportMessage(tr("Loaded %n symbol(s) from %1.", nullptr, static_cast<int>(m_symbols.size()))
+                  .arg(QtUtils::StringViewToQStringView(m_symbol_path)));
+  return true;
+}
+
+void DebuggerWindow::loadSymbols(const QString& path, const QString& exe_override)
+{
+  m_symbols.clear();
+  updateSymbolUI();
+  if (m_symbol_source == SymbolSource::Disabled)
+    return;
+
+  if (m_symbol_source == SymbolSource::Manual)
+  {
+    if (Error error; !loadSymbolsFile(m_symbol_path, &error))
+    {
+      WARNING_LOG("Failed to load symbols from '{}': {}", m_symbol_path, error.GetDescription());
+      reportMessage(tr("Failed to load symbols from %1: %2")
+                      .arg(QtUtils::StringViewToQStringView(m_symbol_path))
+                      .arg(QtUtils::StringViewToQStringView(error.GetDescription())));
+    }
+    return;
+  }
+
+  // Prefer symbols next to a sideloaded executable over the disc's.
+  m_symbol_path.clear();
+  const std::string base_path = (exe_override.isEmpty() ? path : exe_override).toStdString();
+  if (!base_path.empty())
+  {
+    std::vector<std::string> candidates;
+    if (StringUtil::EqualNoCase(Path::GetExtension(base_path), "elf"))
+      candidates.push_back(base_path);
+    const std::string elf_path = Path::ReplaceExtension(base_path, "elf");
+    if (candidates.empty() || candidates.back() != elf_path)
+      candidates.push_back(elf_path);
+    candidates.push_back(Path::ReplaceExtension(base_path, "map"));
+
+    for (const std::string& candidate : candidates)
+    {
+      if (!FileSystem::FileExists(candidate.c_str()))
+        continue;
+      Error error;
+      if (loadSymbolsFile(candidate, &error))
+        return;
+      WARNING_LOG("Ignoring symbol file '{}': {}", candidate, error.GetDescription());
+    }
+  }
+}
+
+void DebuggerWindow::updateSymbolUI()
+{
+  m_ui.codeView->setSymbols(&m_symbols);
+  m_call_stack_model->invalidateView();
+  m_ui.actionAutomaticSymbols->setChecked(m_symbol_source == SymbolSource::Automatic);
+  m_ui.actionDisableSymbols->setChecked(m_symbol_source == SymbolSource::Disabled);
+  m_ui.actionReloadSymbols->setEnabled(m_symbol_source != SymbolSource::Disabled);
+}
+
+std::optional<VirtualMemoryAddress> DebuggerWindow::parseAddress(const QString& str) const
+{
+  const QString trimmed = str.trimmed();
+  const QByteArray name = trimmed.toUtf8();
+  if (const auto it =
+        std::ranges::find(m_symbols, std::string_view(name.constData(), name.size()), &SymbolFile::Symbol::name);
+      it != m_symbols.end())
+  {
+    // Symbols are stored as physical addresses, go to the cached mirror.
+    return (CPU::GetSegmentForAddress(it->address) == CPU::Segment::KSEG2) ?
+             it->address :
+             CPU::PhysicalAddressToVirtual(it->address, CPU::Segment::KSEG0);
+  }
+
+  bool ok;
+  const uint value = (trimmed.startsWith("0x"_L1) ? trimmed.mid(2) : trimmed).toUInt(&ok, 16);
+  return ok ? std::optional<VirtualMemoryAddress>(value) : std::nullopt;
+}
+
+std::optional<VirtualMemoryAddress> DebuggerWindow::promptForAddress(const QString& label)
+{
+  const QString text = QInputDialog::getText(this, windowTitle(), label);
+  if (text.trimmed().isEmpty())
+    return std::nullopt;
+
+  const std::optional<VirtualMemoryAddress> address = parseAddress(text);
+  if (!address.has_value())
+  {
+    QtUtils::MessageBoxCritical(this, windowTitle(),
+                                tr("Invalid address. It should be a symbol name or in hex (0x12345678 or 12345678)."));
+  }
+
+  return address;
 }
 
 void DebuggerWindow::timerRefresh()
@@ -186,8 +319,7 @@ void DebuggerWindow::onGoToPCTriggered()
 
 void DebuggerWindow::onGoToAddressTriggered()
 {
-  std::optional<VirtualMemoryAddress> address =
-    QtUtils::PromptForHexValue(this, windowTitle(), tr("Enter code address:"));
+  const std::optional<VirtualMemoryAddress> address = promptForAddress(tr("Enter code address or symbol:"));
   if (!address.has_value())
     return;
 
@@ -197,8 +329,7 @@ void DebuggerWindow::onGoToAddressTriggered()
 
 void DebuggerWindow::onDumpAddressTriggered()
 {
-  std::optional<VirtualMemoryAddress> address =
-    QtUtils::PromptForHexValue(this, windowTitle(), tr("Enter memory address:"));
+  const std::optional<VirtualMemoryAddress> address = promptForAddress(tr("Enter memory address or symbol:"));
   if (!address.has_value())
     return;
 
@@ -415,6 +546,54 @@ void DebuggerWindow::onCallStackItemDoubleClicked(const QModelIndex& index)
     scrollToStackAddress(frame->stack_pointer);
 }
 
+void DebuggerWindow::onCallStackContextMenuRequested(const QPoint& pt)
+{
+  const CPU::CallStack::Frame* frame_ptr = m_call_stack_model->getFrame(m_ui.callStackView->indexAt(pt));
+  if (!frame_ptr)
+    return;
+
+  const CPU::CallStack::Frame frame = *frame_ptr;
+  const SymbolFile::Symbol* symbol = m_call_stack_model->getFrameSymbol(frame);
+  const QString symbol_name = symbol ? QString::fromStdString(symbol->name) : QString();
+
+  QMenu* const menu = QtUtils::NewPopupMenu(this);
+  menu->addAction(QIcon(u":/icons/monochrome/svg/code-line.svg"_s), tr("Go To &Code"),
+                  [this, frame]() { scrollToCodeAddress(frame.address, true); });
+  menu->addAction(QIcon(u":/icons/monochrome/svg/stack-line.svg"_s), tr("Go To &Stack"),
+                  [this, frame]() { scrollToStackAddress(frame.stack_pointer); });
+  menu->addSeparator();
+
+  QAction* const copy_name_action =
+    menu->addAction(QIcon(u":/icons/monochrome/svg/file-copy-line.svg"_s), tr("Copy Symbol &Name"),
+                    [symbol_name]() { QGuiApplication::clipboard()->setText(symbol_name); });
+  copy_name_action->setEnabled(!symbol_name.isEmpty());
+  menu->addAction(tr("Copy &Address"),
+                  [frame]() { QGuiApplication::clipboard()->setText(QString::asprintf("0x%08X", frame.address)); });
+  menu->addAction(tr("Copy &Frame Address"), [frame]() {
+    QGuiApplication::clipboard()->setText(QString::asprintf("0x%08X", frame.stack_pointer));
+  });
+
+  menu->popup(m_ui.callStackView->viewport()->mapToGlobal(pt));
+}
+
+void DebuggerWindow::showValueContextMenu(QAbstractItemView* view, const QModelIndex& index, const QPoint& pt)
+{
+  if (!index.isValid())
+    return;
+
+  const QString text = index.data().toString();
+  const std::optional<VirtualMemoryAddress> address = parseAddress(text);
+
+  QMenu* const menu = QtUtils::NewPopupMenu(this);
+  menu->addAction(QIcon(u":/icons/monochrome/svg/file-copy-line.svg"_s), tr("&Copy"),
+                  [text]() { QGuiApplication::clipboard()->setText(text); });
+  QAction* const dump_action =
+    menu->addAction(QIcon(u":/icons/monochrome/svg/debugger-go-to-address.svg"_s), tr("View in &Dump"),
+                    [this, address]() { scrollToMemoryAddress(address.value()); });
+  dump_action->setEnabled(address.has_value());
+  menu->popup(view->viewport()->mapToGlobal(pt));
+}
+
 void DebuggerWindow::onStackItemDoubleClicked(const QModelIndex& index)
 {
   const std::optional<VirtualMemoryAddress> address = m_stack_model->getAddressForIndex(index);
@@ -422,6 +601,11 @@ void DebuggerWindow::onStackItemDoubleClicked(const QModelIndex& index)
     return;
 
   scrollToMemoryAddress(address.value());
+}
+
+void DebuggerWindow::onStackContextMenuRequested(const QPoint& pt)
+{
+  showValueContextMenu(m_ui.stackView, m_ui.stackView->indexAt(pt), pt);
 }
 
 void DebuggerWindow::onRegisterItemDoubleClicked(const QModelIndex& index)
@@ -468,6 +652,12 @@ void DebuggerWindow::onRegisterItemDoubleClicked(const QModelIndex& index)
       win->reportMessage(tr("Set %1 to 0x%2.").arg(reg_name).arg(static_cast<uint>(value), 8, 16, QChar('0')));
     });
   });
+}
+
+void DebuggerWindow::onRegisterContextMenuRequested(const QPoint& pt)
+{
+  // Always use the value, not the register name.
+  showValueContextMenu(m_ui.registerView, m_ui.registerView->indexAt(pt).siblingAtColumn(1), pt);
 }
 
 void DebuggerWindow::startPatchInstruction(VirtualMemoryAddress address)
@@ -722,6 +912,46 @@ void DebuggerWindow::onMemorySearchStringChanged(const QString&)
   m_next_memory_search_address = 0;
 }
 
+void DebuggerWindow::onAutomaticSymbolsTriggered()
+{
+  m_symbol_source = SymbolSource::Automatic;
+  saveGameSettings();
+  loadSymbols(QtHost::GetCurrentGamePath(), QtHost::GetCurrentExeOverride());
+}
+
+void DebuggerWindow::onLoadSymbolsTriggered()
+{
+  const QString path = QFileDialog::getOpenFileName(this, tr("Load Symbols"), QString::fromStdString(m_symbol_path),
+                                                    tr("Symbol Files (*.elf *.map);;All Files (*)"));
+  if (path.isEmpty())
+    return;
+
+  if (Error error; !loadSymbolsFile(path.toStdString(), &error))
+  {
+    QtUtils::AsyncMessageBox(
+      this, QMessageBox::Critical, windowTitle(),
+      tr("Failed to load symbols: %1").arg(QtUtils::StringViewToQString(error.GetDescription())));
+    return;
+  }
+
+  m_symbol_source = SymbolSource::Manual;
+  saveGameSettings();
+  updateSymbolUI();
+}
+
+void DebuggerWindow::onReloadSymbolsTriggered()
+{
+  loadSymbols(QtHost::GetCurrentGamePath(), QtHost::GetCurrentExeOverride());
+}
+
+void DebuggerWindow::onDisableSymbolsTriggered()
+{
+  m_symbol_source = SymbolSource::Disabled;
+  m_symbol_path.clear();
+  saveGameSettings();
+  loadSymbols({}, {});
+}
+
 void DebuggerWindow::closeEvent(QCloseEvent* event)
 {
   g_core_thread->disconnect(this);
@@ -749,6 +979,30 @@ void DebuggerWindow::restoreWindowState()
     QMainWindow::restoreState(QByteArray::fromBase64(QByteArray::fromStdString(state)));
 }
 
+void DebuggerWindow::resetLayout()
+{
+  // Matches the placement in the .ui file.
+  for (QDockWidget* dock :
+       {m_ui.dockWidgetDisassembly, m_ui.dockWidgetRegisters, m_ui.dockWidgetMemory, m_ui.dockWidgetBreakpoints,
+        m_ui.dockWidgetStack, m_ui.dockWidgetThreads, m_ui.dockWidgetCallStack})
+  {
+    dock->setFloating(false);
+    addDockWidget((dock == m_ui.dockWidgetDisassembly || dock == m_ui.dockWidgetRegisters) ? Qt::TopDockWidgetArea :
+                                                                                             Qt::BottomDockWidgetArea,
+                  dock);
+    dock->show();
+  }
+
+  // +----------------+--------------------------------+----------------+
+  // | Memory         | Call Stack/Breakpoints/Threads | Stack          |
+  // +----------------+--------------------------------+----------------+
+  splitDockWidget(m_ui.dockWidgetMemory, m_ui.dockWidgetCallStack, Qt::Horizontal);
+  splitDockWidget(m_ui.dockWidgetCallStack, m_ui.dockWidgetStack, Qt::Horizontal);
+  tabifyDockWidget(m_ui.dockWidgetCallStack, m_ui.dockWidgetBreakpoints);
+  tabifyDockWidget(m_ui.dockWidgetBreakpoints, m_ui.dockWidgetThreads);
+  m_ui.dockWidgetCallStack->raise();
+}
+
 void DebuggerWindow::setupAdditionalUi()
 {
   const QFont& fixed_font = QtHost::GetFixedFont();
@@ -762,16 +1016,29 @@ void DebuggerWindow::setupAdditionalUi()
 
   m_ui.codeView->setContextMenuPolicy(Qt::CustomContextMenu);
   m_ui.breakpointsWidget->setContextMenuPolicy(Qt::CustomContextMenu);
+  m_ui.callStackView->setContextMenuPolicy(Qt::CustomContextMenu);
+  m_ui.registerView->setContextMenuPolicy(Qt::CustomContextMenu);
+  m_ui.stackView->setContextMenuPolicy(Qt::CustomContextMenu);
 
-  // +----------------+----------------+----------------+
-  // |                | Breakpoints    | Call Stack     |
-  // | Memory         +----------------+----------------+
-  // |                | Threads        | Stack          |
-  // +----------------+----------------+----------------+
-  splitDockWidget(m_ui.dockWidgetMemory, m_ui.dockWidgetBreakpoints, Qt::Horizontal);
-  splitDockWidget(m_ui.dockWidgetBreakpoints, m_ui.dockWidgetStack, Qt::Horizontal);
-  splitDockWidget(m_ui.dockWidgetBreakpoints, m_ui.dockWidgetThreads, Qt::Vertical);
-  splitDockWidget(m_ui.dockWidgetCallStack, m_ui.dockWidgetStack, Qt::Vertical);
+  resetLayout();
+
+  for (const auto& [dock, icon] : {
+         std::pair<QDockWidget*, const char*>{m_ui.dockWidgetDisassembly, "code-line"},
+         {m_ui.dockWidgetRegisters, "cpu-line"},
+         {m_ui.dockWidgetMemory, "ram-2-line"},
+         {m_ui.dockWidgetBreakpoints, "debug-toggle-breakpoint"},
+         {m_ui.dockWidgetThreads, "git-branch-line"},
+         {m_ui.dockWidgetCallStack, "function-line"},
+         {m_ui.dockWidgetStack, "stack-line"},
+       })
+  {
+    QAction* const action = dock->toggleViewAction();
+    action->setIcon(QIcon(u":/icons/monochrome/svg/%1.svg"_s.arg(QLatin1StringView(icon))));
+    m_ui.menuWindow->addAction(action);
+  }
+  m_ui.menuWindow->addSeparator();
+  m_ui.menuWindow->addAction(QIcon(u":/icons/monochrome/svg/restart-line.svg"_s), tr("&Reset Layout"), this,
+                             &DebuggerWindow::resetLayout);
 
 #ifdef __APPLE__
   QtUtils::SetIsMaskForMonochromeMenuBarActionIcons(menuBar());
@@ -799,16 +1066,26 @@ void DebuggerWindow::connectSignals()
   connect(m_ui.actionToggleBreakpoint, &QAction::triggered, this, &DebuggerWindow::onToggleBreakpointTriggered);
   connect(m_ui.actionClearBreakpoints, &QAction::triggered, this, &DebuggerWindow::onClearBreakpointsTriggered);
   connect(m_ui.actionClose, &QAction::triggered, this, &DebuggerWindow::close);
+  connect(m_ui.actionAutomaticSymbols, &QAction::triggered, this, &DebuggerWindow::onAutomaticSymbolsTriggered);
+  connect(m_ui.actionLoadSymbols, &QAction::triggered, this, &DebuggerWindow::onLoadSymbolsTriggered);
+  connect(m_ui.actionReloadSymbols, &QAction::triggered, this, &DebuggerWindow::onReloadSymbolsTriggered);
+  connect(m_ui.actionDisableSymbols, &QAction::triggered, this, &DebuggerWindow::onDisableSymbolsTriggered);
   connect(m_ui.codeView, &DebuggerCodeView::addressActivated, this, &DebuggerWindow::onCodeViewAddressActivated);
   connect(m_ui.codeView, &DebuggerCodeView::toggleBreakpointActivated, this,
           &DebuggerWindow::onCodeViewToggleBreakpointActivated);
   connect(m_ui.codeView, &DebuggerCodeView::commentActivated, this, &DebuggerWindow::onCodeViewCommentActivated);
   connect(m_ui.codeView, &DebuggerCodeView::copyActivated, this, &DebuggerWindow::copySelectedCodeToClipboard);
-  connect(m_ui.codeView, &QWidget::customContextMenuRequested, this, &DebuggerWindow::onCodeViewContextMenuRequested);
+  connect(m_ui.codeView, &DebuggerCodeView::customContextMenuRequested, this,
+          &DebuggerWindow::onCodeViewContextMenuRequested);
   connect(m_ui.callStackView, &QTreeView::doubleClicked, this, &DebuggerWindow::onCallStackItemDoubleClicked);
+  connect(m_ui.callStackView, &QWidget::customContextMenuRequested, this,
+          &DebuggerWindow::onCallStackContextMenuRequested);
   connect(m_ui.stackView, &QTreeView::doubleClicked, this, &DebuggerWindow::onStackItemDoubleClicked);
+  connect(m_ui.stackView, &QTreeView::customContextMenuRequested, this, &DebuggerWindow::onStackContextMenuRequested);
   connect(m_ui.threadsView, &QTreeView::doubleClicked, this, &DebuggerWindow::onThreadItemDoubleClicked);
   connect(m_ui.registerView, &QTreeView::doubleClicked, this, &DebuggerWindow::onRegisterItemDoubleClicked);
+  connect(m_ui.registerView, &QTreeView::customContextMenuRequested, this,
+          &DebuggerWindow::onRegisterContextMenuRequested);
   connect(m_ui.breakpointsWidget, &QTreeWidget::customContextMenuRequested, this,
           &DebuggerWindow::onBreakpointListContextMenuRequested);
   connect(m_ui.breakpointsWidget, &QTreeWidget::itemChanged, this, &DebuggerWindow::onBreakpointListItemChanged);
@@ -838,7 +1115,7 @@ void DebuggerWindow::createModels()
   m_stack_model = new DebuggerStackModel(this);
   m_ui.stackView->setModel(m_stack_model);
 
-  m_call_stack_model = new DebuggerCallStackModel(this);
+  m_call_stack_model = new DebuggerCallStackModel(&m_symbols, this);
   m_ui.callStackView->setModel(m_call_stack_model);
   QtUtils::SetColumnWidthsForTreeView(m_ui.callStackView, {-1, 100});
 
@@ -858,6 +1135,7 @@ void DebuggerWindow::setUIEnabled(bool enabled, bool allow_pause)
   const bool read_only_views = (enabled || allow_pause);
 
   m_ui.actionPause->setEnabled(allow_pause);
+  m_ui.menuSymbols->setEnabled(allow_pause);
 
   // Disable all UI elements that depend on execution state
   m_ui.codeView->setEnabled(read_only_views);
@@ -1145,6 +1423,8 @@ void DebuggerWindow::loadGameSettings(bool clear_existing)
   {
     saveGameSettings();
     m_settings.reset();
+    m_symbol_source = SymbolSource::Automatic;
+    m_symbol_path.clear();
 
     if (!clear_existing)
       return;
@@ -1155,6 +1435,8 @@ void DebuggerWindow::loadGameSettings(bool clear_existing)
     return;
   }
 
+  m_symbol_source = SymbolSource::Automatic;
+  m_symbol_path.clear();
   m_settings = std::make_unique<INISettingsInterface>(
     Path::Combine(EmuFolders::GameSettings, fmt::format("{}.debugger.ini", m_game_serial.toStdString())));
   if (Error error; FileSystem::FileExists(m_settings->GetPath().c_str()))
@@ -1168,6 +1450,17 @@ void DebuggerWindow::loadGameSettings(bool clear_existing)
         this, QMessageBox::Critical, windowTitle(),
         u"Failed to load debugger settings: %1"_s.arg(QtUtils::StringViewToQStringView(error.GetDescription())));
     }
+  }
+
+  const std::string symbol_source = m_settings->GetStringValue("Symbols", "Mode");
+  if (symbol_source == "Manual")
+  {
+    m_symbol_source = SymbolSource::Manual;
+    m_symbol_path = m_settings->GetStringValue("Symbols", "Path");
+  }
+  else if (symbol_source == "Disabled")
+  {
+    m_symbol_source = SymbolSource::Disabled;
   }
 
   using QueuedBreakpoint = std::tuple<CPU::BreakpointType, VirtualMemoryAddress, bool>;
@@ -1221,6 +1514,19 @@ void DebuggerWindow::saveGameSettings()
 {
   if (!m_settings)
     return;
+
+  if (m_symbol_source == SymbolSource::Automatic)
+  {
+    m_settings->ClearSection("Symbols");
+  }
+  else
+  {
+    m_settings->SetStringValue("Symbols", "Mode", (m_symbol_source == SymbolSource::Manual) ? "Manual" : "Disabled");
+    if (m_symbol_source == SymbolSource::Manual)
+      m_settings->SetStringValue("Symbols", "Path", m_symbol_path);
+    else
+      m_settings->DeleteValue("Symbols", "Path");
+  }
 
   // update the breakpoint list, we can yoink it back from the UI to avoid storing it again
   if (const int count = m_ui.breakpointsWidget->topLevelItemCount(); count > 0)

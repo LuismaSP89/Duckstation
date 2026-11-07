@@ -34,7 +34,6 @@
 #include "common/platform_strings.h"
 #include "common/ryml_helpers.h"
 #include "common/string_util.h"
-#include "common/task_queue.h"
 #include "common/threading.h"
 #include "common/timer.h"
 
@@ -58,9 +57,6 @@ LOG_CHANNEL(Core);
 
 namespace Core {
 
-/// Worker threads are dynamically allocated, maximum 8.
-static constexpr u32 MAX_ASYNC_WORKER_THREADS = 8;
-
 static bool SetAppRootAndResources(Error* error);
 static bool SetDataRoot(Error* error);
 static void SetDefaultSettings(SettingsInterface& si, bool host, bool system, bool controller, bool ignore_user_prefs);
@@ -75,11 +71,7 @@ struct CoreLocals
   LayeredSettingsInterface layered_settings_interface;
   INISettingsInterface base_settings_interface;
 
-  Threading::ThreadHandle core_thread_handle;
-
   Timer::Value process_start_time = 0;
-
-  TaskQueue async_task_queue;
 };
 } // namespace
 
@@ -714,7 +706,7 @@ void Core::ProcessShutdown()
   System::ReleasePersistentMemory();
 }
 
-bool Core::CoreThreadInitialize(bool disable_worker_threads, Error* error)
+bool Core::CoreThreadInitialize(Error* error)
 {
 #ifdef _WIN32
   // On Win32, we have a bunch of things which use COM (e.g. SDL, Cubeb, etc).
@@ -728,11 +720,6 @@ bool Core::CoreThreadInitialize(bool disable_worker_threads, Error* error)
   }
 #endif
 
-  s_locals.core_thread_handle = Threading::ThreadHandle::GetForCallingThread();
-
-  if (!disable_worker_threads)
-    s_locals.async_task_queue.SetWorkerCount(0, MAX_ASYNC_WORKER_THREADS);
-
   System::LoadSettings(false);
   SoundEffectManager::SetVolume(g_settings.audio_sound_effect_volume);
 
@@ -741,8 +728,6 @@ bool Core::CoreThreadInitialize(bool disable_worker_threads, Error* error)
   if (!VideoThread::ProcessStartup(error) || !CDROMAsyncReader::ProcessStartup(error)) [[unlikely]]
   {
     VideoThread::ProcessShutdown();
-    s_locals.async_task_queue.SetWorkerCount(0, 0);
-    s_locals.core_thread_handle = {};
 #ifdef _WIN32
     CoUninitialize();
 #endif
@@ -759,8 +744,6 @@ bool Core::CoreThreadInitialize(bool disable_worker_threads, Error* error)
 
 void Core::CoreThreadShutdown()
 {
-  s_locals.async_task_queue.SetWorkerCount(0, 0);
-
   DiscordPresence::Shutdown();
 
   Achievements::Shutdown();
@@ -777,31 +760,9 @@ void Core::CoreThreadShutdown()
   CDROMAsyncReader::ProcessShutdown();
   VideoThread::ProcessShutdown();
 
-  s_locals.core_thread_handle = {};
-
 #ifdef _WIN32
   CoUninitialize();
 #endif
-}
-
-const Threading::ThreadHandle& Host::GetCoreThreadHandle()
-{
-  return Core::s_locals.core_thread_handle;
-}
-
-bool Host::IsOnCoreThread()
-{
-  return Core::s_locals.core_thread_handle.IsCallingThread();
-}
-
-void Host::QueueAsyncTask(MoveOnlyFunction<void()> function)
-{
-  Core::s_locals.async_task_queue.SubmitTask(std::move(function));
-}
-
-void Host::WaitForAllAsyncTasks()
-{
-  Core::s_locals.async_task_queue.WaitForAll();
 }
 
 float Core::GetProcessUptime()

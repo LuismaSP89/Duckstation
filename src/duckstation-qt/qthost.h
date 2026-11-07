@@ -107,12 +107,14 @@ Q_SIGNALS:
   void settingsResetToDefault(bool host, bool system, bool controller);
   void settingsReloaded();
   void systemStarting();
-  void systemStarted(const QString& path, const QString& game_serial, const QString& game_title, GameHash hash);
+  void systemStarted(const QString& path, const QString& game_serial, const QString& game_title, GameHash hash,
+                     const QString& exe_override);
   void systemStopping();
   void systemDestroyed();
   void systemPaused();
   void systemResumed();
-  void systemGameChanged(const QString& path, const QString& game_serial, const QString& game_title, GameHash hash);
+  void systemGameChanged(const QString& path, const QString& game_serial, const QString& game_title, GameHash hash,
+                         const QString& exe_override);
   void systemUndoStateAvailabilityChanged(bool available, quint64 timestamp);
   void gameListRowsChanged(const QList<int>& rows_changed);
   std::optional<WindowInfo> onAcquireRenderWindowRequested(RenderAPI render_api, bool fullscreen,
@@ -147,8 +149,7 @@ public:
   void shutdownSystem(bool save_state, bool check_safety);
   void resetSystem(bool check_memcard_busy);
   void setSystemPaused(bool paused);
-  void changeDisc(const QString& new_disc_path, bool reset_system, bool check_memcard_busy,
-                  quint32 subimage_index = 0);
+  void changeDisc(const QString& new_disc_path, bool reset_system, bool check_memcard_busy, quint32 subimage_index = 0);
   void setLidState(bool manual_control, bool manual_state);
   void loadState(const QString& path);
   void loadState(bool global, qint32 slot);
@@ -301,9 +302,6 @@ bool IsDarkApplicationTheme();
 /// Returns true if the application theme is using stylesheet overrides.
 bool HasGlobalStylesheet();
 
-/// Sets the icon theme, based on the current style (light/dark).
-void UpdateThemeOnStyleChange();
-
 /// Returns true if the specified theme name uses style sheets.
 bool IsStylesheetTheme(std::string_view theme_name);
 
@@ -384,6 +382,7 @@ bool IsSystemLocked();
 const QString& GetCurrentGameTitle();
 const QString& GetCurrentGameSerial();
 const QString& GetCurrentGamePath();
+const QString& GetCurrentExeOverride();
 GameHash GetCurrentGameHash();
 
 #ifdef _WIN32
@@ -395,6 +394,14 @@ bool AreWindowRoundedCornersDisabled();
 
 /// Returns true if running on Wayland, as opposed to X11.
 bool IsRunningOnWayland();
+
+#elifdef __APPLE__
+
+/// Returns true if the application is using the native MacOS style.
+bool IsNativeApplicationTheme();
+
+/// Updates the native stylesheet if needed.
+void UpdateNativeApplicationTheme();
 
 #endif
 

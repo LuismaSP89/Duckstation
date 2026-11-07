@@ -138,7 +138,8 @@ TEST_F(PGXPTest, ShiftKeepsPackedUpperFraction)
 
 TEST_F(PGXPTest, ShiftKeepsPackedUpperFractionWhenBitsReachX)
 {
-  // Native Y is odd, so it isn't only sign bits after the shift, and keeps its offset from native.
+  // Native Y is odd, so it isn't only sign bits after the shift, and keeps its offset from native. Only its native bit
+  // moves into X, otherwise Y's fraction lands in X scaled by 32768 (Driver 2 averages packed vertices this way).
   for (const bool arithmetic : {false, true})
   {
     for (const u32 dest : {R_V0, R_V1})
@@ -149,6 +150,7 @@ TEST_F(PGXPTest, ShiftKeepsPackedUpperFractionWhenBitsReachX)
       else
         CPU::PGXP::CPU_SRL(R(0, R_V0, dest, 1), 0x02010064);
       EXPECT_EQ(Get(dest).value, 0x01008032u);
+      EXPECT_NEAR(Get(dest).x, 50.125 - 32768.0, TOLERANCE);
       EXPECT_NEAR(Get(dest).y, 256.25, TOLERANCE);
 
       CPU::PGXP::CPU_SRA(R(0, dest, R_A0, 16), 0x01008032);
@@ -170,6 +172,44 @@ TEST_F(PGXPTest, ShiftKeepsWrappedLowHalfSign)
   Set(R_V0, 0x7F9E, -32630.9f, 0.0f);
   CPU::PGXP::CPU_SRA(R(0, R_V0, R_V1, 5), 0x7F9E);
   EXPECT_NEAR(Get(R_V1).x, 32905.1 / 32.0, TOLERANCE);
+}
+
+TEST_F(PGXPTest, ShiftDropsFractionOfBitsShiftedOut)
+{
+  // 007 Racing packs vertices as y:10 x:10 z:12, here 173.25, 142.125 and 20. The fraction of y sits in the bits of x,
+  // so it must not stay behind when y is shifted out.
+  Set(R_V0, 0x2B48E014, -7660.0f, 11096.0f);
+  CPU::PGXP::CPU_SLL(R(0, R_V0, R_V1, 10), 0x2B48E014);
+  EXPECT_EQ(Get(R_V1).value, 0x23805000u);
+  EXPECT_NEAR(Get(R_V1).y, 9096.0, TOLERANCE);
+  CPU::PGXP::CPU_SRA(R(0, R_V1, R_A0, 22), 0x23805000);
+  EXPECT_NEAR(Get(R_A0).x, 142.125, TOLERANCE);
+  CPU::PGXP::CPU_SRA(R(0, R_V0, R_A1, 22), 0x2B48E014);
+  EXPECT_NEAR(Get(R_A1).x, 11096.0 / 64.0, TOLERANCE); // the top bits of x become a fraction
+
+  // Without bits shifted out, the fraction of y is kept.
+  Set(R_V0, 0x015A011C, 284.25f, 346.5f);
+  CPU::PGXP::CPU_SLL(R(0, R_V0, R_V1, 5), 0x015A011C);
+  EXPECT_NEAR(Get(R_V1).y, 346.5 * 32.0, TOLERANCE);
+}
+
+TEST_F(PGXPTest, BitfieldExtractDoesNotTakeFractionFromFieldBelow)
+{
+  // Syphon Filter 3 packs vertices as z:10 y:11 x:11, here x = -50 and y = -19, and extracts y with sll 10; sra 21.
+  // The top bits of x are below y, and gave it a fraction of 31/32.
+  Set(R_V0, 0x13FF6FCE, 28622.0f, 5119.0f);
+  CPU::PGXP::CPU_SLL(R(0, R_V0, R_V1, 10), 0x13FF6FCE);
+  EXPECT_EQ(Get(R_V1).value, 0xFDBF3800u);
+  CPU::PGXP::CPU_SRA(R(0, R_V1, R_A0, 21), 0xFDBF3800);
+  EXPECT_EQ(Get(R_A0).value, 0xFFFFFFEDu);
+  EXPECT_NEAR(Get(R_A0).x, -19.0, TOLERANCE);
+  EXPECT_NEAR(Get(R_A0).y, -1.0, TOLERANCE);
+  EXPECT_FALSE(Get(R_A0).flags & BITFIELD);
+
+  // Without bits shifted out by a left shift, the bits shifted out are a fraction.
+  Set(R_V1, 0xFDBF3800, 14336.0f, -577.0f);
+  CPU::PGXP::CPU_SRA(R(0, R_V1, R_A0, 21), 0xFDBF3800);
+  EXPECT_NEAR(Get(R_A0).x, -577.0 / 32.0, TOLERANCE);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -627,6 +667,25 @@ TEST_F(PGXPTest, ADDIUsesDoublePrecision)
   Set(R_V0, 0x00640000, -0.3f, 100.2f);
   CPU::PGXP::CPU_ADDI(I(R_V0, R_V1, 16), 0x00640000);
   EXPECT_NEAR(Get(R_V1).x, 15.7, 0.0001);
+}
+
+TEST_F(PGXPTest, ADDAveragesDepthOfMidpoint)
+{
+  // Syphon Filter 3 subdivides polygons in screen space with a + ((b - a) >> 1).
+  Set(R_V0, 0xFFFFFFCE, -49.5f, -1.0f, VALID_ALL, 635.0f);
+  Set(R_V1, 0xFFFFFFD9, -38.5f, -1.0f, VALID_ALL, 843.0f);
+  CPU::PGXP::CPU_SUB(R(R_V1, R_V0, R_A0), 0xFFFFFFD9, 0xFFFFFFCE);
+  CPU::PGXP::CPU_SRA(R(0, R_A0, R_A0, 1), 0x0000000B);
+  CPU::PGXP::CPU_ADD(R(R_V0, R_A0, R_A1), 0xFFFFFFCE, 0x00000005);
+  EXPECT_EQ(Get(R_A1).value, 0xFFFFFFD3u);
+  EXPECT_NEAR(Get(R_A1).x, -44.0, TOLERANCE);
+  EXPECT_TRUE(Get(R_A1).flags & VALID_Z);
+  EXPECT_NEAR(Get(R_A1).z, 739.0, TOLERANCE);
+
+  // A side without depth doesn't change it.
+  Set(R_V1, 0x00000004, 4.0f, 0.0f, VALID_XY, 0.0f);
+  CPU::PGXP::CPU_ADD(R(R_V0, R_V1, R_A1), 0xFFFFFFCE, 0x00000004);
+  EXPECT_EQ(Get(R_A1).z, 635.0f);
 }
 
 TEST_F(PGXPTest, ADDIIgnoresInvalidLowHalf)

@@ -8,12 +8,15 @@
 #include "core/cpu_core.h"
 #include "core/types.h"
 
+#include "util/symbol_file.h"
+
 #include <QtCore/QTimer>
 #include <QtWidgets/QMainWindow>
 #include <memory>
 #include <optional>
 
 class INISettingsInterface;
+class Error;
 
 namespace Bus {
 enum class MemoryRegion;
@@ -35,6 +38,9 @@ public:
   void reportMessage(const QString& message);
   void updateBreakpointHitCounts(const CPU::BreakpointList& bps);
 
+  /// Parses a hex address or symbol name.
+  std::optional<VirtualMemoryAddress> parseAddress(const QString& str) const;
+
 Q_SIGNALS:
   void closed();
 
@@ -42,8 +48,16 @@ protected:
   void closeEvent(QCloseEvent* event) override;
 
 private:
+  enum class SymbolSource
+  {
+    Automatic,
+    Manual,
+    Disabled,
+  };
+
   void saveWindowState();
   void restoreWindowState();
+  void resetLayout();
   void setupAdditionalUi();
   void connectSignals();
   void createModels();
@@ -66,10 +80,16 @@ private:
   void removeBreakpoint(CPU::BreakpointType type, u32 address);
   void loadGameSettings(bool clear_existing);
   void saveGameSettings();
+  void loadSymbols(const QString& path, const QString& exe_override);
+  bool loadSymbolsFile(std::string path, Error* error);
+  void updateSymbolUI();
+  std::optional<VirtualMemoryAddress> promptForAddress(const QString& label);
 
-  void onSystemStarted();
+  void onSystemStarted(const QString& path, const QString& serial, const QString& title, GameHash hash,
+                       const QString& exe_override);
   void onSystemDestroyed();
-  void onSystemGameChanged(const QString& path, const QString& serial, const QString& title);
+  void onSystemGameChanged(const QString& path, const QString& serial, const QString& title, GameHash hash,
+                           const QString& exe_override);
   void onSystemPaused();
   void onSystemResumed();
 
@@ -95,11 +115,19 @@ private:
   void onCodeViewCommentActivated(VirtualMemoryAddress address);
   void onCodeViewContextMenuRequested(const QPoint& pt);
   void onCallStackItemDoubleClicked(const QModelIndex& index);
+  void onCallStackContextMenuRequested(const QPoint& pt);
+  void showValueContextMenu(QAbstractItemView* view, const QModelIndex& index, const QPoint& pt);
   void onStackItemDoubleClicked(const QModelIndex& index);
+  void onStackContextMenuRequested(const QPoint& pt);
   void onRegisterItemDoubleClicked(const QModelIndex& index);
+  void onRegisterContextMenuRequested(const QPoint& pt);
   void onThreadItemDoubleClicked(const QModelIndex& index);
   void onMemorySearchTriggered();
   void onMemorySearchStringChanged(const QString&);
+  void onAutomaticSymbolsTriggered();
+  void onLoadSymbolsTriggered();
+  void onReloadSymbolsTriggered();
+  void onDisableSymbolsTriggered();
 
   Ui::DebuggerWindow m_ui;
 
@@ -115,5 +143,9 @@ private:
   PhysicalMemoryAddress m_next_memory_search_address = 0;
 
   QString m_game_serial;
+
   std::unique_ptr<INISettingsInterface> m_settings;
+  SymbolFile::SymbolList m_symbols;
+  std::string m_symbol_path;
+  SymbolSource m_symbol_source = SymbolSource::Automatic;
 };

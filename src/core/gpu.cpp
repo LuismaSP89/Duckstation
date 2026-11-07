@@ -73,6 +73,8 @@ enum class BlitterState : u8
 enum : u32
 {
   MAX_FIFO_SIZE = 256,
+  FIFO_SIZE = 16,            ///< Hardware GP0 FIFO size, in words.
+  FIFO_MODE_FULL_WORDS = 11, ///< GPUSTAT bit 25 reads full with this many words queued, in GP1(04h)=1 mode.
   DOT_TIMER_INDEX = 0,
   HBLANK_TIMER_INDEX = 1,
   DRAWING_AREA_COORD_MASK = 1023,
@@ -132,17 +134,6 @@ static float ComputeVerticalFrequency();
 static void CRTCTickEvent(void*, TickCount ticks);
 static void CommandTickEvent(void*, TickCount ticks);
 static void FrameDoneEvent(void*, TickCount ticks);
-
-// The GPU internally appears to run at 2x the system clock.
-// TODO: No, it just draws two pixels per clock.
-ALWAYS_INLINE constexpr TickCount GPUTicksToSystemTicks(TickCount gpu_ticks)
-{
-  return std::max<TickCount>((gpu_ticks + 1) >> 1, 1);
-}
-ALWAYS_INLINE constexpr TickCount SystemTicksToGPUTicks(TickCount sysclk_ticks)
-{
-  return sysclk_ticks << 1;
-}
 
 static TickCount CRTCTicksToSystemTicks(TickCount crtc_ticks, TickCount fractional_ticks);
 static TickCount SystemTicksToCRTCTicks(TickCount sysclk_ticks, TickCount* fractional_ticks);
@@ -215,30 +206,36 @@ static void FillDrawCommand(GPUBackendDrawCommand* RESTRICT cmd, GPURenderComman
 static void AddDrawTriangleTicks(GSVector2i v1, GSVector2i v2, GSVector2i v3, bool shaded, bool textured,
                                  bool semitransparent);
 static void AddDrawRectangleTicks(const GSVector4i rect, bool textured, bool semitransparent);
-static void AddDrawLineTicks(const GSVector4i rect, bool shaded);
+static void AddDrawLineTicks(const GSVector4i rect, bool shaded, bool semitransparent);
 
-using GP0CommandHandler = bool (*)();
-using GP0CommandHandlerTable = std::array<GP0CommandHandler, 256>;
+using GP0CommandHandler = void (*)();
+struct GP0Command
+{
+  GP0CommandHandler handler;
+  u8 num_words;  ///< Words needed before the handler runs.
+  u8 held_words; ///< FIFO slots the command keeps while it holds the DMA request, for GP1(04h)=1 mode.
+};
+using GP0CommandTable = std::array<GP0Command, 256>;
 
-// Rendering commands, returns false if not enough data is provided
-static bool HandleUnknownGP0Command();
-static bool HandleNOPCommand();
-static bool HandleClearCacheCommand();
-static bool HandleInterruptRequestCommand();
-static bool HandleSetDrawModeCommand();
-static bool HandleSetTextureWindowCommand();
-static bool HandleSetDrawingAreaTopLeftCommand();
-static bool HandleSetDrawingAreaBottomRightCommand();
-static bool HandleSetDrawingOffsetCommand();
-static bool HandleSetMaskBitCommand();
-static bool HandleRenderPolygonCommand();
-static bool HandleRenderRectangleCommand();
-static bool HandleRenderLineCommand();
-static bool HandleRenderPolyLineCommand();
-static bool HandleFillRectangleCommand();
-static bool HandleCopyRectangleCPUToVRAMCommand();
-static bool HandleCopyRectangleVRAMToCPUCommand();
-static bool HandleCopyRectangleVRAMToVRAMCommand();
+// Rendering commands, called once num_words are queued
+static void HandleUnknownGP0Command();
+static void HandleNOPCommand();
+static void HandleClearCacheCommand();
+static void HandleInterruptRequestCommand();
+static void HandleSetDrawModeCommand();
+static void HandleSetTextureWindowCommand();
+static void HandleSetDrawingAreaTopLeftCommand();
+static void HandleSetDrawingAreaBottomRightCommand();
+static void HandleSetDrawingOffsetCommand();
+static void HandleSetMaskBitCommand();
+static void HandleRenderPolygonCommand();
+static void HandleRenderRectangleCommand();
+static void HandleRenderLineCommand();
+static void HandleRenderPolyLineCommand();
+static void HandleFillRectangleCommand();
+static void HandleCopyRectangleCPUToVRAMCommand();
+static void HandleCopyRectangleVRAMToCPUCommand();
+static void HandleCopyRectangleVRAMToVRAMCommand();
 
 namespace {
 
@@ -358,6 +355,7 @@ struct Locals
 
   u32 command_total_words = 0;
   TickCount pending_command_ticks = 0;
+  TickCount dreq_hold_ticks = 0; ///< Ticks until a polygon releases the DMA request, i.e. setup/first triangle.
   u32 active_ticks_since_last_update = 0;
 
   /// True if currently executing/syncing.
@@ -388,7 +386,6 @@ struct Locals
   std::unique_ptr<GPUDump::Recorder> gpu_dump;
 
   TickCount max_run_ahead = 128;
-  u32 fifo_size = 128;
   u32 blit_remaining_words;
   GPURenderCommand render_command{};
   std::vector<u32> blit_buffer;
@@ -405,6 +402,85 @@ ALIGN_TO_CACHE_LINE static Locals s_locals;
 
 } // namespace GPU
 
+static constexpr GPU::GP0CommandTable s_GP0_command_table = []() constexpr {
+  GPU::GP0CommandTable table = {};
+  for (u32 i = 0; i < static_cast<u32>(table.size()); i++)
+    table[i] = {&GPU::HandleUnknownGP0Command, 1, 0};
+  table[0x00] = {&GPU::HandleNOPCommand, 1, 0};
+  table[0x01] = {&GPU::HandleClearCacheCommand, 1, 0};
+  table[0x02] = {&GPU::HandleFillRectangleCommand, 3, 0};
+  table[0x03] = {&GPU::HandleNOPCommand, 1, 0};
+  for (u32 i = 0x04; i <= 0x1E; i++)
+    table[i] = {&GPU::HandleNOPCommand, 1, 0};
+  table[0x1F] = {&GPU::HandleInterruptRequestCommand, 1, 0};
+  for (u32 i = 0x20; i <= 0x7F; i++)
+  {
+    // same bits as GPURenderCommand, which can't be used in a constant expression
+    const u32 textured = BoolToUInt32((i & 0x04) != 0);
+    const bool quad_or_polyline = ((i & 0x08) != 0);
+    const u32 shaded = BoolToUInt32((i & 0x10) != 0);
+    switch (static_cast<GPUPrimitive>((i >> 5) & 0x03))
+    {
+      case GPUPrimitive::Polygon:
+      {
+        // shaded vertices use the colour from the first word for the first vertex
+        const u8 num_words = static_cast<u8>((1 + textured + shaded) * (quad_or_polyline ? 4 : 3) + (shaded ^ 1));
+
+        // Measured on hardware: during a quad's first triangle, 11 minus these words fit behind it. Why only the flat
+        // quad keeps its whole packet is unknown. Triangles keep their packet through setup.
+        constexpr std::array<u8, 4> quad_held_words = {5, 8, 7, 10}; // flat, textured, gouraud, textured gouraud
+        table[i] = {&GPU::HandleRenderPolygonCommand, num_words,
+                    quad_or_polyline ? quad_held_words[textured | (shaded << 1)] : num_words};
+      }
+      break;
+
+      case GPUPrimitive::Line:
+      {
+        // poly-lines need at least the first two vertices, the terminator is tested after that
+        table[i] = {quad_or_polyline ? &GPU::HandleRenderPolyLineCommand : &GPU::HandleRenderLineCommand,
+                    static_cast<u8>(3 + shaded), 0};
+      }
+      break;
+
+      case GPUPrimitive::Rectangle:
+      {
+        table[i] = {&GPU::HandleRenderRectangleCommand,
+                    static_cast<u8>(2 + textured +
+                                    BoolToUInt32(static_cast<GPUDrawRectangleSize>((i >> 3) & 0x03) ==
+                                                 GPUDrawRectangleSize::Variable)),
+                    0};
+      }
+      break;
+
+      default:
+        break;
+    }
+  }
+  table[0xE0] = {&GPU::HandleNOPCommand, 1, 0};
+  table[0xE1] = {&GPU::HandleSetDrawModeCommand, 1, 0};
+  table[0xE2] = {&GPU::HandleSetTextureWindowCommand, 1, 0};
+  table[0xE3] = {&GPU::HandleSetDrawingAreaTopLeftCommand, 1, 0};
+  table[0xE4] = {&GPU::HandleSetDrawingAreaBottomRightCommand, 1, 0};
+  table[0xE5] = {&GPU::HandleSetDrawingOffsetCommand, 1, 0};
+  table[0xE6] = {&GPU::HandleSetMaskBitCommand, 1, 0};
+  for (u32 i = 0xE7; i <= 0xEF; i++)
+    table[i] = {&GPU::HandleNOPCommand, 1, 0};
+  for (u32 i = 0x80; i <= 0x9F; i++)
+    table[i] = {&GPU::HandleCopyRectangleVRAMToVRAMCommand, 4, 0};
+  for (u32 i = 0xA0; i <= 0xBF; i++)
+    table[i] = {&GPU::HandleCopyRectangleCPUToVRAMCommand, 3, 0};
+  for (u32 i = 0xC0; i <= 0xDF; i++)
+    table[i] = {&GPU::HandleCopyRectangleVRAMToCPUCommand, 3, 0};
+
+  table[0xFF] = {&GPU::HandleNOPCommand, 1, 0};
+
+  return table;
+}();
+static_assert(s_GP0_command_table[0x02].num_words == 3 && s_GP0_command_table[0x2C].num_words == 9 &&
+              s_GP0_command_table[0x3E].num_words == 12 && s_GP0_command_table[0x48].num_words == 3 &&
+              s_GP0_command_table[0x65].num_words == 4 && s_GP0_command_table[0x80].num_words == 4 &&
+              s_GP0_command_table[0x2C].held_words == 8 && s_GP0_command_table[0x38].held_words == 7);
+
 // aligning VRAM to 4K is fine, since the ARM64 instructions compute 4K page aligned addresses
 // or it would be, except we want to import the memory for readbacks on metal..
 #ifdef DYNAMIC_HOST_PAGE_SIZE
@@ -420,8 +496,7 @@ void GPU::Initialize()
   s_locals.crtc_tick_event.Activate();
 
   s_locals.force_progressive_scan = (g_settings.display_deinterlacing_mode == DisplayDeinterlacingMode::Progressive);
-  s_locals.fifo_size = g_settings.gpu_fifo_size;
-  s_locals.max_run_ahead = g_settings.gpu_max_run_ahead;
+  s_locals.max_run_ahead = g_settings.gpu_max_run_ahead_cycles;
   s_locals.console_is_pal = System::IsPALRegion();
   s_locals.texture_enable_mask = !g_settings.gpu_disable_textures;
   s_locals.force_raw_texture = g_settings.gpu_disable_vertex_lighting;
@@ -441,8 +516,7 @@ void GPU::Shutdown()
 void GPU::UpdateSettings(const Settings& old_settings)
 {
   s_locals.force_progressive_scan = (g_settings.display_deinterlacing_mode == DisplayDeinterlacingMode::Progressive);
-  s_locals.fifo_size = g_settings.gpu_fifo_size;
-  s_locals.max_run_ahead = g_settings.gpu_max_run_ahead;
+  s_locals.max_run_ahead = g_settings.gpu_max_run_ahead_cycles;
   s_locals.texture_enable_mask = !g_settings.gpu_disable_textures;
   s_locals.force_raw_texture = g_settings.gpu_disable_vertex_lighting;
 
@@ -564,6 +638,7 @@ void GPU::SoftReset()
   s_locals.GPUSTAT.pal_mode = System::IsPALRegion();
   s_locals.GPUSTAT.display_area_color_depth_24 = false;
   s_locals.GPUSTAT.vertical_interlace = false;
+  s_locals.GPUSTAT.interlaced_field = 1u;
   s_locals.GPUSTAT.display_disable = true;
   s_locals.GPUSTAT.dma_direction = GPUDMADirection::Off;
   s_locals.drawing_area = {};
@@ -574,6 +649,7 @@ void GPU::SoftReset()
   s_locals.crtc_state.regs.vertical_display_range = 0x40010;
   s_locals.blitter_state = BlitterState::Idle;
   s_locals.pending_command_ticks = 0;
+  s_locals.dreq_hold_ticks = 0;
   s_locals.command_total_words = 0;
   s_locals.vram_transfer = {};
   s_locals.fifo.Clear();
@@ -695,6 +771,13 @@ bool GPU::DoState(StateWrapper& sw)
 
   sw.Do(&s_locals.blitter_state, BlitterState::DrawingPolyLine);
   sw.Do(&s_locals.pending_command_ticks);
+  sw.DoEx(&s_locals.dreq_hold_ticks, 96, 0);
+  if (sw.IsReading() && sw.GetVersion() < 97) [[unlikely]]
+  {
+    // Command ticks used to be counted at twice the system clock.
+    s_locals.pending_command_ticks = (s_locals.pending_command_ticks + 1) / 2;
+    s_locals.dreq_hold_ticks = (s_locals.dreq_hold_ticks + 1) / 2;
+  }
   sw.Do(&s_locals.command_total_words);
   sw.Do(&s_locals.GPUREAD_latch);
 
@@ -797,6 +880,7 @@ void GPU::DoMemoryState(StateWrapper& sw, System::MemorySaveState& mss)
 
   sw.Do(&s_locals.blitter_state);
   sw.Do(&s_locals.pending_command_ticks);
+  sw.Do(&s_locals.dreq_hold_ticks);
   sw.Do(&s_locals.command_total_words);
   sw.Do(&s_locals.GPUREAD_latch);
 
@@ -834,13 +918,15 @@ void GPU::UpdateDMARequest()
   {
     case BlitterState::Idle:
       s_locals.GPUSTAT.ready_to_send_vram = false;
+      // In GP0 DMA mode, the next block is requested while at most one word is queued.
       s_locals.GPUSTAT.ready_to_receive_dma =
-        (s_locals.fifo.IsEmpty() || s_locals.fifo.GetSize() < s_locals.command_total_words);
+        (s_locals.fifo.GetSize() <= BoolToUInt32(s_locals.GPUSTAT.dma_direction == GPUDMADirection::CPUtoGP0) ||
+         s_locals.fifo.GetSize() < s_locals.command_total_words);
       break;
 
     case BlitterState::WritingVRAM:
       s_locals.GPUSTAT.ready_to_send_vram = false;
-      s_locals.GPUSTAT.ready_to_receive_dma = (s_locals.fifo.GetSize() < s_locals.fifo_size);
+      s_locals.GPUSTAT.ready_to_receive_dma = (s_locals.fifo.GetSize() < FIFO_SIZE);
       break;
 
     case BlitterState::ReadingVRAM:
@@ -850,13 +936,18 @@ void GPU::UpdateDMARequest()
 
     case BlitterState::DrawingPolyLine:
       s_locals.GPUSTAT.ready_to_send_vram = false;
-      s_locals.GPUSTAT.ready_to_receive_dma = (s_locals.fifo.GetSize() < s_locals.fifo_size);
+      s_locals.GPUSTAT.ready_to_receive_dma = (s_locals.fifo.GetSize() < FIFO_SIZE);
       break;
 
     default:
       UnreachableCode();
       break;
   }
+
+  // Polygons hold bit 28 through setup, and quads through their first triangle. Holds within the run-ahead window are
+  // never recorded, since commands execute that far ahead anyway.
+  const bool dreq_held = (s_locals.dreq_hold_ticks > 0);
+  s_locals.GPUSTAT.ready_to_receive_dma &= !dreq_held;
 
   bool dma_request;
   switch (s_locals.GPUSTAT.dma_direction)
@@ -866,8 +957,19 @@ void GPU::UpdateDMARequest()
       break;
 
     case GPUDMADirection::FIFO:
-      dma_request = s_locals.GPUSTAT.ready_to_receive_dma;
-      break;
+    {
+      if (s_locals.blitter_state != BlitterState::Idle)
+      {
+        dma_request = s_locals.GPUSTAT.ready_to_receive_dma;
+        break;
+      }
+
+      // Not full until enough words are queued. A held polygon keeps some of its slots until the release.
+      const u32 held_words = dreq_held ? s_GP0_command_table[s_locals.render_command.bits >> 24].held_words : 0;
+      dma_request = ((s_locals.fifo.GetSize() + held_words) < FIFO_MODE_FULL_WORDS ||
+                     s_locals.fifo.GetSize() < s_locals.command_total_words);
+    }
+    break;
 
     case GPUDMADirection::CPUtoGP0:
       dma_request = s_locals.GPUSTAT.ready_to_receive_dma;
@@ -927,7 +1029,7 @@ void GPU::WriteRegister(u32 offset, u32 value)
 
       // FIFO can be overflowed through direct GP0 writes if the command tick event hasn't run, because
       // there's no backpressure applied to the CPU. Instead force the GPU to run and catch up.
-      if (s_locals.fifo.GetSize() >= s_locals.fifo_size) [[unlikely]]
+      if (s_locals.fifo.GetSize() >= FIFO_SIZE) [[unlikely]]
       {
         s_locals.command_tick_event.InvokeEarlyNoReschedule();
 
@@ -1222,9 +1324,6 @@ void GPU::UpdateCRTCConfig(u16 old_vram_width, u16 old_vram_height)
 {
   static constexpr std::array<u16, 8> dot_clock_dividers = {{10, 8, 5, 4, 7, 7, 7, 7}};
   CRTCState& cs = s_locals.crtc_state;
-
-  if (!s_locals.GPUSTAT.vertical_interlace)
-    s_locals.GPUSTAT.interlaced_field = 1u;
 
   const u16 old_vertical_total = cs.vertical_total;
   cs.vertical_total = s_locals.GPUSTAT.pal_mode ? PAL_TOTAL_LINES : NTSC_TOTAL_LINES;
@@ -1559,7 +1658,7 @@ ALWAYS_INLINE_RELEASE TickCount GPU::GetPendingCommandTicks()
   if (!s_locals.command_tick_event.IsActive())
     return 0;
 
-  return SystemTicksToGPUTicks(s_locals.command_tick_event.GetTicksSinceLastExecution());
+  return s_locals.command_tick_event.GetTicksSinceLastExecution();
 }
 
 ALWAYS_INLINE_RELEASE TickCount GPU::GetTicksUntilLine(u32 line)
@@ -1680,7 +1779,13 @@ bool GPU::SetCRTCVBlank(bool new_vblank)
 
 ALWAYS_INLINE_RELEASE bool GPU::IsCommandCompletionPending()
 {
-  return (s_locals.pending_command_ticks > 0 && GetPendingCommandTicks() >= s_locals.pending_command_ticks);
+  if (s_locals.pending_command_ticks <= 0)
+    return false;
+
+  // also sync if the DMA request hold has expired, so that bit 28 polling sees the release
+  const TickCount elapsed = GetPendingCommandTicks();
+  return (elapsed >= s_locals.pending_command_ticks ||
+          (s_locals.dreq_hold_ticks > 0 && elapsed >= s_locals.dreq_hold_ticks));
 }
 
 void GPU::CRTCTickEvent(void*, TickCount ticks)
@@ -1763,23 +1868,23 @@ void GPU::CRTCTickEvent(void*, TickCount ticks)
     if (reached_start && reached_end && end_line < start_line)
       SetCRTCVBlank(false);
 
+    // the 480i display field was latched at vblank start, which may have been before the switch to 480i
+    const u8 next_field =
+      s_locals.GPUSTAT.InInterleaved480iMode() ? cs.interlaced_display_field : (cs.interlaced_field ^ 1u);
+
+    // v2 GPUs change bit 13 at the start of the last line, and hold it while interlace is off
+    if (s_locals.GPUSTAT.vertical_interlace && prev_scanline < (cs.vertical_total - 1u) &&
+        cs.current_scanline >= (cs.vertical_total - 1u))
+    {
+      s_locals.GPUSTAT.interlaced_field = BoolToUInt8(!ConvertToBoolUnchecked(next_field));
+    }
+
     // past the end of vblank?
     if (cs.current_scanline == cs.vertical_total)
     {
       // start the new frame
       cs.current_scanline = 0;
-      if (s_locals.GPUSTAT.vertical_interlace)
-      {
-        // the 480i display field was latched at vblank start, which may have been before the switch to 480i
-        cs.interlaced_field =
-          s_locals.GPUSTAT.InInterleaved480iMode() ? cs.interlaced_display_field : (cs.interlaced_field ^ 1u);
-        s_locals.GPUSTAT.interlaced_field = BoolToUInt8(!ConvertToBoolUnchecked(cs.interlaced_field));
-      }
-      else
-      {
-        cs.interlaced_field = 0;
-        s_locals.GPUSTAT.interlaced_field = 1u;
-      }
+      cs.interlaced_field = s_locals.GPUSTAT.vertical_interlace ? next_field : 0;
     }
   }
 
@@ -1817,7 +1922,8 @@ void GPU::CRTCTickEvent(void*, TickCount ticks)
 
 void GPU::CommandTickEvent(void*, TickCount ticks)
 {
-  s_locals.pending_command_ticks -= SystemTicksToGPUTicks(ticks);
+  s_locals.pending_command_ticks -= ticks;
+  s_locals.dreq_hold_ticks = std::max(s_locals.dreq_hold_ticks - ticks, 0);
 
   s_locals.executing_commands = true;
   ExecuteCommands();
@@ -1837,11 +1943,16 @@ void GPU::UpdateCommandTickEvent()
   if (s_locals.pending_command_ticks <= 0)
   {
     s_locals.pending_command_ticks = 0;
+    s_locals.dreq_hold_ticks = 0;
     s_locals.command_tick_event.Deactivate();
   }
   else
   {
-    s_locals.command_tick_event.SetIntervalAndSchedule(GPUTicksToSystemTicks(s_locals.pending_command_ticks));
+    // Wake up early to release the DMA request if a polygon is holding it.
+    // Both are relative to the last execution, so take off the time that has passed since then.
+    const TickCount ticks =
+      (s_locals.dreq_hold_ticks > 0) ? s_locals.dreq_hold_ticks : s_locals.pending_command_ticks;
+    s_locals.command_tick_event.SetIntervalAndSchedule(std::max(ticks - GetPendingCommandTicks(), 1));
   }
 }
 
@@ -1853,8 +1964,8 @@ u8 GPU::UpdateOrGetGPUBusyPct()
 
   const double busy_frac =
     static_cast<double>(s_locals.active_ticks_since_last_update) /
-    static_cast<double>(SystemTicksToGPUTicks(System::ScaleTicksToOverclock(System::MASTER_CLOCK)) *
-                        (ComputeVerticalFrequency() / (s_locals.GPUSTAT.pal_mode ? 50.0f : 60.0f)));
+    (static_cast<double>(System::ScaleTicksToOverclock(System::MASTER_CLOCK)) *
+     (ComputeVerticalFrequency() / (s_locals.GPUSTAT.pal_mode ? 50.0f : 60.0f)));
   const double usage_pct = busy_frac * 100.0;
 
   DEBUG_LOG("PSX GPU Usage: {:.2f}% [{:.0f} cycles avg per frame]", usage_pct,
@@ -2007,7 +2118,7 @@ u32 GPU::ReadGPUREAD()
 
 void GPU::WriteGP1(u32 value)
 {
-  const u32 command = (value >> 24) & 0x3Fu;
+  const u32 command = value >> 24;
   const u32 param = value & UINT32_C(0x00FFFFFF);
   switch (command)
   {
@@ -2040,6 +2151,7 @@ void GPU::WriteGP1(u32 value)
       s_locals.polyline_buffer.clear();
       s_locals.blit_remaining_words = 0;
       s_locals.pending_command_ticks = 0;
+      s_locals.dreq_hold_ticks = 0;
       s_locals.command_tick_event.Deactivate();
       InvalidateCLUT();
       UpdateDMARequest();
@@ -2163,30 +2275,16 @@ void GPU::WriteGP1(u32 value)
     }
     break;
 
-    case 0x10:
-    case 0x11:
-    case 0x12:
-    case 0x13:
-    case 0x14:
-    case 0x15:
-    case 0x16:
-    case 0x17:
-    case 0x18:
-    case 0x19:
-    case 0x1A:
-    case 0x1B:
-    case 0x1C:
-    case 0x1D:
-    case 0x1E:
-    case 0x1F:
+    default:
     {
-      HandleGetGPUInfoCommand(value);
+      // GP1(10h) ignores command bits 24-27 and 30-31, every other command decodes the full byte,
+      // so 40h..FFh are not mirrors of 00h..3Fh (measured on v0 and v2 GPUs).
+      if ((command & 0x30u) == 0x10u) [[likely]]
+        HandleGetGPUInfoCommand(value);
+      else
+        DEV_LOG("Unimplemented GP1 command 0x{:02X}", command);
     }
     break;
-
-    [[unlikely]] default:
-      ERROR_LOG("Unimplemented GP1 command 0x{:02X}", command);
-      break;
   }
 }
 
@@ -2766,63 +2864,6 @@ bool GPU::DumpVRAMToFile(std::string path, u32 width, u32 height, u32 stride, co
   return image.SaveToFile(path.c_str(), Image::DEFAULT_SAVE_QUALITY, error);
 }
 
-static constexpr GPU::GP0CommandHandlerTable s_GP0_command_handler_table = []() constexpr {
-  GPU::GP0CommandHandlerTable table = {};
-  for (u32 i = 0; i < static_cast<u32>(table.size()); i++)
-    table[i] = &GPU::HandleUnknownGP0Command;
-  table[0x00] = &GPU::HandleNOPCommand;
-  table[0x01] = &GPU::HandleClearCacheCommand;
-  table[0x02] = &GPU::HandleFillRectangleCommand;
-  table[0x03] = &GPU::HandleNOPCommand;
-  for (u32 i = 0x04; i <= 0x1E; i++)
-    table[i] = &GPU::HandleNOPCommand;
-  table[0x1F] = &GPU::HandleInterruptRequestCommand;
-  for (u32 i = 0x20; i <= 0x7F; i++)
-  {
-    switch (static_cast<GPUPrimitive>((i >> 5) & 0x03))
-    {
-      case GPUPrimitive::Polygon:
-        table[i] = &GPU::HandleRenderPolygonCommand;
-        break;
-      case GPUPrimitive::Line:
-        table[i] = (i & 0x08) ? &GPU::HandleRenderPolyLineCommand : &GPU::HandleRenderLineCommand;
-        break;
-      case GPUPrimitive::Rectangle:
-        table[i] = &GPU::HandleRenderRectangleCommand;
-        break;
-      default:
-        table[i] = &GPU::HandleUnknownGP0Command;
-        break;
-    }
-  }
-  table[0xE0] = &GPU::HandleNOPCommand;
-  table[0xE1] = &GPU::HandleSetDrawModeCommand;
-  table[0xE2] = &GPU::HandleSetTextureWindowCommand;
-  table[0xE3] = &GPU::HandleSetDrawingAreaTopLeftCommand;
-  table[0xE4] = &GPU::HandleSetDrawingAreaBottomRightCommand;
-  table[0xE5] = &GPU::HandleSetDrawingOffsetCommand;
-  table[0xE6] = &GPU::HandleSetMaskBitCommand;
-  for (u32 i = 0xE7; i <= 0xEF; i++)
-    table[i] = &GPU::HandleNOPCommand;
-  for (u32 i = 0x80; i <= 0x9F; i++)
-    table[i] = &GPU::HandleCopyRectangleVRAMToVRAMCommand;
-  for (u32 i = 0xA0; i <= 0xBF; i++)
-    table[i] = &GPU::HandleCopyRectangleCPUToVRAMCommand;
-  for (u32 i = 0xC0; i <= 0xDF; i++)
-    table[i] = &GPU::HandleCopyRectangleVRAMToCPUCommand;
-
-  table[0xFF] = &GPU::HandleNOPCommand;
-
-  return table;
-}();
-
-#define CHECK_COMMAND_SIZE(num_words)                                                                                  \
-  if (s_locals.fifo.GetSize() < num_words)                                                                             \
-  {                                                                                                                    \
-    s_locals.command_total_words = num_words;                                                                          \
-    return false;                                                                                                      \
-  }
-
 static constexpr u32 ReplaceZero(u32 value, u32 value_for_zero)
 {
   return value == 0 ? value_for_zero : value;
@@ -2884,11 +2925,15 @@ void GPU::TryExecuteCommands()
     {
       case BlitterState::Idle:
       {
-        const u32 command = FifoPeek(0) >> 24;
-        if (s_GP0_command_handler_table[command]())
-          continue;
-        else
+        const GP0Command& command = s_GP0_command_table[FifoPeek(0) >> 24];
+        if (s_locals.fifo.GetSize() < command.num_words)
+        {
+          s_locals.command_total_words = command.num_words;
           return;
+        }
+
+        command.handler();
+        continue;
       }
 
       case BlitterState::WritingVRAM:
@@ -2968,7 +3013,7 @@ void GPU::EndCommand()
   s_locals.command_total_words = 0;
 }
 
-bool GPU::HandleUnknownGP0Command()
+void GPU::HandleUnknownGP0Command()
 {
   const u32 command = FifoPeek() >> 24;
   ERROR_LOG("Unimplemented GP0 command 0x{:02X}", command);
@@ -2980,17 +3025,15 @@ bool GPU::HandleUnknownGP0Command()
 
   s_locals.fifo.RemoveOne();
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleNOPCommand()
+void GPU::HandleNOPCommand()
 {
   s_locals.fifo.RemoveOne();
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleClearCacheCommand()
+void GPU::HandleClearCacheCommand()
 {
   DEBUG_LOG("GP0 clear cache");
   InvalidateCLUT();
@@ -2998,10 +3041,9 @@ bool GPU::HandleClearCacheCommand()
   s_locals.fifo.RemoveOne();
   AddCommandTicks(1);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleInterruptRequestCommand()
+void GPU::HandleInterruptRequestCommand()
 {
   DEBUG_LOG("GP0 interrupt request");
 
@@ -3011,29 +3053,26 @@ bool GPU::HandleInterruptRequestCommand()
   s_locals.fifo.RemoveOne();
   AddCommandTicks(1);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleSetDrawModeCommand()
+void GPU::HandleSetDrawModeCommand()
 {
   const u32 param = FifoPop() & 0x00FFFFFFu;
   DEBUG_LOG("Set draw mode {:08X}", param);
   SetDrawMode(Truncate16(param));
   AddCommandTicks(1);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleSetTextureWindowCommand()
+void GPU::HandleSetTextureWindowCommand()
 {
   const u32 param = FifoPop() & 0x00FFFFFFu;
   SetTextureWindow(param);
   AddCommandTicks(1);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleSetDrawingAreaTopLeftCommand()
+void GPU::HandleSetDrawingAreaTopLeftCommand()
 {
   const u32 param = FifoPop() & 0x00FFFFFFu;
   const u32 left = param & DRAWING_AREA_COORD_MASK;
@@ -3049,10 +3088,9 @@ bool GPU::HandleSetDrawingAreaTopLeftCommand()
 
   AddCommandTicks(1);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleSetDrawingAreaBottomRightCommand()
+void GPU::HandleSetDrawingAreaBottomRightCommand()
 {
   const u32 param = FifoPop() & 0x00FFFFFFu;
 
@@ -3069,10 +3107,9 @@ bool GPU::HandleSetDrawingAreaBottomRightCommand()
 
   AddCommandTicks(1);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleSetDrawingOffsetCommand()
+void GPU::HandleSetDrawingOffsetCommand()
 {
   const u32 param = FifoPop() & 0x00FFFFFFu;
   const s32 x = SignExtendN<11, s32>(param & 0x7FFu);
@@ -3086,10 +3123,9 @@ bool GPU::HandleSetDrawingOffsetCommand()
 
   AddCommandTicks(1);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleSetMaskBitCommand()
+void GPU::HandleSetMaskBitCommand()
 {
   const u32 param = FifoPop() & 0x00FFFFFFu;
 
@@ -3101,7 +3137,6 @@ bool GPU::HandleSetMaskBitCommand()
 
   AddCommandTicks(1);
   EndCommand();
-  return true;
 }
 
 void GPU::PrepareForDraw()
@@ -3167,14 +3202,20 @@ ALWAYS_INLINE_RELEASE void GPU::AddDrawTriangleTicks(GSVector2i v1, GSVector2i v
   v3 = v3.sat_s32(clamp_min, clamp_max);
 
   TickCount pixels = std::abs((v1.x * v2.y + v2.x * v3.y + v3.x * v1.y - v1.x * v3.y - v2.x * v1.y - v3.x * v2.y) / 2);
-  if (textured)
-    pixels += pixels;
-  if (semitransparent || s_locals.GPUSTAT.check_mask_before_draw)
-    pixels += (pixels + 1) / 2;
+  TickCount rows = std::max({v1.y, v2.y, v3.y}) - std::min({v1.y, v2.y, v3.y});
   if (s_locals.GPUSTAT.SkipDrawingToActiveField())
+  {
     pixels /= 2;
+    rows /= 2;
+  }
 
-  AddCommandTicks(pixels);
+  // Measured v2 GPU costs, assuming textures are cached. Pixel costs are in quarter cycles: flat pixels are drawn two
+  // per clock, or 0.75 cycles when semi-transparent, and shaded or textured pixels take a cycle.
+  const bool semi = (semitransparent || s_locals.GPUSTAT.check_mask_before_draw);
+  const bool flat = !shaded && !textured;
+  const TickCount pixel_quarters = flat ? (semi ? 3 : 2) : 4;
+  const TickCount row_ticks = 2 + (semi ? (flat ? 3 : 1) : 0);
+  AddCommandTicks((pixels * pixel_quarters + 3) / 4 + rows * row_ticks);
 }
 
 ALWAYS_INLINE_RELEASE void GPU::AddDrawRectangleTicks(const GSVector4i rect, bool textured, bool semitransparent)
@@ -3184,13 +3225,18 @@ ALWAYS_INLINE_RELEASE void GPU::AddDrawRectangleTicks(const GSVector4i rect, boo
   u32 drawn_width = clamped_rect.width();
   u32 drawn_height = clamped_rect.height();
 
-  u32 ticks_per_row = drawn_width;
+  // Measured v2 GPU costs, in eighths of a cycle. Opaque rectangles are drawn in pixel pairs at two pixels per clock,
+  // so an odd width costs the same as the even width below it. Semi-transparency adds a quarter cycle per pixel.
+  const bool semi = (semitransparent || s_locals.GPUSTAT.check_mask_before_draw);
+  const u32 pixels_per_row = semi ? drawn_width : (drawn_width & ~1u);
+  u32 eighths_per_row = (semi ? 64 : 16) + pixels_per_row * (semi ? 6 : 4);
   if (textured)
   {
+    // Texels missing the cache cost 1.25, 1.875 and 3 cycles per pixel in total at 4, 8 and 15 bits.
     switch (s_locals.draw_mode_reg.texture_mode)
     {
       case GPUTextureMode::Palette4Bit:
-        ticks_per_row += drawn_width;
+        eighths_per_row += drawn_width * 6;
         break;
 
       case GPUTextureMode::Palette8Bit:
@@ -3198,11 +3244,11 @@ ALWAYS_INLINE_RELEASE void GPU::AddDrawRectangleTicks(const GSVector4i rect, boo
         // Texture cache reload every 2 pixels, reads in 8 bytes (assuming 4x2). Cache only reloads if the
         // draw width is greater than 128, otherwise the cache hits between rows.
         if (drawn_width > 128)
-          ticks_per_row += (drawn_width / 4) * 8;
+          eighths_per_row += drawn_width * 11;
         else if ((drawn_width * drawn_height) > 2048)
-          ticks_per_row += ((drawn_width / 4) * (4 * (128 / drawn_width)));
+          eighths_per_row += ((drawn_width / 4) * (4 * (128 / drawn_width))) * 11 / 2;
         else
-          ticks_per_row += drawn_width;
+          eighths_per_row += drawn_width * 11 / 2;
       }
       break;
 
@@ -3211,11 +3257,11 @@ ALWAYS_INLINE_RELEASE void GPU::AddDrawRectangleTicks(const GSVector4i rect, boo
       {
         // Same as above, except with 2x2 blocks instead of 4x2.
         if (drawn_width > 128)
-          ticks_per_row += (drawn_width / 2) * 8;
+          eighths_per_row += drawn_width * 20;
         else if ((drawn_width * drawn_height) > 1024)
-          ticks_per_row += ((drawn_width / 4) * (8 * (128 / drawn_width)));
+          eighths_per_row += ((drawn_width / 4) * (8 * (128 / drawn_width))) * 5;
         else
-          ticks_per_row += drawn_width;
+          eighths_per_row += drawn_width * 5;
       }
       break;
 
@@ -3223,16 +3269,21 @@ ALWAYS_INLINE_RELEASE void GPU::AddDrawRectangleTicks(const GSVector4i rect, boo
     }
   }
 
-  if (semitransparent || s_locals.GPUSTAT.check_mask_before_draw)
-    ticks_per_row += (drawn_width + 1u) / 2u;
+  // Rectangles narrower than 8 pixels cost about 4.5 cycles per row.
+  if (drawn_width < 8 && drawn_width > 0)
+    eighths_per_row = std::max(eighths_per_row, 36u);
   if (s_locals.GPUSTAT.SkipDrawingToActiveField())
     drawn_height = std::max<u32>(drawn_height / 2, 1u);
 
-  AddCommandTicks(ticks_per_row * drawn_height);
+  AddCommandTicks((eighths_per_row * drawn_height + 7) / 8);
 }
 
-ALWAYS_INLINE_RELEASE void GPU::AddDrawLineTicks(const GSVector4i rect, bool shaded)
+ALWAYS_INLINE_RELEASE void GPU::AddDrawLineTicks(const GSVector4i rect, bool shaded, bool semitransparent)
 {
+  // Measured v2 GPU costs: a cycle per pixel along the major axis, plus 4 cycles (6.5 when semi-transparent) for each
+  // row the line crosses. Gouraud shading adds about 40-90 cycles of setup.
+  AddCommandTicks(shaded ? 124 : 60);
+
   const GSVector4i clamped_rect = rect.rintersect(s_locals.clamped_drawing_area);
 
   // Needed because we're not multiplying either dimension.
@@ -3241,36 +3292,43 @@ ALWAYS_INLINE_RELEASE void GPU::AddDrawLineTicks(const GSVector4i rect, bool sha
 
   const u32 drawn_width = clamped_rect.width();
   u32 drawn_height = clamped_rect.height();
+  u32 major = std::max(drawn_width, drawn_height);
 
+  // Pixels on the skipped field's rows are not drawn either.
   if (s_locals.GPUSTAT.SkipDrawingToActiveField())
-    drawn_height = std::max<u32>(drawn_height / 2, 1u);
+  {
+    const u32 field_height = std::max<u32>(drawn_height / 2, 1u);
+    major = major * field_height / drawn_height;
+    drawn_height = field_height;
+  }
 
-  AddCommandTicks(std::max(drawn_width, drawn_height));
+  const bool semi = (semitransparent || s_locals.GPUSTAT.check_mask_before_draw);
+  AddCommandTicks((major * 4 + drawn_height * (semi ? 26 : 16) + 3) / 4);
 }
 
-bool GPU::HandleRenderPolygonCommand()
+void GPU::HandleRenderPolygonCommand()
 {
   const GPURenderCommand rc{FifoPeek(0)};
-
-  // shaded vertices use the colour from the first word for the first vertex
-  const u32 words_per_vertex = 1 + BoolToUInt32(rc.texture_enable) + BoolToUInt32(rc.shading_enable);
   const u32 num_vertices = rc.quad_polygon ? 4 : 3;
-  const u32 total_words = words_per_vertex * num_vertices + BoolToUInt32(!rc.shading_enable);
-  CHECK_COMMAND_SIZE(total_words);
 
   if (IsInterlacedRenderingEnabled() && IsCRTCScanlinePending())
     SynchronizeCRTC();
 
-  // setup time
-  static constexpr u16 s_setup_time[2][2][2] = {{{46, 226}, {334, 496}}, {{82, 262}, {370, 532}}};
+  // setup time, measured on the v2 GPU with cached textures
+  static constexpr u16 s_setup_time[2][2][2] = {{{50, 130}, {200, 295}}, {{50, 215}, {335, 495}}};
   const TickCount setup_ticks = static_cast<TickCount>(ZeroExtend32(
     s_setup_time[BoolToUInt8(rc.quad_polygon)][BoolToUInt8(rc.shading_enable)][BoolToUInt8(rc.texture_enable)]));
-  AddCommandTicks(setup_ticks);
 
-  TRACE_LOG("Render {} {} {} {} polygon ({} verts, {} words per vert), {} setup ticks",
-            rc.quad_polygon ? "four-point" : "three-point", rc.transparency_enable ? "semi-transparent" : "opaque",
-            rc.texture_enable ? "textured" : "non-textured", rc.shading_enable ? "shaded" : "monochrome", num_vertices,
-            words_per_vertex, setup_ticks);
+  // Polygons hold the DMA request through setup, and quads through their first triangle. Holds that fit in the
+  // run-ahead window are ignored, otherwise the request is held until the release point.
+  const TickCount hold_start_ticks = s_locals.pending_command_ticks;
+  AddCommandTicks(setup_ticks);
+  if ((s_locals.pending_command_ticks - hold_start_ticks) > s_locals.max_run_ahead)
+    s_locals.dreq_hold_ticks = s_locals.pending_command_ticks;
+
+  TRACE_LOG("Render {} {} {} {} polygon ({} verts), {} setup ticks", rc.quad_polygon ? "four-point" : "three-point",
+            rc.transparency_enable ? "semi-transparent" : "opaque", rc.texture_enable ? "textured" : "non-textured",
+            rc.shading_enable ? "shaded" : "monochrome", num_vertices, setup_ticks);
 
   // set draw state up
   // TODO: Get rid of SetTexturePalette() and just fill it as needed
@@ -3352,7 +3410,7 @@ bool GPU::HandleRenderPolygonCommand()
       if (!rc.quad_polygon)
       {
         EndCommand();
-        return true;
+        return;
       }
     }
     else
@@ -3366,6 +3424,10 @@ bool GPU::HandleRenderPolygonCommand()
     // quads
     if (rc.quad_polygon)
     {
+      // The request is held until the first triangle is drawn, even if the second triangle is culled.
+      if ((s_locals.pending_command_ticks - hold_start_ticks) > s_locals.max_run_ahead)
+        s_locals.dreq_hold_ticks = s_locals.pending_command_ticks;
+
       const GSVector2i v3 = GSVector2i::load<false>(&cmd->vertices[3].native_x);
       const GSVector4i draw_rect_123 = GSVector4i(min_pos_12.min_s32(v3))
                                          .upl64(GSVector4i(max_pos_12.max_s32(v3)))
@@ -3383,7 +3445,7 @@ bool GPU::HandleRenderPolygonCommand()
         if (first_tri_culled)
         {
           EndCommand();
-          return true;
+          return;
         }
 
         // Remove second part of quad.
@@ -3450,7 +3512,7 @@ bool GPU::HandleRenderPolygonCommand()
       if (!rc.quad_polygon)
       {
         EndCommand();
-        return true;
+        return;
       }
     }
     else
@@ -3461,6 +3523,10 @@ bool GPU::HandleRenderPolygonCommand()
     // quads
     if (rc.quad_polygon)
     {
+      // The request is held until the first triangle is drawn, even if the second triangle is culled.
+      if ((s_locals.pending_command_ticks - hold_start_ticks) > s_locals.max_run_ahead)
+        s_locals.dreq_hold_ticks = s_locals.pending_command_ticks;
+
       const GSVector2i v3 = GSVector2i::load<false>(&cmd->vertices[3].x);
       const GSVector4i draw_rect_123 = GSVector4i(min_pos_12.min_s32(v3))
                                          .upl64(GSVector4i(max_pos_12.max_s32(v3)))
@@ -3477,7 +3543,7 @@ bool GPU::HandleRenderPolygonCommand()
         if (first_tri_culled)
         {
           EndCommand();
-          return true;
+          return;
         }
 
         // Remove second part of quad.
@@ -3505,16 +3571,11 @@ bool GPU::HandleRenderPolygonCommand()
   }
 
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleRenderRectangleCommand()
+void GPU::HandleRenderRectangleCommand()
 {
   const GPURenderCommand rc{FifoPeek(0)};
-  const u32 total_words =
-    2 + BoolToUInt32(rc.texture_enable) + BoolToUInt32(rc.rectangle_size == GPUDrawRectangleSize::Variable);
-
-  CHECK_COMMAND_SIZE(total_words);
 
   if (IsInterlacedRenderingEnabled() && IsCRTCScanlinePending())
     SynchronizeCRTC();
@@ -3525,12 +3586,11 @@ bool GPU::HandleRenderRectangleCommand()
     UpdateCLUTIfNeeded(s_locals.draw_mode_reg.texture_mode, s_locals.texture_palette_reg);
   }
 
-  const TickCount setup_ticks = 16;
+  const TickCount setup_ticks = 50;
   AddCommandTicks(setup_ticks);
 
-  TRACE_LOG("Render {} {} {} rectangle ({} words), {} setup ticks",
-            rc.transparency_enable ? "semi-transparent" : "opaque", rc.texture_enable ? "textured" : "non-textured",
-            rc.shading_enable ? "shaded" : "monochrome", total_words, setup_ticks);
+  TRACE_LOG("Render {} {} {} rectangle, {} setup ticks", rc.transparency_enable ? "semi-transparent" : "opaque",
+            rc.texture_enable ? "textured" : "non-textured", rc.shading_enable ? "shaded" : "monochrome", setup_ticks);
 
   s_locals.render_command.bits = rc.bits;
   s_locals.fifo.RemoveOne();
@@ -3584,20 +3644,17 @@ bool GPU::HandleRenderRectangleCommand()
 
   GPUBackend::PushCommand(cmd);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleRenderLineCommand()
+void GPU::HandleRenderLineCommand()
 {
   const GPURenderCommand rc{FifoPeek(0)};
-  const u32 total_words = rc.shading_enable ? 4 : 3;
-  CHECK_COMMAND_SIZE(total_words);
 
   if (IsInterlacedRenderingEnabled() && IsCRTCScanlinePending())
     SynchronizeCRTC();
 
-  TRACE_LOG("Render {} {} line ({} total words)", rc.transparency_enable ? "semi-transparent" : "opaque",
-            rc.shading_enable ? "shaded" : "monochrome", total_words);
+  TRACE_LOG("Render {} {} line", rc.transparency_enable ? "semi-transparent" : "opaque",
+            rc.shading_enable ? "shaded" : "monochrome");
 
   s_locals.render_command.bits = rc.bits;
   s_locals.fifo.RemoveOne();
@@ -3638,10 +3695,10 @@ bool GPU::HandleRenderLineCommand()
     {
       DEBUG_LOG("Culling too-large line: {} - {}", v0, v1);
       EndCommand();
-      return true;
+      return;
     }
 
-    AddDrawLineTicks(rect, rc.shading_enable);
+    AddDrawLineTicks(rect, rc.shading_enable, rc.transparency_enable);
     GPUBackend::PushCommand(cmd);
   }
   else
@@ -3683,23 +3740,21 @@ bool GPU::HandleRenderLineCommand()
     {
       DEBUG_LOG("Culling too-large line: {} - {}", v0, v1);
       EndCommand();
-      return true;
+      return;
     }
 
-    AddDrawLineTicks(rect, rc.shading_enable);
+    AddDrawLineTicks(rect, rc.shading_enable, rc.transparency_enable);
     GPUBackend::PushCommand(cmd);
   }
 
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleRenderPolyLineCommand()
+void GPU::HandleRenderPolyLineCommand()
 {
   // always read the first two vertices, we test for the terminator after that
   const GPURenderCommand rc{FifoPeek(0)};
   const u32 min_words = rc.shading_enable ? 4 : 3;
-  CHECK_COMMAND_SIZE(min_words);
 
   if (IsInterlacedRenderingEnabled() && IsCRTCScanlinePending())
     SynchronizeCRTC();
@@ -3721,7 +3776,6 @@ bool GPU::HandleRenderPolyLineCommand()
   // polyline goes via a different path through the blit buffer
   s_locals.blitter_state = BlitterState::DrawingPolyLine;
   s_locals.command_total_words = 0;
-  return true;
 }
 
 void GPU::FinishPolyline()
@@ -3730,6 +3784,9 @@ void GPU::FinishPolyline()
 
   const u32 num_vertices = GetPolyLineVertexCount();
   DebugAssert(num_vertices >= 2);
+
+  // Poly-lines hold the DMA request until the last segment starts, see HandleRenderPolygonCommand().
+  const TickCount hold_start_ticks = s_locals.pending_command_ticks;
 
   // Keep expanded line vertices within the backend's index/depth limits and command queue capacity.
   static constexpr u32 MAX_SEGMENTS_PER_COMMAND = 1024;
@@ -3773,6 +3830,9 @@ void GPU::FinishPolyline()
 
         const GSVector2i start_pos = GSVector2i::load<false>(&start.native_x);
         const GSVector2i end_pos = GSVector2i::load<false>(&end.native_x);
+        if ((first_vertex + i) == (num_vertices - 1) &&
+            (s_locals.pending_command_ticks - hold_start_ticks) > s_locals.max_run_ahead)
+          s_locals.dreq_hold_ticks = s_locals.pending_command_ticks;
         const GSVector4i rect =
           GSVector4i::xyxy(start_pos.min_s32(end_pos), start_pos.max_s32(end_pos)).add32(GSVector4i::cxpr(0, 0, 1, 1));
         if (rect.width() > MAX_PRIMITIVE_WIDTH || rect.height() > MAX_PRIMITIVE_HEIGHT)
@@ -3781,7 +3841,7 @@ void GPU::FinishPolyline()
         }
         else
         {
-          AddDrawLineTicks(rect, s_locals.render_command.shading_enable);
+          AddDrawLineTicks(rect, s_locals.render_command.shading_enable, s_locals.render_command.transparency_enable);
 
           cmd->vertices[out_vertex_count++] = start;
           cmd->vertices[out_vertex_count++] = end;
@@ -3825,6 +3885,9 @@ void GPU::FinishPolyline()
         const GPUVertexPosition vp{Truncate32(s_locals.polyline_buffer[buffer_pos++])};
         const GSVector2i end_pos = GSVector2i(vp.x, vp.y).add32(draw_offset);
 
+        if ((first_vertex + i) == (num_vertices - 1) &&
+            (s_locals.pending_command_ticks - hold_start_ticks) > s_locals.max_run_ahead)
+          s_locals.dreq_hold_ticks = s_locals.pending_command_ticks;
         const GSVector4i rect =
           GSVector4i::xyxy(start_pos.min_s32(end_pos), start_pos.max_s32(end_pos)).add32(GSVector4i::cxpr(0, 0, 1, 1));
         if (rect.width() > MAX_PRIMITIVE_WIDTH || rect.height() > MAX_PRIMITIVE_HEIGHT)
@@ -3833,7 +3896,7 @@ void GPU::FinishPolyline()
         }
         else
         {
-          AddDrawLineTicks(rect, s_locals.render_command.shading_enable);
+          AddDrawLineTicks(rect, s_locals.render_command.shading_enable, s_locals.render_command.transparency_enable);
 
           GPUBackendDrawLineCommand::Vertex* out_vertex = &cmd->vertices[out_vertex_count];
           out_vertex_count += 2;
@@ -3858,9 +3921,8 @@ void GPU::FinishPolyline()
   }
 }
 
-bool GPU::HandleFillRectangleCommand()
+void GPU::HandleFillRectangleCommand()
 {
-  CHECK_COMMAND_SIZE(3);
 
   if (IsInterlacedRenderingEnabled() && IsCRTCScanlinePending())
     SynchronizeCRTC();
@@ -3886,14 +3948,13 @@ bool GPU::HandleFillRectangleCommand()
     GPUBackend::PushCommand(cmd);
   }
 
-  AddCommandTicks(46 + ((width / 8) + 9) * height);
+  // Measured v2 GPU cost.
+  AddCommandTicks(10 + 5 * height + (width * height) / 12);
   EndCommand();
-  return true;
 }
 
-bool GPU::HandleCopyRectangleCPUToVRAMCommand()
+void GPU::HandleCopyRectangleCPUToVRAMCommand()
 {
-  CHECK_COMMAND_SIZE(3);
   s_locals.fifo.RemoveOne();
 
   const u32 coords = FifoPop();
@@ -3906,7 +3967,7 @@ bool GPU::HandleCopyRectangleCPUToVRAMCommand()
   {
     ERROR_LOG("Ignoring likely-invalid VRAM write to ({},{})", (coords & VRAM_WIDTH_MASK),
               ((coords >> 16) & VRAM_HEIGHT_MASK));
-    return true;
+    return;
   }
 
   const u32 dst_x = coords & VRAM_WIDTH_MASK;
@@ -3927,7 +3988,6 @@ bool GPU::HandleCopyRectangleCPUToVRAMCommand()
   s_locals.vram_transfer.y = Truncate16(dst_y);
   s_locals.vram_transfer.width = Truncate16(copy_width);
   s_locals.vram_transfer.height = Truncate16(copy_height);
-  return true;
 }
 
 void GPU::FinishVRAMWrite()
@@ -3982,9 +4042,8 @@ void GPU::FinishVRAMWrite()
   s_locals.blitter_state = BlitterState::Idle;
 }
 
-bool GPU::HandleCopyRectangleVRAMToCPUCommand()
+void GPU::HandleCopyRectangleVRAMToCPUCommand()
 {
-  CHECK_COMMAND_SIZE(3);
   s_locals.fifo.RemoveOne();
 
   s_locals.vram_transfer.x = Truncate16(FifoPeek() & VRAM_WIDTH_MASK);
@@ -4028,13 +4087,10 @@ bool GPU::HandleCopyRectangleVRAMToCPUCommand()
   // toss the entire read in the recorded trace. we might want to change this to mirroring GPUREAD in the future..
   if (s_locals.gpu_dump) [[unlikely]]
     s_locals.gpu_dump->WriteDiscardVRAMRead(s_locals.vram_transfer.width, s_locals.vram_transfer.height);
-
-  return true;
 }
 
-bool GPU::HandleCopyRectangleVRAMToVRAMCommand()
+void GPU::HandleCopyRectangleVRAMToVRAMCommand()
 {
-  CHECK_COMMAND_SIZE(4);
   s_locals.fifo.RemoveOne();
 
   const u32 src_x = FifoPeek() & VRAM_WIDTH_MASK;
@@ -4064,9 +4120,9 @@ bool GPU::HandleCopyRectangleVRAMToVRAMCommand()
     GPUBackend::PushCommand(cmd);
   }
 
-  AddCommandTicks(width * height * 2);
+  // Measured v2 GPU cost: 1.25 cycles per pixel, plus 21 cycles for each VRAM page opened, one per 128 pixels of a row.
+  AddCommandTicks(50 + 21 * height * ((width + 127) / 128) + (width * height * 5) / 4);
   EndCommand();
-  return true;
 }
 
 void GPU::DrawDebugStateWindow(float scale)
@@ -4271,6 +4327,7 @@ void GPU::ProcessGPUDumpPacket(GPUDump::PacketType type, const std::span<const u
     do
     {
       s_locals.pending_command_ticks = 0;
+      s_locals.dreq_hold_ticks = 0;
       s_locals.command_tick_event.Deactivate();
       ExecuteCommands();
     } while (s_locals.pending_command_ticks > 0);

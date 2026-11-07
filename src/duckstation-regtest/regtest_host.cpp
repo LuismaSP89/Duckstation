@@ -81,6 +81,7 @@ struct RegTestHostState
 {
   ALIGN_TO_CACHE_LINE Threading::Mutex core_thread_events_mutex;
   std::deque<MoveOnlyFunction<void()>> cpu_thread_events;
+  Threading::ThreadHandle core_thread_handle;
 };
 
 static RegTestHostState s_state;
@@ -132,6 +133,16 @@ bool RegTestHost::InitializeFoldersAndConfig(Error* error)
                     InputManager::InputSourceToString(static_cast<InputSourceType>(i)), false);
 
   return true;
+}
+
+const Threading::ThreadHandle& Host::GetCoreThreadHandle()
+{
+  return RegTestHost::s_state.core_thread_handle;
+}
+
+bool Host::IsOnCoreThread()
+{
+  return RegTestHost::s_state.core_thread_handle.IsCallingThread();
 }
 
 void Host::ReportFatalError(std::string_view title, std::string_view message)
@@ -245,7 +256,7 @@ void Host::OnSystemStarting()
 }
 
 void Host::OnSystemStarted(const std::string& disc_path, const std::string& game_serial, const std::string& game_name,
-                           GameHash game_hash)
+                           GameHash game_hash, const std::string& exe_override)
 {
   INFO_LOG("Disc Path: {}", disc_path);
   INFO_LOG("Game Serial: {}", game_serial);
@@ -294,7 +305,7 @@ void Host::OnPerformanceCountersUpdated(const GPUBackend* gpu_backend)
 }
 
 void Host::OnSystemGameChanged(const std::string& disc_path, const std::string& game_serial,
-                               const std::string& game_name, GameHash hash)
+                               const std::string& game_name, GameHash hash, const std::string& exe_override)
 {
   //
 }
@@ -411,6 +422,12 @@ void RegTestHost::ProcessCoreThreadEvents()
 void Host::RunOnUIThread(MoveOnlyFunction<void()> function)
 {
   RunOnCoreThread(std::move(function));
+}
+
+void Host::QueueAsyncTask(MoveOnlyFunction<void()> function)
+{
+  // Run synchronously for determinism.
+  function();
 }
 
 void Host::RequestResizeHostDisplay(s32 width, s32 height)
@@ -1046,7 +1063,8 @@ int main(int argc, char* argv[])
   if (!RegTestHost::SetNewDataRoot(autoboot->path))
     return EXIT_FAILURE;
 
-  if (!Core::CoreThreadInitialize(true, &error))
+  RegTestHost::s_state.core_thread_handle = Threading::ThreadHandle::GetForCallingThread();
+  if (!Core::CoreThreadInitialize(&error))
   {
     ERROR_LOG("CoreThreadInitialize() failed: {}", error.GetDescription());
     return EXIT_FAILURE;
@@ -1116,6 +1134,7 @@ int main(int argc, char* argv[])
 cleanup:
   RegTestHost::ProcessCoreThreadEvents();
   Core::CoreThreadShutdown();
+  RegTestHost::s_state.core_thread_handle = {};
   Core::ProcessShutdown();
   return result;
 }

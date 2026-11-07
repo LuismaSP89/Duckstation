@@ -65,6 +65,7 @@
 #include <QtCore/QDebug>
 #include <QtCore/QEventLoop>
 #include <QtCore/QFile>
+#include <QtCore/QThreadPool>
 #include <QtCore/QTimer>
 #include <QtCore/QTranslator>
 #include <QtCore/QtPlugin>
@@ -182,6 +183,7 @@ protected:
 struct State
 {
   UIThreadFunctionReceiver* ui_function_receiver = nullptr;
+  QThreadPool async_task_pool;
   QEvent::Type function_event_type = QEvent::None;
   std::unique_ptr<QTimer> settings_save_timer;
   std::vector<QTranslator*> translators;
@@ -204,6 +206,8 @@ struct State
 #endif
 
   std::atomic_bool clipboard_read_done;
+
+  Threading::ThreadHandle core_thread_handle;
 };
 } // namespace
 
@@ -316,6 +320,9 @@ bool QtHost::EarlyProcessStartup()
 
 void QtHost::ProcessShutdown()
 {
+  // Tasks may have been queued from the UI thread after the core thread exited.
+  s_state.async_task_pool.waitForDone();
+
   Core::ProcessShutdown();
 
   // Ensure log is flushed.
@@ -945,6 +952,16 @@ bool QtHost::LoadResources(Error* error)
   return true;
 }
 
+const Threading::ThreadHandle& Host::GetCoreThreadHandle()
+{
+  return QtHost::s_state.core_thread_handle;
+}
+
+bool Host::IsOnCoreThread()
+{
+  return QtHost::s_state.core_thread_handle.IsCallingThread();
+}
+
 void Host::OnSettingsReloaded()
 {
   emit g_core_thread->settingsReloaded();
@@ -1374,13 +1391,13 @@ void Host::OnSystemStarting()
 }
 
 void Host::OnSystemStarted(const std::string& disc_path, const std::string& game_serial, const std::string& game_name,
-                           GameHash hash)
+                           GameHash hash, const std::string& exe_override)
 {
   g_core_thread->stopIdleUpdateTimer();
   g_core_thread->wakeThread();
 
   emit g_core_thread->systemStarted(QString::fromStdString(disc_path), QString::fromStdString(game_serial),
-                                    QString::fromStdString(game_name), hash);
+                                    QString::fromStdString(game_name), hash, QString::fromStdString(exe_override));
 }
 
 void Host::OnSystemPaused()
@@ -1745,6 +1762,11 @@ void Host::RunOnCoreThread(MoveOnlyFunction<void()> function)
 void Host::RunOnUIThread(MoveOnlyFunction<void()> function)
 {
   QCoreApplication::postEvent(QtHost::s_state.ui_function_receiver, new QtHost::FunctionEvent(std::move(function)));
+}
+
+void Host::QueueAsyncTask(MoveOnlyFunction<void()> function)
+{
+  QtHost::s_state.async_task_pool.start(std::move(function));
 }
 
 void Host::RefreshGameListAsync(bool invalidate_cache)
@@ -2221,12 +2243,14 @@ void CoreThread::stopInThread()
 void CoreThread::run()
 {
   m_event_loop = new QEventLoop();
+  QtHost::s_state.core_thread_handle = Threading::ThreadHandle::GetForCallingThread();
 
   // input source setup must happen on emu thread
   {
     Error startup_error;
-    if (!Core::CoreThreadInitialize(false, &startup_error))
+    if (!Core::CoreThreadInitialize(&startup_error))
     {
+      QtHost::s_state.core_thread_handle = {};
       moveToThread(m_ui_thread);
       Host::ReportFatalError("Fatal Startup Error", startup_error.GetDescription());
       return;
@@ -2270,7 +2294,9 @@ void CoreThread::run()
   destroyIdleUpdateTimer();
 
   // and tidy up everything left
+  QtHost::s_state.async_task_pool.waitForDone();
   Core::CoreThreadShutdown();
+  QtHost::s_state.core_thread_handle = {};
 
   // move back to UI thread
   moveToThread(m_ui_thread);
@@ -3149,10 +3175,10 @@ void Host::OnPerformanceCountersUpdated(const GPUBackend* gpu_backend)
 }
 
 void Host::OnSystemGameChanged(const std::string& disc_path, const std::string& game_serial,
-                               const std::string& game_name, GameHash hash)
+                               const std::string& game_name, GameHash hash, const std::string& exe_override)
 {
   emit g_core_thread->systemGameChanged(QString::fromStdString(disc_path), QString::fromStdString(game_serial),
-                                        QString::fromStdString(game_name), hash);
+                                        QString::fromStdString(game_name), hash, QString::fromStdString(exe_override));
 }
 
 void Host::OnSystemUndoStateAvailabilityChanged(bool available, u64 timestamp)
@@ -3603,6 +3629,9 @@ int main(int argc, char* argv[])
 
   // Owned by the application, so it's around for as long as there's an event loop to run functions.
   s_state.ui_function_receiver = new UIThreadFunctionReceiver(&app);
+
+  // Worker threads are dynamically allocated, maximum 8.
+  s_state.async_task_pool.setMaxThreadCount(8);
 
   std::shared_ptr<SystemBootParameters> autoboot;
   if (!ParseCommandLineParametersAndInitializeConfig(app, autoboot))

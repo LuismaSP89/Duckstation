@@ -253,11 +253,16 @@ bool Bus::AllocateMemoryMap(bool export_shared_memory, Error* error)
 
   VERBOSE_LOG("LUTs are mapped at {}.", static_cast<void*>(g_bus.memory_handlers));
   g_bus.memory_handlers_isc = g_bus.memory_handlers + MEMORY_LUT_SLOTS;
+
+  g_bus.ram_size = RAM_DEFAULT_SIZE;
+  g_bus.ram_mask = RAM_DEFAULT_MASK;
   g_bus.ram_mapped_size = RAM_DEFAULT_SIZE;
-  SetHandlers();
 
   Exports::RAM = reinterpret_cast<uintptr_t>(g_bus.unprotected_ram);
+  Exports::RAM_MASK = RAM_DEFAULT_MASK;
+  Exports::RAM_SIZE = RAM_DEFAULT_SIZE;
 
+  SetHandlers();
   return true;
 }
 
@@ -266,6 +271,10 @@ void Bus::ReleaseMemoryMap()
   Exports::RAM = 0;
   Exports::RAM_SIZE = 0;
   Exports::RAM_MASK = 0;
+
+  g_bus.ram_size = 0;
+  g_bus.ram_mask = 0;
+  g_bus.ram_mapped_size = 0;
 
   g_bus.memory_handlers_isc = nullptr;
   if (g_bus.memory_handlers)
@@ -404,9 +413,6 @@ void Bus::Shutdown()
 {
   UnmapFastmemViews();
   CPU::g_state.fastmem_base = nullptr;
-
-  g_bus.ram_mask = 0;
-  g_bus.ram_size = 0;
 }
 
 void Bus::Reset()
@@ -2222,7 +2228,7 @@ void Bus::UpdateMappedRAMSize()
 
   // Retail BIOSes configure an 8MB window, so 16MB is never mapped without patching the BIOS. The register is left
   // untouched, so that disabling the option restores whatever mapping the game configured.
-  if (g_settings.cpu_force_full_ram_mapping && g_settings.cpu_ram_size != CPURAMSize::Default)
+  if (g_settings.cpu_force_full_ram_mapping && g_bus.ram_size != RAM_DEFAULT_SIZE)
     mapped_size = std::max(mapped_size, g_bus.ram_size);
 
   if (mapped_size == prev_mapped_size)

@@ -46,7 +46,7 @@ namespace {
 enum : u32
 {
   GAME_DATABASE_CACHE_SIGNATURE = 0x45434C48,
-  GAME_DATABASE_CACHE_VERSION = 39,
+  GAME_DATABASE_CACHE_VERSION = 41,
 };
 
 /// Map of track hashes for image verification
@@ -150,7 +150,6 @@ static constexpr const std::array s_trait_names = {
   "DisablePGXPOn2DPolygons",
   "ForcePGXPVertexCache",
   "ForcePGXPCPUMode",
-  "NormalizePGXPDepth",
   "ForceRecompilerICache",
   "ForceCDROMSubQSkew",
   "IsLibCryptProtected",
@@ -193,7 +192,6 @@ static constexpr const std::array s_trait_display_names = {
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Disable PGXP on 2D Polygons", "GameDatabase::Trait"),
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Force PGXP Vertex Cache", "GameDatabase::Trait"),
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Force PGXP CPU Mode", "GameDatabase::Trait"),
-  TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Normalize PGXP Depth", "GameDatabase::Trait"),
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Force Recompiler ICache", "GameDatabase::Trait"),
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Force CD-ROM SubQ Skew", "GameDatabase::Trait"),
   TRANSLATE_DISAMBIG_NOOP("GameDatabase", "Is LibCrypt Protected", "GameDatabase::Trait"),
@@ -523,15 +521,15 @@ void GameDatabase::Entry::ApplySettings(Settings& settings, bool display_osd_mes
   }
   if (dma_max_slice_ticks.has_value(override_mask))
   {
-    settings.dma_max_slice_ticks = dma_max_slice_ticks.value();
+    settings.dma_max_slice_cycles = dma_max_slice_ticks.value();
     if (display_osd_messages)
-      INFO_LOG("GameDB: DMA max slice ticks set to {}.", settings.dma_max_slice_ticks);
+      INFO_LOG("GameDB: DMA max slice ticks set to {}.", settings.dma_max_slice_cycles);
   }
   if (dma_halt_ticks.has_value(override_mask))
   {
-    settings.dma_halt_ticks = dma_halt_ticks.value();
+    settings.dma_halt_cycles = dma_halt_ticks.value();
     if (display_osd_messages)
-      INFO_LOG("GameDB: DMA halt ticks set to {}.", settings.dma_halt_ticks);
+      INFO_LOG("GameDB: DMA halt ticks set to {}.", settings.dma_halt_cycles);
   }
   if (cdrom_max_seek_speedup_cycles.has_value(override_mask) && g_settings.cdrom_seek_speedup == 0)
   {
@@ -545,17 +543,11 @@ void GameDatabase::Entry::ApplySettings(Settings& settings, bool display_osd_mes
     if (display_osd_messages)
       INFO_LOG("GameDB: CDROM maximum read speedup cycles set to {}.", settings.cdrom_max_read_speedup_cycles);
   }
-  if (gpu_fifo_size.has_value(override_mask))
-  {
-    settings.gpu_fifo_size = gpu_fifo_size.value();
-    if (display_osd_messages)
-      INFO_LOG("GameDB: GPU FIFO size set to {}.", settings.gpu_fifo_size);
-  }
   if (gpu_max_run_ahead.has_value(override_mask))
   {
-    settings.gpu_max_run_ahead = gpu_max_run_ahead.value();
+    settings.gpu_max_run_ahead_cycles = gpu_max_run_ahead.value();
     if (display_osd_messages)
-      INFO_LOG("GameDB: GPU max runahead set to {}.", settings.gpu_max_run_ahead);
+      INFO_LOG("GameDB: GPU max runahead set to {}.", settings.gpu_max_run_ahead_cycles);
   }
   if (gpu_pgxp_tolerance.has_value(override_mask))
   {
@@ -978,21 +970,55 @@ void GameDatabase::Entry::ApplySettings(Settings& settings, bool display_osd_mes
     settings.gpu_pgxp_disable_2d = true;
   }
 
-  if (HasTrait(Trait::NormalizePGXPDepth))
-    settings.gpu_pgxp_normalize_depth = true;
-
-  if (gpu_pgxp_preserve_proj_fp.has_value(override_mask))
+  if (gpu_pgxp_preserve_proj_fp.has_value(override_mask) && settings.gpu_pgxp_enable)
   {
-    if (display_osd_messages)
+    if (settings.gpu_pgxp_preserve_proj_fp_mode == SettingOverrideMode::Automatic)
     {
-      INFO_LOG("GameDB: GPU preserve projection precision set to {}.",
-               gpu_pgxp_preserve_proj_fp.value() ? "true" : "false");
+      if (display_osd_messages)
+      {
+        INFO_LOG("GameDB: GPU preserve projection precision set to {}.",
+                 gpu_pgxp_preserve_proj_fp.value() ? "true" : "false");
+      }
 
-      if (settings.gpu_pgxp_enable && settings.gpu_pgxp_preserve_proj_fp && !gpu_pgxp_preserve_proj_fp.value())
-        append_message(TRANSLATE_SV("GameDatabase", "PGXP preserve projection precision disabled."));
+      settings.gpu_pgxp_preserve_proj_fp = gpu_pgxp_preserve_proj_fp.value();
     }
+    else if (settings.gpu_pgxp_preserve_proj_fp != gpu_pgxp_preserve_proj_fp.value())
+    {
+      Host::AddIconOSDMessage(OSDMessageType::Warning, "gamedb_pgxp_preserve_proj_fp", ICON_EMOJI_WARNING,
+                              TRANSLATE_STR("GameDatabase", "PGXP preserve projection precision differs from the game "
+                                                            "database setting. This may cause rendering errors."));
+    }
+  }
 
-    settings.gpu_pgxp_preserve_proj_fp = gpu_pgxp_preserve_proj_fp.value();
+  if (gpu_pgxp_normalize_depth.has_value(override_mask) && settings.gpu_pgxp_enable)
+  {
+    if (settings.gpu_pgxp_normalize_depth_mode == GPUPGXPDepthNormalizationMode::Automatic)
+    {
+      // Fixed up later in FixIncompatibleSettings().
+      settings.gpu_pgxp_normalize_depth_mode = gpu_pgxp_normalize_depth.value();
+      settings.gpu_pgxp_normalize_depth =
+        (settings.gpu_pgxp_normalize_depth_mode >= GPUPGXPDepthNormalizationMode::DepthBufferOnly);
+      if (display_osd_messages)
+      {
+        INFO_LOG("GameDB: PGXP depth normalization set to {}.",
+                 Settings::GetPGXPDepthNormalizationModeName(settings.gpu_pgxp_normalize_depth_mode));
+      }
+    }
+    else
+    {
+      // Only warn when the effective behaviour differs, e.g. depth buffer only without the depth buffer is disabled.
+      static constexpr auto is_active = [](GPUPGXPDepthNormalizationMode mode, bool depth_buffer) {
+        return (mode == GPUPGXPDepthNormalizationMode::Always ||
+                (mode == GPUPGXPDepthNormalizationMode::DepthBufferOnly && depth_buffer));
+      };
+      if (is_active(settings.gpu_pgxp_normalize_depth_mode, settings.gpu_pgxp_depth_buffer) !=
+          is_active(gpu_pgxp_normalize_depth.value(), settings.gpu_pgxp_depth_buffer))
+      {
+        Host::AddIconOSDMessage(OSDMessageType::Warning, "gamedb_pgxp_normalize_depth", ICON_EMOJI_WARNING,
+                                TRANSLATE_STR("GameDatabase", "PGXP depth normalization differs from the game "
+                                                              "database setting. This may cause rendering errors."));
+      }
+    }
   }
 
   if (HasTrait(Trait::ForceRecompilerICache))
@@ -1205,8 +1231,6 @@ std::string GameDatabase::Entry::GenerateCompatibilityReport() const
                        cdrom_max_seek_speedup_cycles.get(override_mask));
   AppendIntegerSetting(ret, settings_heading, TRANSLATE_SV("GameDatabase", "CD-ROM Max Read Speedup Cycles"),
                        cdrom_max_read_speedup_cycles.get(override_mask));
-  AppendIntegerSetting(ret, settings_heading, TRANSLATE_SV("GameDatabase", "GPU FIFO Size"),
-                       gpu_fifo_size.get(override_mask));
   AppendIntegerSetting(ret, settings_heading, TRANSLATE_SV("GameDatabase", "GPU Max Runahead"),
                        gpu_max_run_ahead.get(override_mask));
   AppendIntegerSetting(ret, settings_heading, TRANSLATE_SV("GameDatabase", "Filter Framebuffer Uploads Minimum Width"),
@@ -1221,6 +1245,8 @@ std::string GameDatabase::Entry::GenerateCompatibilityReport() const
                      gpu_pgxp_depth_threshold.get(override_mask));
   AppendFloatSetting(ret, settings_heading, TRANSLATE_SV("GameDatabase", "PGXP Depth Bias"),
                      gpu_pgxp_depth_bias.get(override_mask));
+  AppendEnumSetting(ret, settings_heading, TRANSLATE_SV("GameDatabase", "PGXP Depth Normalization"),
+                    &Settings::GetPGXPDepthNormalizationModeDisplayName, gpu_pgxp_normalize_depth.get(override_mask));
   AppendBoolSetting(ret, settings_heading, TRANSLATE_SV("GameDatabase", "PGXP Preserve Projection Precision"),
                     gpu_pgxp_preserve_proj_fp.get(override_mask));
 
@@ -1343,11 +1369,10 @@ bool GameDatabase::LoadFromCache()
         !reader.ReadT(&entry.cpu_overclock) || !reader.ReadT(&entry.gpu_pgxp_preserve_proj_fp) ||
         !reader.ReadT(&entry.dma_max_slice_ticks) || !reader.ReadT(&entry.dma_halt_ticks) ||
         !reader.ReadT(&entry.cdrom_max_seek_speedup_cycles) || !reader.ReadT(&entry.cdrom_max_read_speedup_cycles) ||
-        !reader.ReadT(&entry.gpu_fifo_size) || !reader.ReadT(&entry.gpu_max_run_ahead) ||
-        !reader.ReadT(&entry.gpu_filter_framebuffer_uploads_minimum_width) ||
+        !reader.ReadT(&entry.gpu_max_run_ahead) || !reader.ReadT(&entry.gpu_filter_framebuffer_uploads_minimum_width) ||
         !reader.ReadT(&entry.gpu_filter_framebuffer_uploads_minimum_height) ||
         !reader.ReadT(&entry.gpu_pgxp_tolerance) || !reader.ReadT(&entry.gpu_pgxp_depth_threshold) ||
-        !reader.ReadT(&entry.gpu_pgxp_depth_bias))
+        !reader.ReadT(&entry.gpu_pgxp_depth_bias) || !reader.ReadT(&entry.gpu_pgxp_normalize_depth))
     {
       DEV_LOG("Cache entry is corrupted.");
       return false;
@@ -1474,13 +1499,13 @@ bool GameDatabase::SaveToCache()
     writer.WriteT(entry.dma_halt_ticks);
     writer.WriteT(entry.cdrom_max_seek_speedup_cycles);
     writer.WriteT(entry.cdrom_max_read_speedup_cycles);
-    writer.WriteT(entry.gpu_fifo_size);
     writer.WriteT(entry.gpu_max_run_ahead);
     writer.WriteT(entry.gpu_filter_framebuffer_uploads_minimum_width);
     writer.WriteT(entry.gpu_filter_framebuffer_uploads_minimum_height);
     writer.WriteT(entry.gpu_pgxp_tolerance);
     writer.WriteT(entry.gpu_pgxp_depth_threshold);
     writer.WriteT(entry.gpu_pgxp_depth_bias);
+    writer.WriteT(entry.gpu_pgxp_normalize_depth);
   }
 
   for (const auto& it : s_state.code_lookup)
@@ -1781,7 +1806,6 @@ bool GameDatabase::ParseYamlEntry(Entry* entry, const ryml::ConstNodeRef& value)
                                              GetOptionalTFromObject<u32>(settings, "cdromMaxSeekSpeedupCycles"));
     entry->cdrom_max_read_speedup_cycles.set(entry->override_mask,
                                              GetOptionalTFromObject<u32>(settings, "cdromMaxReadSpeedupCycles"));
-    entry->gpu_fifo_size.set(entry->override_mask, GetOptionalTFromObject<u32>(settings, "gpuFIFOSize"));
     entry->gpu_max_run_ahead.set(entry->override_mask, GetOptionalTFromObject<u32>(settings, "gpuMaxRunAhead"));
     entry->gpu_pgxp_tolerance.set(entry->override_mask, GetOptionalTFromObject<float>(settings, "gpuPGXPTolerance"));
     entry->gpu_pgxp_depth_threshold.set(entry->override_mask,
@@ -1792,6 +1816,9 @@ bool GameDatabase::ParseYamlEntry(Entry* entry, const ryml::ConstNodeRef& value)
     entry->gpu_line_detect_mode.set(
       entry->override_mask,
       ParseOptionalTFromObject<GPULineDetectMode>(settings, "gpuLineDetectMode", &Settings::ParseLineDetectModeName));
+    entry->gpu_pgxp_normalize_depth.set(
+      entry->override_mask, ParseOptionalTFromObject<GPUPGXPDepthNormalizationMode>(
+                              settings, "gpuPGXPNormalizeDepth", &Settings::ParsePGXPDepthNormalizationModeName));
     entry->cpu_overclock.set(entry->override_mask, GetOptionalTFromObject<u8>(settings, "cpuOverclockPercent"));
 
     // Bit yuck to parse a size here...
