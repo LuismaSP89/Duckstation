@@ -1243,6 +1243,7 @@ void System::SetDefaultSettings(SettingsInterface& si, bool ignore_user_prefs)
   Settings::SetDefaultLogConfig(si);
 
   si.SetBoolValue(Settings::CDROM_SECTION_NAME, "IgnoreHostSubcode", false);
+  si.SetUIntValue(Settings::CDROM_SECTION_NAME, "HostReadSpeed", 8);
   si.SetBoolValue(Settings::CDROM_SECTION_NAME, "AllowBootingWithoutSBIFile", false);
   si.SetStringValue(Settings::GPU_SECTION_NAME, "DumpCompressionMode",
                     Settings::GetGPUDumpCompressionModeName(Settings::DEFAULT_GPU_DUMP_COMPRESSION_MODE));
@@ -2230,8 +2231,6 @@ void System::FrameDone()
 
   DiscordPresence::Poll();
 
-  GDBServer::PollUntil(0);
-
   // Save states for rewind and runahead.
   if (s_state.rewind_save_counter >= 0)
   {
@@ -2452,20 +2451,24 @@ void System::Throttle(Timer::Value current_time, Timer::Value sleep_until)
     return;
   }
 
-  // If we are running the GDB server and have clients, then use it to sleep instead.
+  // If we are running the GDB server and have clients, process events while we wait instead of only sleeping.
   // That way in a query->response->query->response chain, we don't process only one message per frame.
+  // Host event loops generally have millisecond precision, so stop waiting slightly early and sleep the remainder.
   if (GDBServer::HasAnyClients())
   {
-    GDBServer::PollUntil(sleep_until);
+    const Timer::Value event_wait_until = sleep_until - Timer::ConvertMillisecondsToValue(1.0);
+    while (System::IsRunning() && Timer::GetCurrentValue() < event_wait_until)
+      Host::PumpMessagesOnCoreThread(event_wait_until);
+
+    if (!System::IsRunning())
+      return;
   }
-  else
-  {
-    // Only need an exact sleep for pre-frame sleep, since the frame is scheduled to finish just in time.
-    // Otherwise waking slightly late is harmless, the video thread handles the presentation timing.
-    // In the worst case, input would get polled up to 0.5ms later than originally expected which isn't
-    // going to hurt anything. If you have that little frame budget, disable optimal frame pacing.
-    Timer::SleepUntil(sleep_until, s_state.pre_frame_sleep);
-  }
+
+  // Only need an exact sleep for pre-frame sleep, since the frame is scheduled to finish just in time.
+  // Otherwise waking slightly late is harmless, the video thread handles the presentation timing.
+  // In the worst case, input would get polled up to 0.5ms later than originally expected which isn't
+  // going to hurt anything. If you have that little frame budget, disable optimal frame pacing.
+  Timer::SleepUntil(sleep_until, s_state.pre_frame_sleep);
 
 #if 0
   const Timer::Value time_after_sleep = Timer::GetCurrentValue();
@@ -5645,7 +5648,7 @@ void System::DoRewind()
   VideoThread::PresentCurrentFrame();
 
   Host::PumpMessagesOnCoreThread();
-  Core::IdleUpdate(s_state.next_frame_time);
+  Core::IdleUpdate();
 
   // get back into it straight away if we're no longer rewinding
   if (!IsRewinding())

@@ -226,8 +226,9 @@ TEST_F(BusMemory, COP0ExecutionBreakpointRangeFollowsInstalledRAM)
   const auto uses_debug_dispatcher_for_breakpoint = [](u32 bpc) {
     CPU::g_state.cop0_regs.BPC = bpc;
     CPU::g_state.cop0_regs.BPCM = 0xFFFFFFFFu;
-    CPU::g_state.cop0_regs.dcic.super_master_enable_1 = true;
-    CPU::g_state.cop0_regs.dcic.super_master_enable_2 = true;
+    CPU::g_state.cop0_regs.dcic.debug_enable = true;
+    CPU::g_state.cop0_regs.dcic.trap_enable = true;
+    CPU::g_state.cop0_regs.dcic.kernel_debug_enable = true;
     CPU::g_state.cop0_regs.dcic.execution_breakpoint_enable = true;
     CPU::UpdateDebugDispatcherFlag();
     return CPU::g_state.using_debug_dispatcher;
@@ -237,6 +238,11 @@ TEST_F(BusMemory, COP0ExecutionBreakpointRangeFollowsInstalledRAM)
   CPUTestHarness::ResetMemory(CPURAMSize::Default, CPUFastmemMode::Disabled);
   EXPECT_TRUE(uses_debug_dispatcher_for_breakpoint(0x80010000));
   EXPECT_FALSE(uses_debug_dispatcher_for_breakpoint(0x80800000));
+
+  // Keep non-code addresses filtered rather than forcing normal execution into the debug interpreter.
+  for (const u32 bpc : {0x81000000u, 0xBF800000u, 0xBF801000u})
+    EXPECT_FALSE(uses_debug_dispatcher_for_breakpoint(bpc)) << std::hex << bpc;
+  EXPECT_TRUE(uses_debug_dispatcher_for_breakpoint(0xBF000000u));
 
   // Loading expanded RAM from a state must update the flag, since CPU state is restored first.
   CPUTestHarness::ResetMemory(CPURAMSize::Expanded16MB, CPUFastmemMode::Disabled);
