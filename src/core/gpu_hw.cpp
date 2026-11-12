@@ -318,6 +318,9 @@ bool GPU_HW::Initialize(bool upload_vram, Error* error)
   m_texture_dumping = m_use_texture_cache && g_gpu_settings.texture_replacements.dump_textures;
   m_draw_with_software_renderer = ShouldDrawWithSoftwareRenderer();
 
+  if (!CreatePersistentBuffers(error))
+    return false;
+
   CheckSettings();
 
   PrintSettingsToLog();
@@ -345,6 +348,10 @@ bool GPU_HW::Initialize(bool upload_vram, Error* error)
   {
     UpdateVRAMOnGPU(0, 0, VRAM_WIDTH, VRAM_HEIGHT, g_vram, VRAM_WIDTH * sizeof(u16), false, false, VRAM_SIZE_RECT,
                     false);
+  }
+  else
+  {
+    ClearVRAM();
   }
 
   m_drawing_area_changed = true;
@@ -375,7 +382,22 @@ void GPU_HW::ClearVRAM()
 
   m_batch = {};
   m_current_depth = 1;
-  ClearFramebuffer();
+  m_last_depth_z = 1.0f;
+
+  g_gpu_device->ClearRenderTarget(m_vram_texture.get(), 0);
+  if (m_vram_depth_texture)
+  {
+    if (m_use_rov_for_shader_blend)
+      g_gpu_device->ClearRenderTarget(m_vram_depth_texture.get(), 0);
+    else
+      g_gpu_device->ClearDepth(m_vram_depth_texture.get(), 0.0f);
+  }
+  if (m_vram_depth_copy_texture)
+    g_gpu_device->ClearRenderTarget(m_vram_depth_copy_texture.get(), 0);
+  m_depth_dirty_rect = INVALID_RECT;
+  SetFullVRAMDirtyRectangle();
+  if (m_use_texture_cache)
+    GPUTextureCache::Invalidate();
 }
 
 void GPU_HW::ClearBatch()
@@ -967,6 +989,8 @@ void GPU_HW::PrintSettingsToLog()
   INFO_LOG("Wireframe rendering: {}", Settings::GetGPUWireframeModeDisplayName(m_wireframe_mode));
   INFO_LOG("Line detection: {}", Settings::GetLineDetectModeDisplayName(m_line_detect_mode));
   INFO_LOG("Using software renderer for readbacks: {}", m_draw_with_software_renderer ? "YES" : "NO");
+  INFO_LOG("VRAM readback conversion: {}",
+           m_vram_readback_download_texture->IsShaderWritable() ? "Compute" : "Fragment");
   INFO_LOG("Separate sprite shaders: {}", m_allow_sprite_mode ? "YES" : "NO");
 }
 
@@ -975,6 +999,46 @@ GPUTextureFormat GPU_HW::GetDepthBufferFormat() const
   // Use 32-bit depth for PGXP depth buffer, otherwise 16-bit for mask bit.
   return m_pgxp_depth_buffer ? (m_use_rov_for_shader_blend ? VRAM_DS_COLOR_FORMAT : VRAM_DS_DEPTH_FORMAT) :
                                VRAM_DS_FORMAT;
+}
+
+bool GPU_HW::CreatePersistentBuffers(Error* error)
+{
+  const bool shader_write = g_gpu_device->GetFeatures().compute_shaders;
+  if (g_gpu_device->GetFeatures().memory_import)
+  {
+    m_vram_readback_download_texture =
+      g_gpu_device->CreateDownloadTexture(VRAM_WIDTH / 2, VRAM_HEIGHT, VRAM_RT_FORMAT, g_vram, sizeof(g_vram),
+                                          VRAM_WIDTH * sizeof(u16), shader_write, error);
+    if (!m_vram_readback_download_texture)
+      DEV_LOG("Could not import VRAM for downloads, using a staging buffer.");
+  }
+  if (!m_vram_readback_download_texture)
+  {
+    m_vram_readback_download_texture =
+      g_gpu_device->CreateDownloadTexture(VRAM_WIDTH / 2, VRAM_HEIGHT, VRAM_RT_FORMAT, shader_write, error);
+    if (!m_vram_readback_download_texture && shader_write)
+    {
+      WARNING_LOG("Failed to create shader-writable VRAM download buffer, using fragment shader for readbacks.");
+      m_vram_readback_download_texture =
+        g_gpu_device->CreateDownloadTexture(VRAM_WIDTH / 2, VRAM_HEIGHT, VRAM_RT_FORMAT, false, error);
+    }
+    if (!m_vram_readback_download_texture)
+      return false;
+  }
+
+  if (!m_vram_readback_download_texture->IsShaderWritable())
+  {
+    if (!(m_vram_readback_texture =
+            g_gpu_device->FetchTexture(VRAM_WIDTH / 2, VRAM_HEIGHT, 1, 1, 1, GPUTexture::Type::RenderTarget,
+                                       VRAM_RT_FORMAT, GPUTexture::Flags::None, nullptr, 0, error)))
+    {
+      Error::AddPrefix(error, "Failed to create VRAM readback texture: ");
+      return false;
+    }
+    GL_OBJECT_NAME(m_vram_readback_texture, "VRAM Readback Texture");
+  }
+
+  return true;
 }
 
 bool GPU_HW::CreateBuffers(Error* error)
@@ -1003,10 +1067,7 @@ bool GPU_HW::CreateBuffers(Error* error)
                                   VRAM_DS_COLOR_FORMAT, GPUTexture::Flags::None, nullptr, 0, error))) ||
       !(m_vram_read_texture =
           g_gpu_device->FetchTexture(texture_width, texture_height, 1, 1, 1, GPUTexture::Type::Texture, VRAM_RT_FORMAT,
-                                     read_texture_flags, nullptr, 0, error)) ||
-      !(m_vram_readback_texture =
-          g_gpu_device->FetchTexture(VRAM_WIDTH / 2, VRAM_HEIGHT, 1, 1, 1, GPUTexture::Type::RenderTarget,
-                                     VRAM_RT_FORMAT, GPUTexture::Flags::None, nullptr, 0, error)))
+                                     read_texture_flags, nullptr, 0, error)))
   {
     Error::AddPrefix(error, "Failed to create VRAM textures: ");
     return false;
@@ -1018,28 +1079,6 @@ bool GPU_HW::CreateBuffers(Error* error)
   if (m_vram_depth_texture)
     GL_OBJECT_NAME(m_vram_depth_texture, "VRAM Depth Texture");
   GL_OBJECT_NAME(m_vram_read_texture, "VRAM Read Texture");
-  GL_OBJECT_NAME(m_vram_readback_texture, "VRAM Readback Texture");
-
-  if (g_gpu_device->GetFeatures().memory_import)
-  {
-    DEV_LOG("Trying to import guest VRAM buffer for downloads...");
-    m_vram_readback_download_texture = g_gpu_device->CreateDownloadTexture(
-      m_vram_readback_texture->GetWidth(), m_vram_readback_texture->GetHeight(), m_vram_readback_texture->GetFormat(),
-      g_vram, sizeof(g_vram), VRAM_WIDTH * sizeof(u16), error);
-    if (!m_vram_readback_download_texture)
-      ERROR_LOG("Failed to create imported readback buffer");
-  }
-  if (!m_vram_readback_download_texture)
-  {
-    m_vram_readback_download_texture =
-      g_gpu_device->CreateDownloadTexture(m_vram_readback_texture->GetWidth(), m_vram_readback_texture->GetHeight(),
-                                          m_vram_readback_texture->GetFormat(), error);
-    if (!m_vram_readback_download_texture)
-    {
-      Error::AddPrefix(error, "Failed to create readback download texture: ");
-      return false;
-    }
-  }
 
   if (g_gpu_device->GetFeatures().texture_buffers)
   {
@@ -1062,26 +1101,6 @@ bool GPU_HW::CreateBuffers(Error* error)
 
   SetFullVRAMDirtyRectangle();
   return true;
-}
-
-void GPU_HW::ClearFramebuffer()
-{
-  g_gpu_device->ClearRenderTarget(m_vram_texture.get(), 0);
-  if (m_vram_depth_texture)
-  {
-    if (m_use_rov_for_shader_blend)
-      g_gpu_device->ClearRenderTarget(m_vram_depth_texture.get(), 0);
-    else
-      g_gpu_device->ClearDepth(m_vram_depth_texture.get(), 0.0f);
-  }
-  if (m_vram_depth_copy_texture)
-    g_gpu_device->ClearRenderTarget(m_vram_depth_copy_texture.get(), 0);
-  m_depth_dirty_rect = INVALID_RECT;
-  ClearVRAMDirtyRectangle();
-  if (m_use_texture_cache)
-    GPUTextureCache::Invalidate();
-  m_last_depth_z = 1.0f;
-  m_current_depth = 1;
 }
 
 void GPU_HW::BindVRAMRenderTarget()
@@ -1125,7 +1144,6 @@ void GPU_HW::DestroyBuffers()
     UnmapGPUBuffer(0, 0);
 
   m_vram_upload_buffer.reset();
-  m_vram_readback_download_texture.reset();
   g_gpu_device->RecycleTexture(std::move(m_downsample_texture));
   g_gpu_device->RecycleTexture(std::move(m_vram_extract_depth_texture));
   g_gpu_device->RecycleTexture(std::move(m_vram_extract_texture));
@@ -1134,7 +1152,6 @@ void GPU_HW::DestroyBuffers()
   g_gpu_device->RecycleTexture(std::move(m_vram_depth_copy_texture));
   g_gpu_device->RecycleTexture(std::move(m_vram_depth_texture));
   g_gpu_device->RecycleTexture(std::move(m_vram_texture));
-  g_gpu_device->RecycleTexture(std::move(m_vram_readback_texture));
 }
 
 ShaderCompileProgressTracker::ShaderCompileProgressTracker(u32 total)
@@ -2191,15 +2208,25 @@ bool GPU_HW::CompileResolutionDependentPipelines(Error* error)
   plconfig.vertex_shader = m_fullscreen_quad_vertex_shader.get();
   plconfig.SetTargetFormats(VRAM_RT_FORMAT);
 
-  // VRAM read
+  // Filtered framebuffer uploads keep the block corner bit-exact, so point sample it instead of
+  // averaging the filtered subpixels to keep CPU-visible VRAM round-trips exact.
+  const bool point_sample_readback = (m_framebuffer_upload_filtering != GPUTextureFilter::Nearest);
+  if (m_vram_readback_download_texture->IsShaderWritable())
   {
-    // Filtered framebuffer uploads keep the block corner bit-exact, so point sample it instead of
-    // averaging the filtered subpixels to keep CPU-visible VRAM round-trips exact.
+    std::unique_ptr<GPUShader> cs = g_gpu_device->CreateShader(
+      GPUShaderStage::Compute, shadergen.GetLanguage(),
+      shadergen.GenerateVRAMReadComputeShader(m_resolution_scale, m_multisamples, point_sample_readback), error);
+    if (!cs)
+      return false;
+    const GPUPipeline::ComputeConfig config = {GPUPipeline::Layout::ComputeBufferOutput, cs.get()};
+    if (!(m_vram_readback_pipeline = g_gpu_device->CreatePipeline(config, error)))
+      return false;
+  }
+  else
+  {
     std::unique_ptr<GPUShader> fs = g_gpu_device->CreateShader(
       GPUShaderStage::Fragment, shadergen.GetLanguage(),
-      shadergen.GenerateVRAMReadFragmentShader(m_resolution_scale, m_multisamples,
-                                               m_framebuffer_upload_filtering != GPUTextureFilter::Nearest),
-      error);
+      shadergen.GenerateVRAMReadFragmentShader(m_resolution_scale, m_multisamples, point_sample_readback), error);
     if (!fs)
       return false;
 
@@ -3939,6 +3966,34 @@ void GPU_HW::DownloadVRAMFromGPU(u32 x, u32 y, u32 width, u32 height)
   const u32 encoded_top = copy_rect.top;
   const u32 encoded_width = copy_rect.width() / 2;
   const u32 encoded_height = copy_rect.height();
+
+  if (m_vram_readback_download_texture->IsShaderWritable())
+  {
+    const bool imported = m_vram_readback_download_texture->IsImported();
+    const u32 stride = m_vram_readback_download_texture->GetMapPitch() / sizeof(u32);
+    const u32 uniforms[] = {static_cast<u32>(copy_rect.left),
+                            static_cast<u32>(copy_rect.top),
+                            static_cast<u32>(copy_rect.width()),
+                            encoded_height,
+                            imported ? encoded_top * stride + encoded_left : 0,
+                            stride};
+    g_gpu_device->SetRenderTargets(nullptr, 0, nullptr);
+    m_vram_texture->MakeReadyForSampling();
+    g_gpu_device->SetPipeline(m_vram_readback_pipeline.get());
+    g_gpu_device->SetTextureSampler(0, m_vram_texture.get(), g_gpu_device->GetNearestSampler());
+    g_gpu_device->SetComputeOutputBuffer(m_vram_readback_download_texture.get());
+    g_gpu_device->UploadUniformBuffer(uniforms, sizeof(uniforms));
+    g_gpu_device->Dispatch(copy_rect.width(), encoded_height, 1, 8, 8, 1);
+    g_gpu_device->SetComputeOutputBuffer(nullptr);
+    if (imported)
+      m_vram_readback_download_texture->Flush();
+    else
+      m_vram_readback_download_texture->ReadTexels(0, 0, encoded_width, encoded_height,
+                                                   &g_vram[copy_rect.top * VRAM_WIDTH + copy_rect.left],
+                                                   VRAM_WIDTH * sizeof(u16));
+    RestoreDeviceContext();
+    return;
+  }
 
   // Encode the 24-bit texture as 16-bit.
   const s32 uniforms[4] = {copy_rect.left, copy_rect.top, copy_rect.width(), copy_rect.height()};
