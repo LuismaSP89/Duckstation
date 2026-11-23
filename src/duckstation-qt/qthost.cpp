@@ -56,6 +56,10 @@
 #include "util/postprocessing.h"
 #include "util/translation.h"
 
+#ifdef __linux__
+#include "util/x11_tools.h"
+#endif
+
 #include "scmversion/scmversion.h"
 
 #include "fmt/format.h"
@@ -282,6 +286,17 @@ bool QtHost::VeryEarlyProcessStartup()
 #endif
 
   QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+
+  // Set application details.
+  // This is critical for Linux to show the correct application name in the task switcher, since it appears
+  // to use the application name to search for desktop files with the corresponding StartupWMClass.
+  // These must be set before QApplication is constructed, so that the desktop file name can be registered
+  // with the xdg-desktop-portal before the platform theme makes any portal calls.
+  QApplication::setApplicationName(u"duckstation-qt"_s);
+  QApplication::setApplicationVersion(QString::fromUtf8(g_scm_version_str));
+  QApplication::setOrganizationName(u"Stenzek"_s);
+  QApplication::setOrganizationDomain(u"duckstation.org"_s);
+  QApplication::setDesktopFileName(u"org.duckstation.DuckStation"_s);
   return true;
 }
 
@@ -289,15 +304,6 @@ bool QtHost::EarlyProcessStartup()
 {
   // Redirect Qt errors.
   qInstallMessageHandler(MessageOutputHandler);
-
-  // Set application details.
-  // This is critical for Linux to show the correct application name in the task switcher, since it appears
-  // to uses the application name to search for desktop files with the corresponding StartupWMClass.
-  QApplication::setApplicationName(u"duckstation-qt"_s);
-  QApplication::setApplicationVersion(QString::fromUtf8(g_scm_version_str));
-  QApplication::setOrganizationName(u"Stenzek"_s);
-  QApplication::setOrganizationDomain(u"duckstation.org"_s);
-  QApplication::setDesktopFileName(u"org.duckstation.DuckStation"_s);
 
   Error error;
   if (!Core::ProcessStartup(&error)) [[unlikely]]
@@ -3610,6 +3616,16 @@ int main(int argc, char* argv[])
   // created before the platform plugin is loaded. This is only here because GNOME plus Wankland
   // and their implementation of it is fucking terrible.
   ApplyWaylandWorkarounds();
+#endif
+
+#ifdef __linux__
+  // Qt detects auto-repeat by looking for the press after a release in its event queue, which isn't reliable, as the
+  // press may not have been read yet. Missed detections send spurious release/press pairs while a key is held.
+  if (const auto* x11_app = qGuiApp->nativeInterface<QNativeInterface::QX11Application>())
+  {
+    if (Error error; !X11Tools::EnableDetectableAutoRepeat(x11_app->connection(), &error))
+      std::fprintf(stderr, "Failed to enable detectable auto repeat: %s\n", error.GetDescription().c_str());
+  }
 #endif
 
   // Type registration has to happen after hardware checks, clang emits ptest instructions otherwise.

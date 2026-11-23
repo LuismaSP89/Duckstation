@@ -23,6 +23,7 @@ public:
     bool pgxp_depth : 1;
     bool disable_color_perspective : 1;
     bool disable_upscaled_direct_textures : 1;
+    bool vram_2mb : 1;
   };
 
   struct BatchFragmentShaderSelector
@@ -55,6 +56,7 @@ public:
     // enabled: exact nearest coverage and chroma-key matte rejection while keeping the sprite filter.
     bool filter_nearest_coverage : 1;
     bool filter_chroma_key : 1;
+    bool vram_2mb : 1;
   };
 
 public:

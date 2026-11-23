@@ -53,8 +53,14 @@ void UpdateGTEAspectRatio();
 /// Updates the resolution scale when it is set to automatic.
 void UpdateAutomaticResolutionScale();
 
+/// Recreates the GPU backend, preserving VRAM. enable_2mb_vram keeps the current VRAM size if not set.
+void RecreateGPU(GPURenderer renderer, std::optional<bool> enable_2mb_vram = std::nullopt);
+
 /// Called on card read/write, handles fast forwarding.
 void OnMemoryCardAccessed();
+
+/// Called when a data sector is delivered to the CPU, used for fast forward while loading.
+void OnCDROMDataSectorRead();
 
 /// Immediately terminates the virtual machine, no state is saved.
 void AbnormalShutdown(const std::string_view reason);
